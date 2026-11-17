@@ -129,7 +129,10 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
         emailAddresses: [unverified('idn_u', 'unverified@example.test'), verified('idn_s', 'second@example.test')],
       }),
     ],
-    ['no primary (no placeholder <id>@pending.clerk row)', clerkUser({ primaryEmailAddressId: null, emailAddresses: [] })],
+    [
+      'no primary (no placeholder <id>@pending.clerk row)',
+      clerkUser({ primaryEmailAddressId: null, emailAddresses: [] }),
+    ],
   ])('%s is 403 EMAIL_NOT_VERIFIED and writes nothing', async (_label, profile) => {
     const before = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM "user"`);
     mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Unverified' });
@@ -237,7 +240,7 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
     await run.sql(`INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts12Leaver', $1)`, [
       u.id,
     ]);
-    await run.as('mwf_job', null, `SELECT app.anonymize_user_account($1::uuid)`, [u.id]);
+    await run.as('mwf_app', u.id, `SELECT app.anonymize_user_account($1::uuid)`, [u.id]);
     expect(await identityOf('user_ts12Leaver')).toEqual([]);
     mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Leaver' });
     mockGetUser.mockResolvedValue(
@@ -263,9 +266,12 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
   it('mwf_app cannot read or write user_identity, nor write user.email (work-bp5m)', async () => {
     await expect(run.as('mwf_app', ids.adaUser, `SELECT 1 FROM user_identity`)).rejects.toThrow(/permission denied/);
     await expect(
-      run.as('mwf_app', ids.adaUser, `INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_x', $1)`, [
+      run.as(
+        'mwf_app',
         ids.adaUser,
-      ]),
+        `INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_x', $1)`,
+        [ids.adaUser],
+      ),
     ).rejects.toThrow(/permission denied/);
     await expect(
       run.as('mwf_app', ids.adaUser, `UPDATE "user" SET email = 'x@example.test' WHERE id = $1`, [ids.adaUser]),

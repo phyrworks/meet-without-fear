@@ -258,10 +258,14 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(serializable).toHaveLength(1);
     // One occurrence, not two: the reveal is a single read-check-write.
     expect(serializable[0].occurrences).toBe(1);
-    // Read-check-write: the check reads and the reveal writes, in one group.
+    // Read-check-write: the check reads and the reveal writes, in one group. work-k5fk.10.5: every write of
+    // the group is a definer call now — app.empathy_set_status (the reveal) and app.empathy_mark_delivery (the
+    // delivery stamp, an UPDATE of empathy_attempt by mwf_job before) — and a definer call is traced as a SELECT
+    // (the trace sees top-level statements only). So the group holds the lock reads and at least the two
+    // reveals and two stamps; an UPDATE or INSERT of its own is no longer expected.
     const kinds = serializable[0].kinds;
-    expect(kinds.SELECT ?? 0).toBeGreaterThan(0);
-    expect((kinds.UPDATE ?? 0) + (kinds.INSERT ?? 0)).toBeGreaterThan(0);
+    expect(kinds.SELECT ?? 0).toBeGreaterThanOrEqual(5);
+    expect((kinds.SELECT ?? 0) + (kinds.UPDATE ?? 0) + (kinds.INSERT ?? 0)).toBeGreaterThanOrEqual(5);
     // Grouped by vxid, never by "has a BEGIN": Prisma wraps a bare `updateMany`
     // in its own implicit BEGIN/COMMIT, so the mutated code still has one.
     expect(serializable[0].statementCount).toBeGreaterThan(2);

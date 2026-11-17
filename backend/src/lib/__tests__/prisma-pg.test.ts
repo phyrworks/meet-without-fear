@@ -58,9 +58,17 @@ describe('databaseUrlFromEnv', () => {
   it('prefers the role URL and falls back to DATABASE_URL; the default role is app', () => {
     process.env.DATABASE_URL = 'postgresql://root@h/db';
     process.env.APP_DATABASE_URL = 'postgresql://mwf_app@h/db';
-    delete process.env.JOB_DATABASE_URL;
+    delete process.env.AUTH_DATABASE_URL;
     expect(databaseUrlFromEnv('app')).toBe('postgresql://mwf_app@h/db');
-    expect(databaseUrlFromEnv('job')).toBe('postgresql://root@h/db');
+    expect(databaseUrlFromEnv('auth')).toBe('postgresql://root@h/db');
     expect(databaseUrlFromEnv()).toBe('postgresql://mwf_app@h/db');
+  });
+
+  it('the ai and worker roles fail closed: no own URL is an error naming it, never DATABASE_URL (work-k5fk.10.5)', () => {
+    process.env.DATABASE_URL = 'postgresql://root@h/db';
+    delete process.env.AI_DATABASE_URL;
+    delete process.env.WORKER_DATABASE_URL;
+    expect(() => databaseUrlFromEnv('ai')).toThrow(/AI_DATABASE_URL is not set/);
+    expect(() => databaseUrlFromEnv('worker')).toThrow(/WORKER_DATABASE_URL is not set/);
   });
 });

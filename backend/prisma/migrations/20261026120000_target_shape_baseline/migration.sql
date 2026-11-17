@@ -26,21 +26,22 @@
 --    Nothing here forces a commit (no CONCURRENTLY, no ALTER TYPE … ADD VALUE,
 --    no VACUUM, no COMMIT), so nothing breaks the implicit transaction.
 --  * Run as the database owner (or mwf_migrator) with infra/aws/roles.sql
---    applied; the migrating role must be able to SET ROLE mwf_job (it hands
---    the app.* helpers to mwf_job).
---  * The app.* functions treat a caller as the job only when it logged in as
---    mwf_job or mwf_migrator (session_user); a superuser is not the job.
+--    applied; the migrating role must be able to SET ROLE mwf_definer (it hands
+--    the app.* helpers to mwf_definer).
+--  * The app.* definers decide by capability (session_user's app_access,
+--    ai_access, worker_access; the AI and worker arms only within
+--    app.session_scope) or mwf_migrator; mwf_job is retired (work-k5fk.10.5).
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through
 --    this security_invoker view, and coalesce(showActivityStatus, true) would
 --    default to true over a user_preferences row it cannot see. The
 --    partner-facing columns need a SECURITY DEFINER table function (owned by
---    mwf_job, identity-bound) returning participant_id + the masked
+--    mwf_definer, identity-bound) returning participant_id + the masked
 --    last_active_at, with no default-true over an invisible row.
 --
 -- SECTIONS
---   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
+--   0  preamble: empty-database guard, roles, schema app, app.current_user_id(), app.session_scope()
 --      (backend/scripts/target-shape/preamble.sql)
 --   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version),
 --      the jsonb validators' reference table app.json_schema and its seed, enums and the 49
@@ -63,8 +64,8 @@
 --
 -- Carries what TS-1's migration 20261019173038_phase3_app_schema_helpers did
 -- before the table DDL existed (that migration is gone with the old history,
--- OD7): the roles assertion, the SET ROLE mwf_definer check, schema app and
--- app.current_user_id(). The membership helpers app.is_member and
+-- OD7): the roles assertion, the SET ROLE mwf_definer check, schema app,
+-- app.current_user_id() and app.session_scope() (work-k5fk.10.5). The membership helpers app.is_member and
 -- app.partner_user_id are created by the trailer, over participant.
 -- ============================================================================
 
@@ -80,8 +81,8 @@ DECLARE
 BEGIN
   SELECT string_agg(r, ', ' ORDER BY r) INTO missing
   FROM unnest(ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access', 'clinician_access',
-                    'job_access', 'mwf_definer',
-                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician', 'mwf_job']) AS r
+                    'mwf_definer',
+                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician']) AS r
   WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = r);
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'target_shape_baseline: database role(s) % do not exist', missing
@@ -113,8 +114,8 @@ $$;
 CREATE SCHEMA app;
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 -- The capability roles (work-k5fk.10.4) and mwf_definer, whose definer helpers call
--- app.* functions. ai_access, worker_access and clinician_access: nothing yet.
-GRANT USAGE ON SCHEMA app TO app_access, job_access, ops_access, auth_access, mwf_definer;
+-- app.* functions. clinician_access: nothing yet (Q18).
+GRANT USAGE ON SCHEMA app TO app_access, ai_access, worker_access, ops_access, auth_access, mwf_definer;
 
 -- The caller's identity, from the transaction-local setting the request layer
 -- writes with set_config('app.current_user_id', <id>, true). NULL when unset
@@ -125,7 +126,25 @@ CREATE FUNCTION app.current_user_id() RETURNS uuid
   AS $$ SELECT NULLIF(pg_catalog.current_setting('app.current_user_id', true), '')::uuid $$;
 
 REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, job_access, ops_access, auth_access, mwf_definer;
+GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, ops_access, auth_access, mwf_definer;
+
+-- The one session a transaction of the AI (mwf_ai) or a worker task (mwf_worker) acts on
+-- (design note §6 "Session variables", Q20; work-k5fk.10.5), from the transaction-local setting
+-- the ai / worker clients write with set_config('app.session_scope', <id>, true)
+-- (lib/prisma-identity.ts). NULL when unset or empty, so every check against it fails closed:
+-- t_session_scope refuses an AI / worker row outside it, and the definers' AI / worker arms
+-- refuse a session other than it. Never set for mwf_app (whose rows follow
+-- app.current_user_id) nor for the migrator or the admin.
+-- SECURITY INVOKER: it reads only the caller's own setting.
+CREATE FUNCTION app.session_scope() RETURNS uuid
+  LANGUAGE sql STABLE PARALLEL SAFE SECURITY INVOKER
+  AS $$ SELECT NULLIF(pg_catalog.current_setting('app.session_scope', true), '')::uuid $$;
+COMMENT ON FUNCTION app.session_scope() IS 'The session the transaction of mwf_ai / mwf_worker acts on (transaction-local setting app.session_scope; NULL when unset, so every check fails closed). Design note §6 Q20.';
+
+-- ai_access, worker_access: t_session_scope (trailer T5, invoker) reads it with the writer's
+-- rights. mwf_definer: the definers' AI / worker arms.
+REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
 -- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 133 named objects, all lower-case; 155 uuid7 columns)
@@ -178,18 +197,21 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, job_access, ops_a
 --  * Grantees are capability roles, never logins (work-k5fk.10.4; design note
 --    §6 "Roles — one per kind of actor", Q16): a `-- mwf_app:` label names the
 --    actor and its uses, the GRANT goes to that login's one capability —
---    mwf_app → app_access, mwf_ops → ops_access, mwf_auth → auth_access, and
---    mwf_job → job_access, the interim home of the job's grants until §7 row
---    9b re-homes its call sites onto ai_access / worker_access and drops it.
+--    mwf_app → app_access, mwf_ai → ai_access, mwf_worker → worker_access,
+--    mwf_ops → ops_access, mwf_auth → auth_access. mwf_job (and its interim
+--    job_access) is retired (work-k5fk.10.5, §7 row 9b): its call sites moved
+--    to mwf_ai (the AI: the reconciler, the facilitator's AI / SYSTEM lines,
+--    the summarizer and classifier, brain telemetry — one session at a time,
+--    app.session_scope), mwf_worker (scheduled jobs, notification delivery,
+--    the Stage 4 closure's cross-participant decision) and SECURITY DEFINER
+--    functions mwf_app calls (the request path's cross-partner writes, trailer
+--    T4). Each `-- mwf_ai:` / `-- mwf_worker:` label names the call sites that
+--    use the grant, read from the code; nothing was copied from job_access.
 --    mwf_definer (NOLOGIN) owns every SECURITY DEFINER function (trailer T4)
 --    and holds what their bodies, and the invoker triggers their writes fire,
---    touch. A `-- mwf_definer:` label is a grant the job held only as the
---    definers' owner; it left job_access. A `-- mwf_job, mwf_definer:` label
---    names the definer that needs it; job_access keeps it because a job call
---    site may read it directly — 9b's audit of those call sites removes what
---    no caller needs. The roles are cluster-level (infra/aws/roles.sql).
+--    touch (`-- mwf_definer:`). The roles are cluster-level (infra/aws/roles.sql).
 --  * Every role's table grants follow each table, in this order: mwf_app,
---    mwf_job, mwf_ops (work-k5fk.7 moved mwf_job's and mwf_ops' here from
+--    mwf_ai, mwf_worker, mwf_ops (work-k5fk.7 moved mwf_job's and mwf_ops' here from
 --    trailer.sql T7 unchanged — app-grants.target.test.ts snapshots the whole
 --    privilege matrix, recorded before the move). mwf_auth has none (functions
 --    only); slam_bot_readonly's SELECT is a default ACL set by the
@@ -207,9 +229,11 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, job_access, ops_a
 --    any row, its partner's and strangers' alike. That is the expected gap
 --    until RLS (design note §6, rows 9d–9g) narrows it to rows; grants
 --    narrow commands and columns, never rows.
---  * mwf_job's and mwf_definer's grants: exactly what the job's own writers
---    and the definer helpers (mwf_definer's since work-k5fk.10.4; mwf_job's
---    before, when its login held their privileges too) read and write.
+--  * mwf_ai's, mwf_worker's and mwf_definer's grants: exactly what their own
+--    call sites and the definer helpers read and write. The [TS-n] tags below
+--    are history: those grants were mwf_job's until work-k5fk.10.5 split them
+--    by call site (the AI's to mwf_ai, the scheduled and Stage 4 closure ones
+--    to mwf_worker, the request path's two-party writes into definers).
 --    Column lists everywhere a column list exists:
 --    SELECT only the id / FK / filter columns a function reads (an UPDATE or
 --    DELETE with a WHERE needs SELECT on what it reads), UPDATE only the
@@ -505,15 +529,16 @@ COMMENT ON COLUMN app.json_schema.schema IS 'The JSON schema, in the subset the 
 COMMENT ON COLUMN app.json_schema.created_at IS 'When the schema was seeded (by the migration that added it).';
 COMMENT ON CONSTRAINT json_schema_name_check ON app.json_schema IS 'A lower-case identifier, optionally .kind: a table, or table.kind for a table whose kind picks the schema.';
 COMMENT ON CONSTRAINT json_schema_schema_check ON app.json_schema IS 'Only the subset app.jsonb_schema_violation implements (app.json_schema_wellformed), so no keyword is ever silently ignored.';
--- mwf_app, mwf_job: the validation triggers run with the writer's rights (trailer.sql T5: invoker rights
+-- mwf_app, mwf_ai: the validation triggers run with the writer's rights (trailer.sql T5: invoker rights
 -- throughout), so the roles whose writes fire them read the schemas. Read only: no runtime role writes a
 -- schema. A schema is not secret — it restates the contract shared/src/dto already publishes — so SELECT
 -- is harmless, and a SECURITY DEFINER lookup would add an owner hop for nothing. mwf_ops, mwf_auth: none
 -- (no reader, and no write of theirs fires a trigger). Whoever is granted a write that fires t_doc_schema or
--- t_jsonb_envelope later (ai_access, worker_access in §7 row 9b) needs this and the validators' EXECUTE: trailer T8
--- refuses the baseline when a role may write a validated column without them (work-k5fk.10.4.1).
+-- t_jsonb_envelope needs this and the validators' EXECUTE: trailer T8 refuses the baseline when a role may write a
+-- validated column without them (work-k5fk.10.4.1). mwf_ai: the summarizer's / classifier's ai_memory.doc
+-- (t_doc_schema). mwf_worker writes only enveloped columns (proposal_revision; t_jsonb_envelope needs no schema).
 GRANT SELECT ON app.json_schema TO app_access;
-GRANT SELECT ON app.json_schema TO job_access;
+GRANT SELECT ON app.json_schema TO ai_access;
 
 -- The seed: version 1 of each validated document, derived from what the app
 -- writes today (docs/backend/data-model/jsonb-shapes-2026-11.md §2).
@@ -601,7 +626,7 @@ $json$);
 -- the model's fact object); the document does not.
 INSERT INTO app.json_schema (name, version, schema) VALUES ('ai_memory.notable_facts', 1, $json$
 {
-  "$comment": "partner-session-classifier.ts (INSERT ... ON CONFLICT DO UPDATE as mwf_job)",
+  "$comment": "partner-session-classifier.ts (INSERT ... ON CONFLICT DO UPDATE as mwf_ai)",
   "type": "object",
   "required": ["facts"],
   "additionalProperties": false,
@@ -766,7 +791,7 @@ COMMENT ON TYPE brain_call_type IS 'Which part of the app made a logged LLM call
 -- (mwf_app relies on PUBLIC's USAGE, PostgreSQL 15+'s default). Schema app's
 -- grants are in preamble.sql, next to CREATE SCHEMA app.
 -- ----------------------------------------------------------------------------
-GRANT USAGE ON SCHEMA public TO job_access, mwf_definer;
+GRANT USAGE ON SCHEMA public TO ai_access, worker_access, mwf_definer;
 GRANT USAGE ON SCHEMA public TO ops_access;
 
 -- ----------------------------------------------------------------------------
@@ -818,13 +843,14 @@ COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a s
 -- app.anonymize_user_account.
 GRANT SELECT ON "user" TO app_access;
 GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO app_access;
--- mwf_job, mwf_definer: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
+-- mwf_definer: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
 -- the persona scrub)
-GRANT SELECT (id, kind, email, deleted_at) ON "user" TO job_access, mwf_definer;
+GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_definer;
 GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_definer;
 GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer;
--- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
-GRANT SELECT (first_name, name) ON "user" TO job_access;
+-- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
+-- Prisma's relation join key, participant (user_id, kind) -> user (id, kind) — measured: denied without kind)
+GRANT SELECT (id, kind, first_name, name) ON "user" TO ai_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON "user" TO ops_access;
 
@@ -837,9 +863,9 @@ CREATE FUNCTION app.ai_user_id() RETURNS uuid
   LANGUAGE sql IMMUTABLE PARALLEL SAFE
   RETURN '00000000-0000-7000-8000-000000000001'::uuid;
 COMMENT ON FUNCTION app.ai_user_id() IS 'The id of the one AI user row, seeded by the baseline next to the "user" table. A constant: the seed and this function change together.';
--- mwf_app, mwf_job: the session paths that will seat the AI (design note §3) name it through this; a constant, no data.
+-- mwf_app: the session paths that will seat the AI (design note §3) name it through this; a constant, no data.
 REVOKE EXECUTE ON FUNCTION app.ai_user_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.ai_user_id() TO app_access, job_access;
+GRANT EXECUTE ON FUNCTION app.ai_user_id() TO app_access;
 
 CREATE TABLE user_identity (
     provider identity_provider NOT NULL,
@@ -871,9 +897,9 @@ COMMENT ON CONSTRAINT user_identity_clerk_subject ON user_identity IS 'A Clerk s
 COMMENT ON CONSTRAINT user_identity_e2e_subject ON user_identity IS 'An E2E-bypass subject is e2e_ and 1-64 of [a-z0-9_-] (e2e_<uuid>, e2e_<ms>_<random>). The e2e provider is never used in production (lib/e2e-bypass.ts).';
 -- mwf_app: nothing (work-bp5m). A request resolves its subject through mwf_auth's app.resolve_user and never reads,
 -- writes or re-binds an identity.
--- mwf_job, mwf_definer: create_user (INSERT), anonymize_user_account (the identities go with the tombstone), account-deletion.ts
--- (the Clerk subject to delete at Clerk, read before the walk).
-GRANT SELECT (provider, subject, user_id) ON user_identity TO job_access, mwf_definer;
+-- mwf_definer: create_user (INSERT), anonymize_user_account (the identities go with the tombstone), app.identity_subject
+-- (account-deletion.ts: the caller's own Clerk subject to delete at Clerk, read before the walk).
+GRANT SELECT (provider, subject, user_id) ON user_identity TO mwf_definer;
 GRANT INSERT (provider, subject, user_id) ON user_identity TO mwf_definer;
 GRANT DELETE ON user_identity TO mwf_definer;
 
@@ -900,8 +926,8 @@ COMMENT ON COLUMN persona.owner_user_id IS 'The human who created the persona; i
 COMMENT ON COLUMN persona.kind IS 'Always persona: pins the FK (user_id, kind) to a persona user row (pattern K).';
 COMMENT ON COLUMN persona.owner_kind IS 'Always human: pins the FK (owner_user_id, owner_kind) to a human user row (pattern K).';
 -- mwf_app: nothing yet — no request creates or reads a persona until the modeled-participant paths move onto it (design note §3).
--- mwf_job, mwf_definer: anonymize_user_account finds the owner's personas to scrub.
-GRANT SELECT (user_id, owner_user_id) ON persona TO job_access, mwf_definer;
+-- mwf_definer: anonymize_user_account finds the owner's personas to scrub.
+GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_definer;
 
 CREATE TABLE user_contact (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
@@ -966,18 +992,23 @@ COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short n
 GRANT SELECT ON session TO app_access;
 GRANT INSERT (status, previous_session_id, topic_frame, created_at, updated_at) ON session TO app_access;
 GRANT UPDATE (topic_frame, topic_frame_confirmed_at, updated_at) ON session TO app_access;
--- mwf_job, mwf_definer: session_set_status, empathy_set_status (row lock), anonymize step 1. mwf_job keeps the UPDATE: its own
--- SELECT … FOR NO KEY UPDATE of the session row (empathy-store jobMoveIfUnchanged, the reveal lock order) needs UPDATE on a column.
-GRANT SELECT (id, status, resolved_at) ON session TO job_access, mwf_definer;
-GRANT UPDATE (status, resolved_at) ON session TO job_access, mwf_definer;
+-- mwf_definer: session_set_status, empathy_set_status (row lock), anonymize step 1, session_abandon_declined.
+GRANT SELECT (id, status, resolved_at) ON session TO mwf_definer;
+GRANT UPDATE (status, resolved_at) ON session TO mwf_definer;
+-- mwf_ai: its own SELECT … FOR NO KEY UPDATE of the session row (empathy-store jobMoveIfUnchanged, reconciler/sharing.ts
+-- deliverAcceptedShare: the reveal lock order) needs UPDATE on one column: updated_at, which touch_updated_at
+-- rewrites anyway, and t_session_scope keeps to the AI's own session. Never status (app.session_set_status).
+GRANT SELECT (id) ON session TO ai_access;
+GRANT UPDATE (updated_at) ON session TO ai_access;
 -- mwf_definer: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
 GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_definer;
 GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_definer;
--- mwf_job [TS-12]: session-retention: staleness of an ACTIVE session and the purge window of an ARCHIVED one
-GRANT SELECT (updated_at) ON session TO job_access;
--- mwf_job [TS-12]: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
+-- mwf_worker: session-retention: the ACTIVE candidates, staleness of an ACTIVE session and the purge window of an
+-- ARCHIVED one (status moves through app.session_set_status)
+GRANT SELECT (id, status, updated_at) ON session TO worker_access;
+-- mwf_worker: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
 -- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
-GRANT DELETE ON session TO job_access;
+GRANT DELETE ON session TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON session TO ops_access;
 
@@ -1023,14 +1054,18 @@ COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted t
 -- app.anonymize_user_in_session.
 GRANT SELECT ON participant TO app_access;
 GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at) ON participant TO app_access;
--- mwf_job, mwf_definer: is_member, partner_user_id, every self/membership test, T-cardinality-*, reveal gate
-GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO job_access, mwf_definer;
+-- mwf_definer: is_member, partner_user_id, every self/membership test, T-cardinality-*, reveal gate
+GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_definer;
 -- mwf_definer: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
 GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
 -- mwf_definer: anonymize_user_in_session step 2
 GRANT UPDATE (display_name, left_at) ON participant TO mwf_definer;
--- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
-GRANT SELECT (joined_at, display_name) ON participant TO job_access;
+-- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts), brain-service
+-- participantUserFor (whose turn a telemetry row is), partner-session-classifier (the participant it remembers for)
+GRANT SELECT (session_id, user_id, kind, left_at, joined_at, display_name) ON participant TO ai_access;
+-- mwf_worker: stage4-closure closureInputsAsJob / stage4.ts agreeIfEveryoneWilling: the present humans the closure
+-- decides for
+GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON participant TO ops_access;
 
@@ -1109,13 +1144,14 @@ GRANT INSERT (session_id, created_by_user_id, source, kind, status, description,
 GRANT UPDATE (description, duration, measure_of_success, kind, status, created_by_user_id,
               unresolved_need_labels, removed_at, removed_by_user_id, removal_reason, updated_at)
   ON proposal TO app_access;
--- mwf_job, mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, session_id, created_by_user_id) ON proposal TO job_access, mwf_definer;
--- mwf_job [TS-11]: stage4-closure closureInputsAsJob (fix round 1): the closure decides across every participant on the
--- job connection — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
-GRANT SELECT (session_id, kind, status, description, duration, measure_of_success, shared_at) ON proposal TO job_access;
--- mwf_job [TS-11]: repair-store convertProposalsAsJob: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT (WHERE id = …: SELECT id is granted above)
-GRANT UPDATE (status) ON proposal TO job_access;
+-- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, session_id, created_by_user_id) ON proposal TO mwf_definer;
+-- mwf_worker: stage4-closure closureInputsAsJob (fix round 1) and stage4.ts agreeIfEveryoneWilling: the closure decides
+-- across every participant — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
+GRANT SELECT (id, session_id, created_by_user_id, kind, status, description, duration, measure_of_success, shared_at)
+  ON proposal TO worker_access;
+-- mwf_worker: stage4-store insertAgreementsTx: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT
+GRANT UPDATE (status) ON proposal TO worker_access;
 
 CREATE TABLE conversation (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1152,10 +1188,11 @@ GRANT SELECT ON conversation TO app_access;
 GRANT INSERT (session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, next_seq, created_at, updated_at)
   ON conversation TO app_access;
 GRANT UPDATE (status, resolved_at, updated_at) ON conversation TO app_access;
--- mwf_job, mwf_definer: empathy_set_status: the subject's MAIN conversation; anonymize step 3
-GRANT SELECT (id, session_id, user_id, kind) ON conversation TO job_access, mwf_definer;
--- mwf_job: a message writer reads its conversation's session into message.session_id (work-k5fk.3, 6a)
-GRANT SELECT (session_id) ON conversation TO job_access;
+-- mwf_definer: empathy_set_status: the subject's MAIN conversation; anonymize step 3; deliver_message (the recipient)
+GRANT SELECT (id, session_id, user_id, kind) ON conversation TO mwf_definer;
+-- mwf_ai: a facilitator line reads its conversation's session into message.session_id (message-store insert, work-k5fk.3);
+-- sessionParties: each party's MAIN conversation
+GRANT SELECT (id, session_id, user_id, kind) ON conversation TO ai_access;
 -- mwf_definer: app.next_message_seq (SECURITY DEFINER, owned by mwf_definer; work-k5fk.4) takes the next number. Only
 -- the NOLOGIN owner holds it (work-k5fk.10.4 moved it off mwf_job): no runtime login can move the counter directly.
 GRANT SELECT (next_seq) ON conversation TO mwf_definer;
@@ -1211,11 +1248,17 @@ GRANT SELECT ON empathy_attempt TO app_access;
 GRANT INSERT (session_id, author_user_id, subject_user_id, round, content, status, status_version, delivery_status,
               submitted_at, created_at, updated_at)
   ON empathy_attempt TO app_access;
--- mwf_job, mwf_definer: empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner; anonymize (revealed_at filter)
-GRANT SELECT ON empathy_attempt TO job_access, mwf_definer;
--- mwf_job: the job's delivery path (status moves, the delivery columns); mwf_definer: empathy_set_status's status moves and reveal stamp
-GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO job_access;
-GRANT UPDATE (status, status_version, revealed_at) ON empathy_attempt TO mwf_definer;
+-- mwf_definer: empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner;
+-- anonymize (revealed_at filter); empathy_mark_delivery
+GRANT SELECT ON empathy_attempt TO mwf_definer;
+-- mwf_definer: empathy_set_status's status moves and reveal stamp; empathy_mark_delivery's stamps
+GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO mwf_definer;
+-- mwf_ai: the reconciler reads every column of an attempt (empathy-store ATTEMPT_SELECT: the guess is its prompt);
+-- jobMoveIfUnchanged locks the row FOR NO KEY UPDATE, which needs UPDATE on one column: updated_at (touch_updated_at
+-- rewrites it; t_session_scope keeps it to the AI's session). Status moves through app.empathy_set_status, delivery
+-- stamps through app.empathy_mark_delivery.
+GRANT SELECT ON empathy_attempt TO ai_access;
+GRANT UPDATE (updated_at) ON empathy_attempt TO ai_access;
 -- mwf_definer: empathy_set_status: round n+1 on resubmission
 GRANT INSERT (session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status) ON empathy_attempt TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
@@ -1262,8 +1305,8 @@ GRANT SELECT ON need TO app_access;
 GRANT INSERT (session_id, user_id, label, category, evidence, ai_confidence, confirmed_at, created_at, updated_at)
   ON need TO app_access;
 GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO app_access;
--- mwf_job, mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
-GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO job_access, mwf_definer;
+-- mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
+GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_definer;
 -- mwf_definer: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
 GRANT SELECT (session_id, user_id) ON need TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
@@ -1323,20 +1366,25 @@ GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, 
               created_at)
   ON message TO app_access;
 GRANT DELETE ON message TO app_access;
--- mwf_job, mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe
-GRANT SELECT (conversation_id, source_attempt_id, kind) ON message TO job_access, mwf_definer;
-GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id) ON message TO job_access, mwf_definer;
--- mwf_job [TS-9]: message-store createFacilitatorMessage / deliverMessage: a once-only line's
--- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
--- reply answers, and an explicit instant (fixtures, replays)
-GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO job_access;
--- mwf_job [TS-9]: message-store insert() returns the written row's key and instant (INSERT … RETURNING seq, created_at);
--- getInitialMessage's Serializable idempotency probe asks whether seq 1 exists (work-k5fk.4). Never content.
-GRANT SELECT (seq, created_at) ON message TO job_access;
--- mwf_job [TS-10 I4]: analysis.ts stagedChat (witnessing content, the subject's recent Stage 2 turns) and
--- state.ts markEmpathyReady's de-dup guard (lastAiNote): the text and speaker of the
--- MAIN-conversation CHAT rows of the two parties (conversation_id, kind, created_at granted above).
-GRANT SELECT (role, content, session_id, sender_user_id) ON message TO job_access;
+-- mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe; deliver_message: the delivered copy with
+-- its instant, RETURNING seq, created_at
+GRANT SELECT (conversation_id, source_attempt_id, kind, seq, created_at) ON message TO mwf_definer;
+GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at) ON message TO mwf_definer;
+-- mwf_ai: message-store createFacilitatorMessage / createFacilitatorMessageOnce: the AI / SYSTEM line (sender_user_id
+-- is sent as NULL; t_session_scope refuses any other role), a once-only line's dedupe_key (work-fdc1, sql_message_once),
+-- the refining need a facilitator reply answers, the attempt it is about, and an explicit instant (fixtures, replays).
+-- A delivered (USER) row is never the AI's: app.deliver_message.
+GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, refining_need_id, source_attempt_id,
+              dedupe_key, created_at)
+  ON message TO ai_access;
+-- mwf_ai: insert() returns the written row's key and instant (INSERT … RETURNING seq, created_at); getInitialMessage's
+-- Serializable idempotency probe asks whether the conversation holds a line (work-k5fk.4); analysis.ts stagedChat
+-- (witnessing content, the subject's recent Stage 2 turns) and state.ts markEmpathyReady's de-dup guard (lastAiNote):
+-- the text and speaker of the MAIN-conversation CHAT rows of the two parties. Never dedupe_key.
+GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at)
+  ON message TO ai_access;
+-- mwf_worker: session-retention: the latest message of a stale candidate (max(created_at) by session_id). Never content.
+GRANT SELECT (session_id, created_at) ON message TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON message TO ops_access;
 
@@ -1441,23 +1489,23 @@ COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (parti
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
 GRANT SELECT ON reconciler_result TO app_access;
--- mwf_job [TS-10]: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
+-- mwf_ai: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
 -- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
--- supersede (WHERE attempt_id … AND superseded_at IS NULL). Never the analysis text.
-GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO job_access;
--- mwf_job [TS-10]: persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
+-- supersede (WHERE attempt_id … AND superseded_at IS NULL).
+GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO ai_access;
+-- mwf_ai: persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
 GRANT INSERT (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary,
               gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
               recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
-              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO job_access;
--- mwf_job [TS-10]: persistAnalysis: re-analysis of the same attempt retires the current result
-GRANT UPDATE (superseded_at) ON reconciler_result TO job_access;
--- mwf_job [TS-10 I4]: analysis.ts currentResultFor / analyzeEmpathyGap's cached result, sharing.ts generateShareOffer,
+              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO ai_access;
+-- mwf_ai: persistAnalysis: re-analysis of the same attempt retires the current result
+GRANT UPDATE (superseded_at) ON reconciler_result TO ai_access;
+-- mwf_ai: analysis.ts currentResultFor / analyzeEmpathyGap's cached result, sharing.ts generateShareOffer,
 -- state.ts reveal quality note: the stored analysis an analysis reuses (RESULT_SELECT)
 GRANT SELECT (session_id, subject_user_id, alignment_score, alignment_summary, correctly_identified, gap_severity,
               gap_summary, missed_feelings, misattributions, most_important_gap, recommended_action, rationale,
               sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at)
-  ON reconciler_result TO job_access;
+  ON reconciler_result TO ai_access;
 
 CREATE TABLE context_share_offer (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1507,24 +1555,24 @@ COMMENT ON COLUMN context_share_offer.shared_content IS 'encrypted (session): th
 -- suggestion, decline, accept with the shared text. Creation and delivery are the job's.
 GRANT SELECT ON context_share_offer TO app_access;
 GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content, shared_at, updated_at) ON context_share_offer TO app_access;
--- mwf_job, mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, session_id, subject_user_id) ON context_share_offer TO job_access, mwf_definer;
--- mwf_job [TS-10]: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)),
--- RETURNING id; triggerStage3Transition: open offers (status) of the session's participants expire
-GRANT SELECT (attempt_id, iteration, status) ON context_share_offer TO job_access;
--- mwf_job [TS-10]: sharing.ts deliverAcceptedShare (fix1 I2): the delivery is idempotent — it locks the offer
--- (SELECT … FOR UPDATE) and delivers only while delivery_status is PENDING. Never the shared text.
-GRANT SELECT (delivery_status) ON context_share_offer TO job_access;
--- mwf_job [TS-10]: insertOffer: the subject's offer (PENDING from the reconciler; OFFERED with offered_at from the share-offer fallback)
+-- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share;
+-- share_offers_expire (stage2.ts triggerStage3Transition: open offers expire when the Stage 2 sharing window closes)
+-- and share_offers_mark_notified (notifications.ts getPendingActionsHandler: the subject's own notification stamps)
+-- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
+-- offer on the recipient's round, review F3)
+GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
+GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
+-- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
+-- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a
+-- suggestion)?; deliverAcceptedShare (fix1 I2): the delivery is idempotent — it locks the offer (SELECT … FOR UPDATE)
+-- and delivers only while delivery_status is PENDING. Never the shared text.
+GRANT SELECT (id, session_id, subject_user_id, attempt_id, result_id, iteration, status, delivery_status, suggested_content)
+  ON context_share_offer TO ai_access;
+-- mwf_ai: insertOffer: the subject's offer (PENDING from the reconciler; OFFERED with offered_at from the share-offer fallback)
 GRANT INSERT (attempt_id, result_id, session_id, subject_user_id, iteration, status, offer_message, suggested_content,
-              suggested_reason, offered_at) ON context_share_offer TO job_access;
--- mwf_job [TS-10]: sharing.ts shareAccepted: the delivery stamp of the shared text; notifications.ts getPendingActionsHandler:
--- the notification path writes delivery_notified_at / seen_notified_at (review F4.2); stage2.ts
--- triggerStage3Transition: status → EXPIRED when the Stage 2 sharing window closes
-GRANT UPDATE (status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at) ON context_share_offer TO job_access;
--- mwf_job [TS-10 I4]: sharing.ts generateShareSuggestion(ForDirection) / generateShareOffer: does this result already
--- have an offer (with a suggestion)? Never the shared text.
-GRANT SELECT (result_id, suggested_content) ON context_share_offer TO job_access;
+              suggested_reason, offered_at) ON context_share_offer TO ai_access;
+-- mwf_ai: deliverAcceptedShare: the delivery stamp of the shared text
+GRANT UPDATE (delivery_status, delivered_at) ON context_share_offer TO ai_access;
 
 CREATE TABLE milestone (
     key milestone_key NOT NULL PRIMARY KEY,
@@ -1542,6 +1590,8 @@ COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone
 COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record the milestone themselves (a CTA) or only the job (a system fact).';
 -- mwf_app: reference data (P3 §1.1 pattern), read only.
 GRANT SELECT ON milestone TO app_access;
+-- mwf_definer: reach_milestone refuses a self-assertable key (the participant's own, through mwf_app's INSERT).
+GRANT SELECT (key, self_assertable) ON milestone TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON milestone TO ops_access;
 
@@ -1587,14 +1637,16 @@ GRANT SELECT ON participant_milestone TO app_access;
 GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO app_access;
 -- Holds only because reachMilestone is raw SQL (INSERT … ON CONFLICT DO NOTHING naming these three
 -- columns): a Prisma create would also send created_at.
--- mwf_job, mwf_definer: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
-GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO job_access, mwf_definer;
--- mwf_job [TS-9]: milestone-writer reachMilestone: system keys (invitation_sent, empathy_*, needs_shared, closed, paused …)
-GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO job_access;
--- mwf_job [TS-9]: sessions.ts resumeSession: un-reaching `paused` is a DELETE by mwf_job (spec §1.1)
-GRANT DELETE ON participant_milestone TO job_access;
--- mwf_job [TS-10 I4]: analysis.ts milestonesOf: when each milestone was reached — the stage each chat row was written in
-GRANT SELECT (reached_at) ON participant_milestone TO job_access;
+-- mwf_definer: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins;
+-- reach_milestone (milestone-writer reachMilestone: the system keys — invitation_sent, empathy_*, needs_shared, closed,
+-- paused …), session_resume (un-reaching `paused`, spec §1.1) and choices_unshare (stage4-store unshareChoices)
+GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO mwf_definer;
+GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO mwf_definer;
+GRANT DELETE ON participant_milestone TO mwf_definer;
+-- mwf_ai: analysis.ts milestonesOf: when each milestone was reached — the stage each chat row was written in
+GRANT SELECT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO ai_access;
+-- mwf_worker: stage4-closure closureInputsAsJob: who has shared their choices (choices_shared)
+GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON participant_milestone TO ops_access;
 
@@ -1629,16 +1681,16 @@ GRANT SELECT ON ai_memory TO app_access;
 -- (doc_schema_version: the Prisma upsert's create sends its @default.)
 GRANT INSERT (user_id, kind, doc, doc_schema_version, created_at, updated_at) ON ai_memory TO app_access;
 GRANT UPDATE (doc, updated_at) ON ai_memory TO app_access;
--- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON ai_memory TO job_access, mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON ai_memory TO mwf_definer;
 GRANT DELETE ON ai_memory TO mwf_definer;
--- mwf_job [TS-9]: conversation-summarizer updateSessionSummary: the participant's SUMMARY document (INSERT … ON CONFLICT DO UPDATE)
-GRANT SELECT (kind) ON ai_memory TO job_access;
-GRANT INSERT (session_id, user_id, kind, doc) ON ai_memory TO job_access;
-GRANT UPDATE (doc) ON ai_memory TO job_access;
--- mwf_job [TS-10 I4]: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (session_id, user_id, kind granted above;
--- id because a Prisma model read always selects the primary key — measured: denied without it)
-GRANT SELECT (id, doc) ON ai_memory TO job_access;
+-- mwf_ai: conversation-summarizer updateSessionSummary and partner-session-classifier: the participant's SUMMARY /
+-- NOTABLE_FACTS document (INSERT … ON CONFLICT DO UPDATE, whose arbiter reads session_id, user_id, kind)
+GRANT INSERT (session_id, user_id, kind, doc) ON ai_memory TO ai_access;
+GRANT UPDATE (doc) ON ai_memory TO ai_access;
+-- mwf_ai: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (id because a Prisma model read always
+-- selects the primary key — measured: denied without it)
+GRANT SELECT (id, session_id, user_id, kind, doc) ON ai_memory TO ai_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON ai_memory TO ops_access;
 
@@ -1730,6 +1782,9 @@ GRANT INSERT (session_id, invited_by_user_id, invitee_name, status, expires_at, 
   ON invitation TO app_access;
 GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, message_confirmed_at, updated_at)
   ON invitation TO app_access;
+-- mwf_definer: session_abandon_declined (invitations.ts declineInvitation: the decliner is no participant, so the
+-- declined invitation is what lets the session end)
+GRANT SELECT (id, session_id, invited_by_user_id, status) ON invitation TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT (session_id, invited_by_user_id) ON invitation TO ops_access;
 
@@ -1900,11 +1955,11 @@ COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a c
 COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
 -- mwf_app: read only (the author's abstract hints); written by the job.
 GRANT SELECT ON reconciler_guidance TO app_access;
--- mwf_job [TS-10]: persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
+-- mwf_ai: persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
 GRANT INSERT (result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed)
-  ON reconciler_guidance TO job_access;
--- mwf_job [TS-10 I4]: analysis.ts guidanceFor: the guidance of a cached result
-GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO job_access;
+  ON reconciler_guidance TO ai_access;
+-- mwf_ai: analysis.ts guidanceFor: the guidance of a cached result
+GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO ai_access;
 
 CREATE TABLE consent (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1965,8 +2020,8 @@ GRANT SELECT ON consent TO app_access;
 GRANT INSERT (session_id, user_id, requested_by_user_id, empathy_attempt_id, need_id, share_offer_id, review_id,
               decision, decided_at, created_at, updated_at) ON consent TO app_access;
 GRANT UPDATE (decision, decided_at, revoked_at, updated_at) ON consent TO app_access;
--- mwf_job, mwf_definer: need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
-GRANT SELECT (need_id, session_id, user_id, decision) ON consent TO job_access, mwf_definer;
+-- mwf_definer: need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
+GRANT SELECT (need_id, session_id, user_id, decision) ON consent TO mwf_definer;
 GRANT UPDATE (decision, revoked_at) ON consent TO mwf_definer;
 
 CREATE TABLE need_share (
@@ -1999,8 +2054,8 @@ COMMENT ON COLUMN need_share.category IS 'The need''s category, copied at share 
 COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-removed sentence the partner sees (one short first-person sentence written by the job, or a fixed per-category fallback).';
 -- mwf_app: read only (v_need_shared and the tending reads); app.need_share / app.need_revoke_share are the writers.
 GRANT SELECT ON need_share TO app_access;
--- mwf_job, mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
-GRANT SELECT (need_id, revoked_at) ON need_share TO job_access, mwf_definer;
+-- mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
+GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_definer;
 GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
 GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
 
@@ -2082,8 +2137,9 @@ GRANT UPDATE (decision, note, created_at) ON proposal_choice TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON proposal_choice TO mwf_definer;
 GRANT DELETE ON proposal_choice TO mwf_definer;
--- mwf_job [TS-11]: T-agreement-parties: every party WILLING on the proposal
-GRANT SELECT (proposal_id, session_id, user_id, decision) ON proposal_choice TO job_access;
+-- mwf_worker: closureInputsAsJob / agreeIfEveryoneWilling (every present human WILLING) and T-agreement-parties
+-- (deferred, invoker = the agreement's writer): every party WILLING on the proposal
+GRANT SELECT (proposal_id, session_id, user_id, decision) ON proposal_choice TO worker_access;
 
 CREATE TABLE proposal_revision (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2116,8 +2172,8 @@ COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelop
 GRANT SELECT ON proposal_revision TO app_access;
 GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason, created_at)
   ON proposal_revision TO app_access;
--- mwf_job [TS-11]: repair-store: the conversion's audit row (append-only; no message id, lineage in before/after)
-GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason) ON proposal_revision TO job_access;
+-- mwf_worker: stage4-store insertAgreementsTx: the conversion's audit row (append-only; no message id, lineage in before/after)
+GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason) ON proposal_revision TO worker_access;
 
 CREATE TABLE agreement (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2147,13 +2203,14 @@ COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s fr
 COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 -- mwf_app: read only; agreements are created and moved by the job.
 GRANT SELECT ON agreement TO app_access;
--- mwf_job [TS-11]: repair-store createAgreementsAsJob: the agreement row (snapshot of the proposal) and its id (RETURNING id)
-GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO job_access;
--- mwf_job [TS-11]: repair-store: RETURNING id; T-agreement-parties (invoker = mwf_job) reads the agreement's session, proposal and instant;
+-- mwf_worker: stage4-store createAgreementsAsJob / insertAgreementsTx: the agreement row (snapshot of the proposal) and its
+-- id (RETURNING id)
+GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO worker_access;
+-- mwf_worker: RETURNING id; T-agreement-parties (invoker = mwf_worker) reads the agreement's session, proposal and instant;
 -- tending: the agreement a follow-up is about (status moves)
-GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO job_access;
--- mwf_job [TS-11]: tending resolve/closure paths: an agreement moves AGREED → IN_PROGRESS → COMPLETED | ABANDONED
-GRANT UPDATE (status, completed_at) ON agreement TO job_access;
+GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO worker_access;
+-- mwf_worker: tending resolve/closure paths: an agreement moves AGREED → IN_PROGRESS → COMPLETED | ABANDONED
+GRANT UPDATE (status, completed_at) ON agreement TO worker_access;
 
 CREATE TABLE agreement_party (
     agreement_id uuid7 NOT NULL REFERENCES agreement ON DELETE CASCADE,
@@ -2173,10 +2230,10 @@ COMMENT ON COLUMN agreement_party.session_id IS 'The session of every participan
 COMMENT ON COLUMN agreement_party.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: read only (an agreement's parties).
 GRANT SELECT ON agreement_party TO app_access;
--- mwf_job [TS-11]: repair-store createAgreementsAsJob: one party row per present human
-GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO job_access;
--- mwf_job [TS-11]: T-agreement-parties (deferred, invoker = mwf_job): the party set
-GRANT SELECT (agreement_id, session_id, user_id) ON agreement_party TO job_access;
+-- mwf_worker: stage4-store insertAgreementsTx: one party row per present human
+GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO worker_access;
+-- mwf_worker: T-agreement-parties (deferred, invoker = mwf_worker): the party set
+GRANT SELECT (agreement_id, session_id, user_id) ON agreement_party TO worker_access;
 
 CREATE TABLE session_closure (
     session_id uuid7 NOT NULL PRIMARY KEY REFERENCES session ON DELETE CASCADE,
@@ -2199,9 +2256,10 @@ COMMENT ON COLUMN session_closure.closed_by_user_id IS 'A participant of the row
 COMMENT ON COLUMN session_closure.summary IS 'encrypted (session): how the repair stage ended, from the participant (max 2000) or a code template.';
 -- mwf_app: read only; the closure is the job's.
 GRANT SELECT ON session_closure TO app_access;
--- mwf_job [TS-11]: repair-store closeSessionAsJob: how the repair stage ended (the three id arrays are v_session_closure_items)
+-- mwf_worker: stage4-store closeSessionAsJob / insertClosureTx: how the repair stage ended (the three id arrays are
+-- v_session_closure_items)
 GRANT INSERT (session_id, kind, reason, summary, closed_by_user_id, check_in_at, closed_at)
-  ON session_closure TO job_access;
+  ON session_closure TO worker_access;
 
 CREATE TABLE follow_up (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2243,16 +2301,18 @@ GRANT SELECT ON follow_up TO app_access;
 GRANT INSERT (session_id, type, scope, owner_user_id, opted_in_shared, status, opened_at, summary, created_at, updated_at)
   ON follow_up TO app_access;
 GRANT UPDATE (opted_in_shared, updated_at) ON follow_up TO app_access;
--- mwf_job, mwf_definer: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
-GRANT SELECT (id, scope) ON follow_up TO job_access, mwf_definer;
--- mwf_job [TS-11]: tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure, and the
--- next round a check-in schedules (EXTEND / PARTIAL_CLOSURE continuing: a follow-up is one cycle) (RETURNING id: SELECT id granted above)
+-- mwf_definer: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
+GRANT SELECT (id, scope) ON follow_up TO mwf_definer;
+-- mwf_worker: tending insertFollowUpAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure, and the
+-- next round a check-in schedules (EXTEND / PARTIAL_CLOSURE continuing: a follow-up is one cycle) (RETURNING id)
 GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for,
-              response_deadline_at, summary) ON follow_up TO job_access;
--- mwf_job [TS-11]: open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due), whom to notify, the cycle columns it moves
-GRANT SELECT (session_id, agreement_id, type, owner_user_id, status, scheduled_for, response_deadline_at) ON follow_up TO job_access;
--- mwf_job [TS-11]: open-due / cycle resolution: SCHEDULED → OPEN (opened_at, the response deadline), OPEN/PARTIAL → COMPLETED | EXPIRED
-GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO job_access;
+              response_deadline_at, summary) ON follow_up TO worker_access;
+-- mwf_worker: open-due-tending-entries: find due SCHEDULED rows (sql_follow_up_due), whom to notify, the cycle columns it moves
+GRANT SELECT (id, session_id, agreement_id, type, scope, owner_user_id, status, scheduled_for, response_deadline_at)
+  ON follow_up TO worker_access;
+-- mwf_worker: open-due / cycle resolution / a check-in's progress: SCHEDULED → OPEN (opened_at, the response deadline),
+-- OPEN/PARTIAL → COMPLETED | EXPIRED
+GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO worker_access;
 
 CREATE TABLE follow_up_checkin (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2285,8 +2345,8 @@ GRANT SELECT ON follow_up_checkin TO app_access;
 GRANT INSERT (follow_up_id, session_id, user_id, next_action, continue_choice, reflection_summary, payload,
               submitted_at, created_at)
   ON follow_up_checkin TO app_access;
--- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (follow_up_id, session_id, user_id) ON follow_up_checkin TO job_access, mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (follow_up_id, session_id, user_id) ON follow_up_checkin TO mwf_definer;
 GRANT DELETE ON follow_up_checkin TO mwf_definer;
 
 CREATE TABLE follow_up_note (
@@ -2334,15 +2394,19 @@ CREATE INDEX ON reminder (follow_up_id);
 COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to a follow-up; the job delivers due ones.';
 COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
 COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 1000); the app sends a fixed label today.';
--- mwf_app: the caller's own reminder at check-in; delivery and the next instant are the job's.
+-- mwf_app: the caller's own reminder at check-in; delivery and the next instant are the worker's. DELETE:
+-- session-deletion.ts deleteSessionForUser — the leaver's own reminders on the session's follow-ups go with the leave
+-- (the caller's rows: the request moved off mwf_job in work-k5fk.10.5; RLS, §7 rows 9d–9g, binds user_id).
 GRANT SELECT ON reminder TO app_access;
 GRANT INSERT (user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at) ON reminder TO app_access;
--- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON reminder TO job_access, mwf_definer;
-GRANT DELETE ON reminder TO job_access, mwf_definer;
--- mwf_job [TS-11]: processDueTendingReminders (job): due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at for a cadence
-GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO job_access;
-GRANT UPDATE (status, remind_at) ON reminder TO job_access;
+GRANT DELETE ON reminder TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON reminder TO mwf_definer;
+GRANT DELETE ON reminder TO mwf_definer;
+-- mwf_worker: processDueTendingReminders: due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at
+-- for a cadence; whom to notify (user_id)
+GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO worker_access;
+GRANT UPDATE (status, remind_at) ON reminder TO worker_access;
 
 CREATE TABLE reflection (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2380,8 +2444,8 @@ GRANT SELECT ON reflection TO app_access;
 GRANT INSERT (user_id, title, status, linked_session_id, linked_at, created_at, updated_at) ON reflection TO app_access;
 GRANT UPDATE (title, summary, theme, status, linked_session_id, linked_at, context_snapshot, summary_doc, distilled_at, updated_at)
   ON reflection TO app_access;
--- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (id, user_id) ON reflection TO job_access, mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (id, user_id) ON reflection TO mwf_definer;
 GRANT DELETE ON reflection TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON reflection TO ops_access;
@@ -2467,11 +2531,11 @@ GRANT UPDATE (push_token, platform, last_seen_at, biometric_enabled, biometric_e
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON user_device TO mwf_definer;
 GRANT DELETE ON user_device TO mwf_definer;
--- mwf_job [TS-12]: push.ts sendPushNotification: the recipient's devices — another user than the caller, so the
--- job reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
-GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO job_access;
--- mwf_job [TS-12]: push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
-GRANT UPDATE (push_token) ON user_device TO job_access;
+-- mwf_worker: push.ts sendPushNotification (notification delivery): the recipient's devices — another user than the
+-- caller, so the worker reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
+GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO worker_access;
+-- mwf_worker: push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
+GRANT UPDATE (push_token) ON user_device TO worker_access;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
@@ -2520,11 +2584,9 @@ GRANT SELECT ON user_memory TO app_access;
 GRANT INSERT (user_id, session_id, content, category, status, source, suggested_text, created_at, updated_at) ON user_memory TO app_access;
 GRANT UPDATE (session_id, content, category, status, source, suggested_text, updated_at) ON user_memory TO app_access;
 GRANT DELETE ON user_memory TO app_access;
--- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON user_memory TO job_access, mwf_definer;
-GRANT DELETE ON user_memory TO job_access, mwf_definer;
--- mwf_job [TS-12]: session-deletion: the leaver's session-scoped user_memory goes with the leave (DELETE granted above)
-GRANT SELECT (session_id) ON user_memory TO job_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_memory TO mwf_definer;
+GRANT DELETE ON user_memory TO mwf_definer;
 
 CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
@@ -2614,26 +2676,27 @@ COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
--- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, participant_user_id, reflection_id) ON brain_activity TO job_access, mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
-GRANT DELETE ON brain_activity TO job_access, mwf_definer;
--- mwf_job [TS-12]: brain-service startActivity: the telemetry row, attributed at capture (participant_user_id,
--- reflection_id); id / created_at are column defaults returned by RETURNING
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, participant_user_id, reflection_id) ON brain_activity TO mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
+GRANT DELETE ON brain_activity TO mwf_definer;
+-- mwf_ai: brain-service startActivity: the telemetry row of an AI call, attributed at capture (participant_user_id,
+-- reflection_id; a sessionless row is an inner-work call's, which t_session_scope lets through); id / created_at are
+-- column defaults returned by RETURNING
 GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
               status)
-  ON brain_activity TO job_access;
--- mwf_job [TS-12]: startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …;
--- data-retention's purge and delete windows (WHERE created_at < …; session_id granted above). Never a blob.
-GRANT SELECT (id, created_at) ON brain_activity TO job_access;
--- mwf_job [TS-12]: completeActivity / failActivity: the outcome of the call (metadata replaced, never read back)
+  ON brain_activity TO ai_access;
+-- mwf_ai: startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …; mergeTurnTrace
+-- (ai-orchestrator storeTurnTrace): find the turn's latest ORCHESTRATED_RESPONSE row of the session and merge the
+-- pipeline trace into its metadata (metadata holds cache/tool/trace telemetry, never a prompt). Never input / output.
+GRANT SELECT (id, session_id, turn_id, call_type, metadata, created_at) ON brain_activity TO ai_access;
+-- mwf_ai: completeActivity / failActivity: the outcome of the call
 GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
-  ON brain_activity TO job_access;
--- mwf_job [TS-12]: data-retention: the short-retention purge sets the four blobs NULL (spec §1.8)
-GRANT UPDATE (input) ON brain_activity TO job_access;
--- mwf_job [TS-12]: brain-service mergeTurnTrace (ai-orchestrator storeTurnTrace): find the turn's latest
--- ORCHESTRATED_RESPONSE row and merge the pipeline trace into its metadata (metadata holds
--- cache/tool/trace telemetry, never a prompt — the prompt is input/output, still unreadable)
-GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO job_access;
+  ON brain_activity TO ai_access;
+-- mwf_worker: data-retention: the purge and delete windows (WHERE created_at < …, session_id IS NULL); the short-retention
+-- purge sets the four blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
+GRANT SELECT (session_id, created_at) ON brain_activity TO worker_access;
+GRANT UPDATE (input, output, metadata, structured_output) ON brain_activity TO worker_access;
+GRANT DELETE ON brain_activity TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON brain_activity TO ops_access;
 
@@ -2808,12 +2871,20 @@ COMMENT ON INDEX sql_user_device_token IS 'A push token is registered once per u
 -- search_path = pg_catalog, public, pg_temp (pg_temp last, so a caller's temp
 -- objects can never shadow a catalog or a table) and qualifies every relation.
 --
--- "Is the caller the job?" inside a SECURITY DEFINER function: current_user is
--- the owner (mwf_definer), so the test reads session_user — the role that logged
--- in — and is exactly session_user IN ('mwf_job', 'mwf_migrator') (spec
--- Conventions `job`). No catalog is read and no superuser arm exists (Phase 3
--- §1: rolsuper must be false); local tooling that needs the job connects as
--- mwf_job (JOB_DATABASE_URL, docs/development/local-setup.md).
+-- "Who is calling?" inside a SECURITY DEFINER function: current_user is the
+-- owner (mwf_definer), so every arm reads session_user — the login — and asks
+-- what the database can know itself (design note §6 "Session variables"):
+--   the app arm    pg_has_role(session_user, 'app_access', 'USAGE') and the
+--                  identity (app.current_user_id()) is the row's participant;
+--   the AI arm     pg_has_role(session_user, 'ai_access', 'USAGE') and
+--                  app.session_scope() is the row's session (Q20: required —
+--                  an unset scope is NULL, so the arm fails closed);
+--   the worker arm the same with worker_access;
+--   mwf_migrator   local tooling and the caller tests (never a runtime client).
+-- An arm never borrows another's: the AI's client binds the request's identity
+-- too, so an identity arm without the app capability would let the AI act
+-- without a scope. mwf_job, which was all of these at once, is retired
+-- (work-k5fk.10.5, §7 row 9b).
 --
 -- Every self-arm is NULL-safe: an unset identity (app.current_user_id() IS
 -- NULL) is never "self" (participant.user_id is NOT NULL since work-k5fk.3).
@@ -2894,7 +2965,7 @@ COMMENT ON FUNCTION app.jsonb_schema_violation(jsonb, jsonb, text) IS 'The first
 -- session archive, MWF0x sign-in, MWJ0x the jsonb validators; the codes are
 -- listed in docs/backend/data-model/jsonb-shapes-2026-11.md §2). Not 23503:
 -- Prisma would report that as P2003 "Foreign key constraint failed". Reads
--- app.json_schema with the caller's rights (SELECT: app_access, job_access —
+-- app.json_schema with the caller's rights (SELECT: app_access, ai_access —
 -- tables.sql).
 CREATE FUNCTION app.jsonb_violation(doc jsonb, name text, version public.schema_version) RETURNS text
   LANGUAGE plpgsql STABLE PARALLEL SAFE
@@ -2913,10 +2984,11 @@ CREATE FUNCTION app.jsonb_violation(doc jsonb, name text, version public.schema_
   END
   $$;
 COMMENT ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) IS 'app.jsonb_schema_violation against the app.json_schema row (name, version); raises MWJ01 for an unknown one. What the t_doc_schema trigger reports.';
--- app_access, job_access (mwf_app's and mwf_job's): the t_doc_schema trigger calls it with the writer's rights.
+-- app_access, ai_access (mwf_app's and mwf_ai's: user_preferences.doc, ai_memory.doc): the t_doc_schema trigger calls it
+-- with the writer's rights.
 REVOKE EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) TO app_access;
-GRANT EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) TO job_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) TO ai_access;
 
 -- Does doc match the seeded schema (name, version)? (MWJ01 for an unknown one.)
 CREATE FUNCTION app.jsonb_matches(doc jsonb, name text, version public.schema_version) RETURNS boolean
@@ -2924,10 +2996,9 @@ CREATE FUNCTION app.jsonb_matches(doc jsonb, name text, version public.schema_ve
   SET search_path = pg_catalog, pg_temp
   RETURN app.jsonb_violation(doc, name, version) IS NULL;
 COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'True when doc matches the app.json_schema row (name, version); raises MWJ01 for an unknown one. For ad-hoc checks and tests; the trigger uses app.jsonb_violation for its message.';
--- app_access, job_access (mwf_app's and mwf_job's): the capabilities that read the schemas (no app caller today; the caller tests use it).
+-- app_access (mwf_app's): no app caller today; the caller tests use it.
 REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO app_access;
-GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO job_access;
 
 -- The envelope rule for the five jsonb-envelope columns (t_jsonb_envelope, T5).
 -- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
@@ -2961,10 +3032,11 @@ CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
   END
   $$;
 COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
--- app_access, job_access (mwf_app's and mwf_job's): the t_jsonb_envelope trigger calls it with the writer's rights.
+-- app_access, worker_access (mwf_app's and mwf_worker's: proposal_revision.before / after, and the app's enveloped
+-- columns): the t_jsonb_envelope trigger calls it with the writer's rights.
 REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
-GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO job_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO worker_access;
 
 -- The TS-1 helpers over participant. (work-k5fk.3: app.is_co_participant and
 -- app.my_participant went with participant.id: every session-scoped row carries
@@ -2986,10 +3058,9 @@ CREATE FUNCTION app.is_member(session uuid) RETURNS boolean
   $$;
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.touch_updated_at() FROM PUBLIC;
--- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app.
 REVOKE EXECUTE ON FUNCTION app.is_member(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.is_member(uuid) TO app_access;
-GRANT EXECUTE ON FUNCTION app.is_member(uuid) TO job_access;
 
 -- The caller's co-participant's user id: NULL unless the caller is a
 -- participant and the session has exactly two human participants (kept for
@@ -3006,10 +3077,9 @@ CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
       AND me.user_id = app.current_user_id()
       AND (SELECT count(*) FROM public.participant c WHERE c.session_id = me.session_id AND c.kind = 'human') = 2
   $$;
--- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app.
 REVOKE EXECUTE ON FUNCTION app.partner_user_id(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO app_access;
-GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO job_access;
 
 -- Content-free status of every empathy direction in the caller's sessions
 -- (the latest round per direction): what both parties may see while neither
@@ -3027,17 +3097,18 @@ CREATE FUNCTION app.empathy_direction_status()
                   WHERE me.session_id = a.session_id AND me.user_id = app.current_user_id())
     ORDER BY a.session_id, a.author_user_id, a.subject_user_id, a.round DESC
   $$;
--- mwf_app (app_access): the identity-bound read behind v_empathy_direction_status. mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): the identity-bound read behind v_empathy_direction_status.
 REVOKE EXECUTE ON FUNCTION app.empathy_direction_status() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO app_access;
-GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO job_access;
 
 -- The writer of session.status (spec §1.1 transition set), but for a
--- participant's archive (app.session_archive, below). The job, or a CURRENT
--- participant (left_at IS NULL; not app.is_member, which counts leavers so
--- they keep reading — work-k5fk.10.12: a leaver must not move the session);
--- anyone else: 'session not found'. → ARCHIVED is the job's only (retention:
--- RESOLVED / ABANDONED → ARCHIVED, stamping archived_at with no archiver).
+-- participant's archive (app.session_archive, below). A worker task scoped to
+-- this session (app.session_scope; the Stage 4 closure, retention), or, on the
+-- app capability, a CURRENT participant (left_at IS NULL; not app.is_member,
+-- which counts leavers so they keep reading — work-k5fk.10.12: a leaver must
+-- not move the session); anyone else: 'session not found'. → ARCHIVED is the
+-- worker's only (retention: RESOLVED / ABANDONED → ARCHIVED, stamping
+-- archived_at with no archiver).
 -- T-cardinality-1 (trigger) still refuses → ACTIVE without two
 -- participants. Locks the session row FOR NO KEY UPDATE (lock order: session,
 -- then attempt; NO KEY so child-row INSERTs, which take KEY SHARE on session
@@ -3048,19 +3119,27 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
   AS $$
   DECLARE
     v_from public.session_status;
-    v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_worker boolean := pg_catalog.pg_has_role(session_user, 'worker_access', 'USAGE')
+                        AND coalesce(app.session_scope() = session_set_status.session, false);
+    v_job  boolean := session_user = 'mwf_migrator' OR v_worker;
   BEGIN
+    -- review F6: the worker only ends a session (retention, the Stage 4 closure, tending): it never starts one.
+    IF v_worker AND session_user <> 'mwf_migrator'
+       AND session_set_status.status NOT IN ('ABANDONED', 'ARCHIVED', 'RESOLVED') THEN
+      RAISE EXCEPTION 'the worker only ends a session (ABANDONED, ARCHIVED, RESOLVED), not %', session_set_status.status
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR NO KEY UPDATE;
-    IF NOT FOUND OR NOT (v_job OR EXISTS (
+    IF NOT FOUND OR NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
           SELECT 1 FROM public.participant p
-          WHERE p.session_id = session_set_status.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL)) THEN
+          WHERE p.session_id = session_set_status.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL))) THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
     END IF;
     IF v_from = session_set_status.status THEN
       RETURN;
     END IF;
     IF session_set_status.status = 'ARCHIVED' AND NOT v_job THEN
-      RAISE EXCEPTION 'only the job archives through session_set_status; a participant uses app.session_archive'
+      RAISE EXCEPTION 'only a worker archives through session_set_status; a participant uses app.session_archive'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF NOT ((v_from, session_set_status.status) IN (
@@ -3077,10 +3156,12 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     WHERE s.id = session_set_status.session;
   END
   $$;
--- mwf_app (app_access): invitations.ts accept, on the app transaction. mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): invitations.ts accept, topic-frame / invitation confirm (→ INVITED), messages / stage0 (→ ACTIVE),
+-- sessions.ts resolve and tending's closure / new process (→ RESOLVED), as a current participant. mwf_worker
+-- (worker_access): session-retention (→ ABANDONED → ARCHIVED) and the Stage 4 closure (→ RESOLVED), scoped to the session.
 REVOKE EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO app_access;
-GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO job_access;
+GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO worker_access;
 
 -- A participant archives a session (work-k5fk.10.12, owner decision option A,
 -- 2026-11-13): the caller must be a CURRENT participant (a human participant
@@ -3088,9 +3169,9 @@ GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO
 -- joined, not one who left — and the session in an archivable state:
 -- CREATED, INVITED (a pending invitation withdrawn), RESOLVED or ABANDONED.
 -- Records the archiver and the instant; returns the instant. Identity-bound
--- only: a job or migrator login is refused (insufficient_privilege) — the
--- owner role would otherwise archive for any user; retention archives
--- through session_set_status.
+-- only: a login without the app capability, and the migrator, are refused
+-- (insufficient_privilege) — the owner role would otherwise archive for any
+-- user; retention archives through session_set_status.
 -- Refusals carry their own SQLSTATEs (class MW, not a standard class), so a
 -- grant drift (42501) or an unrelated CHECK (23514) is never read as one:
 --   MWA00  no identity bound (a server fault, not the caller's)
@@ -3112,8 +3193,8 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     v_part boolean;
     v_at   timestamptz;
   BEGIN
-    IF session_user IN ('mwf_job', 'mwf_migrator') THEN
-      RAISE EXCEPTION 'session_archive is identity-bound: a job or migrator login cannot archive for a user'
+    IF session_user = 'mwf_migrator' OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
+      RAISE EXCEPTION 'session_archive is identity-bound: only the app archives, for its own user'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF v_me IS NULL THEN
@@ -3138,24 +3219,27 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     RETURN v_at;
   END
   $$;
-COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound; job and migrator logins refused): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id; returns archived_at. Refusals: MWA00 no identity, MWA01 not found / not a participant, MWA02 participant left, MWA03 not archivable. The only way mwf_app archives (no UPDATE of session.status).';
--- mwf_app (app_access): invitations.ts archiveSession, identity-bound. No EXECUTE grant to mwf_job (the function itself refuses a
--- job login as well); retention archives through session_set_status.
+COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound; logins without app_access, and the migrator, refused): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id; returns archived_at. Refusals: MWA00 no identity, MWA01 not found / not a participant, MWA02 participant left, MWA03 not archivable. The only way mwf_app archives (no UPDATE of session.status).';
+-- mwf_app (app_access): invitations.ts archiveSession, identity-bound. No other grant (the function itself refuses a login
+-- without app_access as well); retention archives through session_set_status.
 REVOKE EXECUTE ON FUNCTION app.session_archive(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_archive(uuid) TO app_access;
 
 -- The only writer of empathy_attempt.status (spec §1.2 transition table; P3 §5).
 -- Actors (P3 §5: a non-author never moves a row into a disclosing state):
---   the AUTHOR (identity-bound) or the job: HELD → AWAITING_SHARING | READY,
+--   the AUTHOR (identity-bound, app capability) or the AI (the reconciler, scoped
+--     to the attempt's session): HELD → AWAITING_SHARING | READY,
 --     AWAITING_SHARING → REFINING | READY, REFINING → READY | AWAITING_SHARING
 --     (the stage2.ts in-request writers), and SUPERSEDED (resubmission);
---   the job only: READY → REVEALED, and only when the reveal gate holds;
---   the SUBJECT (identity-bound) or the job: REVEALED → VALIDATED | REFINING.
+--   the AI only: READY → REVEALED, and only when the reveal gate holds;
+--   the SUBJECT (identity-bound, app capability) only: REVEALED → VALIDATED | REFINING (review F2: never the AI);
+--   SUPERSEDED (a resubmission) is the author's only, never the AI's.
+-- (mwf_migrator: every arm the AI has, for tooling.)
 -- Anyone else: 'attempt not found'. Locks the session row, then the attempt,
 -- so a concurrent resubmit of the reverse direction cannot slip between the
 -- gate read and the reveal. On → REVEALED: stamps revealed_at once and writes
 -- the EMPATHY_STATEMENT into the SUBJECT's MAIN conversation (the author keeps
--- their own copy); re-encrypting content under the session key is the job's,
+-- their own copy); re-encrypting content under the session key is the AI's,
 -- in the application (keys never reach SQL). → SUPERSEDED inserts round n+1
 -- (HELD) with p_content and returns its id; a retried call returns that id.
 CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_status, content text DEFAULT NULL) RETURNS uuid
@@ -3165,7 +3249,9 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
   DECLARE
     a              public.empathy_attempt%ROWTYPE;
     v_me           uuid := app.current_user_id();
-    v_job          boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_app          boolean := pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE');
+    v_job          boolean;
+    v_mig          boolean;
     v_session      uuid;
     v_author_user  uuid;
     v_author_left  timestamptz;
@@ -3180,20 +3266,26 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     IF NOT FOUND THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
+    -- The AI arm (the reconciler's moves and the reveal): only within the attempt's session (app.session_scope).
+    v_job := session_user = 'mwf_migrator'
+             OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false));
+    -- review F2: the AI arm makes the reconciler's moves and the reveal only; resubmitting (the author's next round)
+    -- and reviewing a revealed round (the subject's) are never the AI's.
+    v_mig := session_user = 'mwf_migrator';
     PERFORM 1 FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
     SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR NO KEY UPDATE;
     SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p
     WHERE p.session_id = a.session_id AND p.user_id = a.author_user_id;
     SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p
     WHERE p.session_id = a.session_id AND p.user_id = a.subject_user_id;
-    v_is_author  := v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
-    v_is_subject := v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user;
+    v_is_author  := v_app AND v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
+    v_is_subject := v_app AND v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user;
     IF NOT (v_job OR v_is_author OR v_is_subject) THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
 
     IF empathy_set_status.status = 'SUPERSEDED' THEN
-      IF NOT (v_job OR v_is_author) THEN
+      IF NOT (v_mig OR v_is_author) THEN
         RAISE EXCEPTION 'only the author resubmits' USING ERRCODE = 'insufficient_privilege';
       END IF;
       IF a.status = 'SUPERSEDED' THEN
@@ -3223,15 +3315,15 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
          ('AWAITING_SHARING', 'REFINING'), ('AWAITING_SHARING', 'READY'),
          ('REFINING', 'READY'), ('REFINING', 'AWAITING_SHARING')) THEN
       IF NOT (v_job OR v_is_author) THEN
-        RAISE EXCEPTION 'only the author or the job moves this attempt' USING ERRCODE = 'insufficient_privilege';
+        RAISE EXCEPTION 'only the author or the AI moves this attempt' USING ERRCODE = 'insufficient_privilege';
       END IF;
     ELSIF (a.status, empathy_set_status.status) = ('READY'::public.empathy_status, 'REVEALED'::public.empathy_status) THEN
       IF NOT v_job THEN
-        RAISE EXCEPTION 'only the job reveals' USING ERRCODE = 'insufficient_privilege';
+        RAISE EXCEPTION 'only the AI reveals' USING ERRCODE = 'insufficient_privilege';
       END IF;
     ELSIF (a.status, empathy_set_status.status) IN (
          ('REVEALED'::public.empathy_status, 'VALIDATED'::public.empathy_status), ('REVEALED', 'REFINING')) THEN
-      IF NOT (v_job OR v_is_subject) THEN
+      IF NOT (v_mig OR v_is_subject) THEN
         RAISE EXCEPTION 'only the subject reviews a revealed attempt' USING ERRCODE = 'insufficient_privilege';
       END IF;
     ELSE
@@ -3272,23 +3364,28 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     RETURN a.id;
   END
   $$;
--- mwf_app (app_access): the request-path writer (work-k5fk.10.2). mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): the request-path writer (work-k5fk.10.2). mwf_ai (ai_access): the reconciler's moves and the reveal
+-- (empathy-store jobMoveIfUnchanged, reconciler/state.ts), scoped to the session.
 REVOKE EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) TO app_access;
-GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) TO job_access;
+GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) TO ai_access;
 
--- need_share is written only here, by the job (it holds the session key that
--- encrypts shared_text; EXECUTE is the job's alone), after the owner's
--- GRANTED consent, for a need that is neither deleted nor superseded;
--- session_id and user_id come from the need, never from the caller
+-- need_share is written only here, by the need's OWNER (identity-bound, app
+-- capability: consent.ts and needs-share.ts share their own needs; the
+-- application seals shared_text under the session key — keys never reach SQL),
+-- after the owner's GRANTED consent, for a need that is neither deleted nor
+-- superseded; session_id and user_id come from the need, never from the caller
 -- (spec §1.4, N-1, N-7). Idempotent: a need already shared is left as it is.
+-- Until work-k5fk.10.5 the job wrote it for the owner; the owner's request is the principal.
 CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF NOT (session_user IN ('mwf_job', 'mwf_migrator')) THEN
-      RAISE EXCEPTION 'need_share is the job''s' USING ERRCODE = 'insufficient_privilege';
+    IF NOT (session_user = 'mwf_migrator'
+            OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
+                  SELECT 1 FROM public.need n WHERE n.id = need_share.need AND n.user_id = app.current_user_id()))) THEN
+      RAISE EXCEPTION 'need_share is the need owner''s' USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.need n
                    WHERE n.id = need_share.need AND n.deleted_at IS NULL AND n.superseded_by_need_id IS NULL) THEN
@@ -3305,21 +3402,21 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
     ON CONFLICT (need_id) DO NOTHING;
   END
   $$;
--- Not mwf_app: the job's. mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): consent.ts (a GRANTED need consent with its text) and needs-share.ts shareNeeds, as the owner.
 REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO job_access;
+GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO app_access;
 
 -- Revoke a shared need: need_share.revoked_at and the consent's REVOKED in
--- one transaction (spec §1.4). The need's owner (identity-bound) or the job.
+-- one transaction (spec §1.4). The need's owner (identity-bound, app capability).
 CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_job boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_job boolean := session_user = 'mwf_migrator';
     v_me  uuid := app.current_user_id();
   BEGIN
-    IF NOT (v_job OR (v_me IS NOT NULL AND EXISTS (
+    IF NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND v_me IS NOT NULL AND EXISTS (
               SELECT 1 FROM public.need n WHERE n.id = need_revoke_share.need AND n.user_id = v_me))) THEN
       RAISE EXCEPTION 'need not found' USING ERRCODE = 'P0002';
     END IF;
@@ -3328,31 +3425,33 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
     WHERE need_id = need_revoke_share.need AND decision = 'GRANTED';
   END
   $$;
--- mwf_app (app_access): the request-path writer (work-k5fk.10.2). mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): the request-path writer (work-k5fk.10.2).
 REVOKE EXECUTE ON FUNCTION app.need_revoke_share(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO app_access;
-GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO job_access;
 
 -- app.anonymize_user_in_session(session, user): steps 1–4 and 7 (participant
 -- key) of the account walk for one session (spec §4), for the participant
--- (session, user) (work-k5fk.3). That user (identity-bound, never NULL) or the job.
+-- (session, user) (work-k5fk.3). That user (identity-bound, never NULL, app capability).
 CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_job  boolean := session_user = 'mwf_migrator';
     v_me   uuid := app.current_user_id();
     sid    uuid := anonymize_user_in_session.session;
     uid    uuid := anonymize_user_in_session."user";
   BEGIN
     PERFORM 1 FROM public.participant p WHERE p.session_id = sid AND p.user_id = uid;
-    IF NOT FOUND OR NOT (v_job OR coalesce(v_me IS NOT NULL AND uid = v_me, false)) THEN
+    IF NOT FOUND OR NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+                                   AND coalesce(v_me IS NOT NULL AND uid = v_me, false))) THEN
       RAISE EXCEPTION 'participant not found' USING ERRCODE = 'P0002';
     END IF;
-    -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave)
-    IF (SELECT s.status FROM public.session s WHERE s.id = anonymize_user_in_session.session) IN ('CREATED', 'INVITED', 'ACTIVE') THEN
-      PERFORM app.session_set_status(anonymize_user_in_session.session, 'ABANDONED');
+    -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave). The walk's
+    -- own arm (review F8): not through session_set_status, whose participant arm refuses a user who already left
+    -- (left_at set) — such a user's account deletion must still end the session. Same lock as session_set_status.
+    IF (SELECT s.status FROM public.session s WHERE s.id = sid FOR NO KEY UPDATE) IN ('CREATED', 'INVITED', 'ACTIVE') THEN
+      UPDATE public.session s SET status = 'ABANDONED' WHERE s.id = sid;
     END IF;
     -- 2. the only PII a co-participant sees
     UPDATE public.participant SET display_name = NULL, left_at = coalesce(left_at, now()) WHERE session_id = sid AND user_id = uid;
@@ -3383,23 +3482,24 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS
     UPDATE public.participant_key SET destroyed_at = now() WHERE session_id = sid AND user_id = uid AND destroyed_at IS NULL;
   END
   $$;
--- Not mwf_app: the job is its only caller (session-deletion.ts). mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): session-deletion.ts deleteSessionForUser, the leaver's own request.
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) TO job_access;
+GRANT EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) TO app_access;
 
 -- app.anonymize_user_account(user): the complete walk (spec §4, P1-13).
--- The user themself (identity-bound, never NULL) or the job.
+-- The user themself (identity-bound, never NULL, app capability).
 CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_job boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_job boolean := session_user = 'mwf_migrator';
     v_me  uuid := app.current_user_id();
     v_uid uuid := anonymize_user_account."user";
     r     record;
   BEGIN
-    IF NOT (v_job OR coalesce(v_me IS NOT NULL AND v_uid = v_me, false))
+    IF NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+                      AND coalesce(v_me IS NOT NULL AND v_uid = v_me, false)))
        OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid AND u.kind = 'human') THEN
       -- only an account is deleted: the AI row and a persona are not (a persona goes with its owner, 6b)
       RAISE EXCEPTION 'user not found' USING ERRCODE = 'P0002';
@@ -3436,9 +3536,9 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     UPDATE public.user_key SET destroyed_at = now() WHERE user_id = v_uid AND destroyed_at IS NULL;
   END
   $$;
--- Not mwf_app: the job is its only caller (account-deletion.ts). mwf_job (job_access): the job's calls; the body runs as its owner, mwf_definer.
+-- mwf_app (app_access): account-deletion.ts deleteAccountWithNotifications, the user's own request.
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid) TO job_access;
+GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid) TO app_access;
 
 -- Pre-identity bootstrap (P3 §5; work-k5fk.1): resolve a (provider, subject)
 -- to its live user; create the user and its identity for a first login
@@ -3531,6 +3631,345 @@ COMMENT ON FUNCTION app.next_message_seq(uuid) IS 'The next message seq of a con
 -- No grant: t_message_seq (owned by mwf_definer, as this is) is its only caller.
 REVOKE EXECUTE ON FUNCTION app.next_message_seq(uuid) FROM PUBLIC;
 
+-- ---------------------------------------------------------------------------
+-- The request path's cross-partner writes (work-k5fk.10.5; design note §6 Q13,
+-- §7 row 9b). Each was a write of mwf_job's, which saw everyone's rows; each is
+-- now a definer that checks who is asking (the arms in the T4 header) and
+-- writes exactly one kind of row, executable only by the capability that calls
+-- it. Content arrives sealed: the application encrypts (keys never reach SQL).
+-- Refusals: P0002 for a row the caller may not act on (as not found, so its
+-- existence is not revealed), check_violation for a move the row forbids,
+-- insufficient_privilege for a caller without the arm.
+-- ---------------------------------------------------------------------------
+
+-- A delivered item authored by one participant, written into ANOTHER
+-- participant's conversation of the same session (role USER: delivered items
+-- are the author's; spec T-message-immutable): message-store deliverMessage —
+-- EMPATHY_STATEMENT / VALIDATION_FEEDBACK / … from a request (empathy-messages,
+-- stage2.ts), SHARED_CONTEXT from the reconciler's delivery of an accepted
+-- share (sharing.ts deliverAcceptedShare, mwf_ai). The app arm: the author is
+-- the identity and a current participant; the AI arm: the conversation's
+-- session is the scope. Never a CHAT line, never into the author's own
+-- conversation. Returns the row's key and instant.
+CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind public.message_kind, content text,
+                                    source_attempt uuid DEFAULT NULL, instant timestamptz DEFAULT NULL)
+  RETURNS TABLE (seq integer, created_at timestamptz)
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_session uuid;
+    v_to      uuid;
+    v_mig     boolean := session_user = 'mwf_migrator';
+    v_ai      boolean;
+    v_app     boolean;
+    v_at      timestamptz := coalesce(deliver_message.instant, CURRENT_TIMESTAMP);
+  BEGIN
+    SELECT c.session_id, c.user_id INTO v_session, v_to FROM public.conversation c WHERE c.id = deliver_message.conversation;
+    v_ai := pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false);
+    v_app := pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+             AND coalesce(app.current_user_id() = deliver_message.from_user, false)
+             AND EXISTS (SELECT 1 FROM public.participant p
+                         WHERE p.session_id = v_session AND p.user_id = deliver_message.from_user AND p.left_at IS NULL);
+    IF v_session IS NULL OR NOT (v_mig OR v_ai OR v_app) THEN
+      RAISE EXCEPTION 'conversation not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF deliver_message.kind = 'CHAT' THEN
+      RAISE EXCEPTION 'a delivered item is never a CHAT line' USING ERRCODE = 'check_violation';
+    END IF;
+    IF v_to = deliver_message.from_user THEN
+      RAISE EXCEPTION 'a delivery goes into another participant''s conversation' USING ERRCODE = 'check_violation';
+    END IF;
+    -- review F1: the instant orders a delivery after the line it follows; it is never backdated or in the future.
+    IF v_at < CURRENT_TIMESTAMP - interval '10 minutes' OR v_at > CURRENT_TIMESTAMP + interval '5 seconds' THEN
+      RAISE EXCEPTION 'a delivery is stamped now (within ten minutes back, five seconds ahead)' USING ERRCODE = 'check_violation';
+    END IF;
+    IF NOT v_mig AND v_app THEN
+      -- review F1: the request path delivers the subject's feedback on a revealed round into its author's conversation
+      -- (stage2.ts, the review), nothing else.
+      IF deliver_message.kind <> 'VALIDATION_FEEDBACK' OR NOT EXISTS (
+           SELECT 1 FROM public.empathy_attempt e
+           WHERE e.id = deliver_message.source_attempt AND e.session_id = v_session
+             AND e.subject_user_id = deliver_message.from_user AND e.author_user_id = v_to
+             AND e.revealed_at IS NOT NULL AND e.status IN ('REVEALED', 'REFINING')) THEN
+        RAISE EXCEPTION 'the app delivers only the subject''s VALIDATION_FEEDBACK on a revealed round into its author''s conversation'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    ELSIF NOT v_mig THEN
+      -- review F3: the AI delivers the shared context of an ACCEPTED, undelivered offer whose subject is the sender into
+      -- the conversation of the author of the offer's round (reconciler/sharing.ts deliverAcceptedShare), nothing else.
+      IF deliver_message.kind <> 'SHARED_CONTEXT' OR NOT EXISTS (
+           SELECT 1 FROM public.context_share_offer o JOIN public.empathy_attempt e ON e.id = o.attempt_id
+           WHERE o.session_id = v_session AND o.subject_user_id = deliver_message.from_user
+             AND o.status = 'ACCEPTED' AND o.delivery_status = 'PENDING' AND e.author_user_id = v_to) THEN
+        RAISE EXCEPTION 'the AI delivers only the SHARED_CONTEXT of the sender''s ACCEPTED, undelivered share offer'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    END IF;
+    RETURN QUERY
+      INSERT INTO public.message AS m (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at)
+      VALUES (deliver_message.conversation, v_session, deliver_message.from_user, 'USER', deliver_message.kind,
+              deliver_message.content, deliver_message.source_attempt, v_at)
+      RETURNING m.seq::integer, m.created_at::timestamptz;
+  END
+  $$;
+COMMENT ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) IS 'Deliver a participant''s item (role USER, content sealed by the application) into another participant''s conversation of the same session, stamped now (bounded): the subject''s VALIDATION_FEEDBACK on a revealed round into its author''s conversation (identity-bound, app_access), or the SHARED_CONTEXT of the sender''s ACCEPTED, undelivered offer (the AI within app.session_scope). Returns (seq, created_at). work-k5fk.10.5.';
+-- mwf_app (app_access): message-store deliverMessage on the request path. mwf_ai (ai_access): sharing.ts deliverAcceptedShare.
+REVOKE EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) TO app_access;
+GRANT EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) TO ai_access;
+
+-- The delivery stamp of an attempt (empathy-store markAttemptDelivery): the
+-- SUBJECT saw (SEEN) or sent feedback on (DELIVERED) the author's round
+-- (stage2.ts, app arm), or the reconciler delivered it (reconciler/state.ts,
+-- AI arm). The first instant stands.
+CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery_status, instant timestamptz DEFAULT NULL)
+  RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_session  uuid;
+    v_subject  uuid;
+    v_revealed timestamptz;
+    v_at       timestamptz := coalesce(empathy_mark_delivery.instant, CURRENT_TIMESTAMP);
+  BEGIN
+    SELECT e.session_id, e.subject_user_id, e.revealed_at INTO v_session, v_subject, v_revealed
+    FROM public.empathy_attempt e WHERE e.id = empathy_mark_delivery.attempt FOR NO KEY UPDATE;
+    IF v_session IS NULL OR NOT (
+         session_user = 'mwf_migrator'
+         OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false))
+         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND coalesce(app.current_user_id() = v_subject, false))) THEN
+      RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
+    END IF;
+    -- review F10: only a revealed round is delivered or seen, and the stamp moves forward only (PENDING → DELIVERED →
+    -- SEEN; a later DELIVERED leaves SEEN), at an instant clamped to the last ten minutes, never before the reveal.
+    IF v_revealed IS NULL THEN
+      RAISE EXCEPTION 'a round that was never revealed is neither delivered nor seen' USING ERRCODE = 'check_violation';
+    END IF;
+    v_at := least(greatest(v_at, v_revealed, CURRENT_TIMESTAMP - interval '10 minutes'), CURRENT_TIMESTAMP);
+    IF empathy_mark_delivery.delivery = 'DELIVERED' THEN
+      UPDATE public.empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, v_at)
+      WHERE id = empathy_mark_delivery.attempt AND delivery_status = 'PENDING';
+    ELSIF empathy_mark_delivery.delivery = 'SEEN' THEN
+      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at)
+      WHERE id = empathy_mark_delivery.attempt AND delivery_status IN ('PENDING', 'DELIVERED');
+    ELSE
+      RAISE EXCEPTION 'delivery % is not a stamp', empathy_mark_delivery.delivery USING ERRCODE = 'check_violation';
+    END IF;
+  END
+  $$;
+COMMENT ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) IS 'Stamp a revealed attempt DELIVERED (delivered_at) or SEEN (seen_at), forward only (SEEN is never downgraded), first instant standing, the instant clamped to the last ten minutes and never before revealed_at. Its subject (identity-bound, app_access) or the AI within app.session_scope. work-k5fk.10.5.';
+-- mwf_app (app_access): stage2.ts, the subject's review. mwf_ai (ai_access): reconciler/state.ts, the reveal's delivery.
+REVOKE EXECUTE ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) TO app_access;
+GRANT EXECUTE ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) TO ai_access;
+
+-- A system milestone (one the milestone table marks NOT self_assertable:
+-- invitation_sent, empathy_*, needs_validated, needs_shared, paused, closed …)
+-- for a participant of the session, reached on a request (milestone-writer
+-- reachMilestone). The caller is a current participant of the session (app
+-- arm); the participant reached may be the partner — that is the two-party
+-- write. A self-assertable key is the participant's own INSERT on mwf_app
+-- (refused here). Returns true when this call recorded it (the first instant stands).
+CREATE FUNCTION app.reach_milestone(session uuid, "user" uuid, key text, instant timestamptz DEFAULT NULL)
+  RETURNS boolean
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_self boolean;
+    n      integer;
+  BEGIN
+    IF NOT (session_user = 'mwf_migrator'
+            OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
+                  SELECT 1 FROM public.participant p
+                  WHERE p.session_id = reach_milestone.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL)))
+       OR NOT EXISTS (SELECT 1 FROM public.participant p
+                      WHERE p.session_id = reach_milestone.session AND p.user_id = reach_milestone."user") THEN
+      RAISE EXCEPTION 'participant not found' USING ERRCODE = 'P0002';
+    END IF;
+    SELECT m.self_assertable INTO v_self FROM public.milestone m WHERE m.key = reach_milestone.key;
+    IF v_self IS DISTINCT FROM false THEN
+      RAISE EXCEPTION 'milestone % is not a system milestone (unknown, or the participant''s own)', reach_milestone.key
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    INSERT INTO public.participant_milestone (session_id, user_id, milestone_key, reached_at)
+    VALUES (reach_milestone.session, reach_milestone."user", reach_milestone.key, coalesce(reach_milestone.instant, CURRENT_TIMESTAMP))
+    ON CONFLICT (session_id, user_id, milestone_key) DO NOTHING;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n > 0;
+  END
+  $$;
+COMMENT ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) IS 'Reach a system (not self-assertable) milestone for a participant of a session the caller is a current participant of (identity-bound, app_access). True when recorded now; the first instant stands. work-k5fk.10.5.';
+-- mwf_app (app_access): milestone-writer reachMilestone (every system key; the self-assertable ones are its own INSERT).
+REVOKE EXECUTE ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) TO app_access;
+
+-- Resume a paused session: every participant's `paused` milestone goes
+-- (sessions.ts resumeSession; un-reaching is a DELETE, spec §1.1). A current
+-- participant of the session. Returns the rows removed.
+CREATE FUNCTION app.session_resume(session uuid) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    n integer;
+  BEGIN
+    IF NOT (session_user = 'mwf_migrator'
+            OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
+                  SELECT 1 FROM public.participant p
+                  WHERE p.session_id = session_resume.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL))) THEN
+      RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
+    END IF;
+    DELETE FROM public.participant_milestone pm WHERE pm.session_id = session_resume.session AND pm.milestone_key = 'paused';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+  END
+  $$;
+COMMENT ON FUNCTION app.session_resume(uuid) IS 'Un-reach `paused` for every participant of a session; a current participant of it (identity-bound, app_access). Returns the rows removed. work-k5fk.10.5.';
+-- mwf_app (app_access): sessions.ts resumeSession.
+REVOKE EXECUTE ON FUNCTION app.session_resume(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_resume(uuid) TO app_access;
+
+-- Withdraw the caller's shared Stage 4 choices so they can revise
+-- (stage4-store unshareChoices): their own `choices_shared` goes. Returns the
+-- rows removed.
+CREATE FUNCTION app.choices_unshare(session uuid) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me uuid := app.current_user_id();
+    n    integer;
+  BEGIN
+    IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
+      RAISE EXCEPTION 'choices_unshare is identity-bound' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    DELETE FROM public.participant_milestone pm
+    WHERE pm.session_id = choices_unshare.session AND pm.user_id = v_me AND pm.milestone_key = 'choices_shared';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+  END
+  $$;
+COMMENT ON FUNCTION app.choices_unshare(uuid) IS 'Un-reach the caller''s own choices_shared in a session (identity-bound, app_access). Returns the rows removed. work-k5fk.10.5.';
+-- mwf_app (app_access): stage4-store unshareChoices.
+REVOKE EXECUTE ON FUNCTION app.choices_unshare(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.choices_unshare(uuid) TO app_access;
+
+-- The Stage 2 sharing window closes (stage2.ts triggerStage3Transition): the
+-- open (PENDING / OFFERED) share offers to the named subjects in the session
+-- expire. A current participant of the session. Returns the rows moved.
+CREATE FUNCTION app.share_offers_expire(session uuid, subjects uuid[]) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    n integer;
+  BEGIN
+    IF NOT (session_user = 'mwf_migrator'
+            OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
+                  SELECT 1 FROM public.participant p
+                  WHERE p.session_id = share_offers_expire.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL))) THEN
+      RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
+    END IF;
+    UPDATE public.context_share_offer o SET status = 'EXPIRED'
+    WHERE o.session_id = share_offers_expire.session AND o.subject_user_id = ANY (share_offers_expire.subjects)
+      AND o.status IN ('PENDING', 'OFFERED');
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+  END
+  $$;
+COMMENT ON FUNCTION app.share_offers_expire(uuid, uuid[]) IS 'Expire the open (PENDING / OFFERED) share offers to the given subjects of a session; a current participant of it (identity-bound, app_access). work-k5fk.10.5.';
+-- mwf_app (app_access): stage2.ts triggerStage3Transition.
+REVOKE EXECUTE ON FUNCTION app.share_offers_expire(uuid, uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.share_offers_expire(uuid, uuid[]) TO app_access;
+
+-- The caller has been told about their shared context's delivery (seen =
+-- false: delivery_notified_at) or its being seen (seen = true:
+-- seen_notified_at) — notifications.ts getPendingActionsHandler. Only offers
+-- whose subject is the caller are stamped. Returns the rows stamped.
+CREATE FUNCTION app.share_offers_mark_notified(offers uuid[], seen boolean) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me uuid := app.current_user_id();
+    n    integer;
+  BEGIN
+    IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
+      RAISE EXCEPTION 'share_offers_mark_notified is identity-bound' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF share_offers_mark_notified.seen THEN
+      UPDATE public.context_share_offer o SET seen_notified_at = now()
+      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me;
+    ELSE
+      UPDATE public.context_share_offer o SET delivery_notified_at = now()
+      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me;
+    END IF;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+  END
+  $$;
+COMMENT ON FUNCTION app.share_offers_mark_notified(uuid[], boolean) IS 'Stamp seen_notified_at (seen) or delivery_notified_at (not seen) on the caller''s own share offers among the given ones (identity-bound, app_access). work-k5fk.10.5.';
+-- mwf_app (app_access): notifications.ts getPendingActionsHandler.
+REVOKE EXECUTE ON FUNCTION app.share_offers_mark_notified(uuid[], boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.share_offers_mark_notified(uuid[], boolean) TO app_access;
+
+-- An invitation was declined (invitations.ts declineInvitation): its session,
+-- still CREATED or INVITED, ends (→ ABANDONED). The decliner is no participant,
+-- so the arm is the declined invitation itself: identity-bound, not the
+-- inviter, and the invitation already DECLINED (the app's own UPDATE, in the
+-- same request). A session that moved on is left as it is. Locks the session
+-- row FOR NO KEY UPDATE, as session_set_status does.
+CREATE FUNCTION app.session_abandon_declined(invitation uuid) RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me      uuid := app.current_user_id();
+    v_session uuid;
+    v_inviter uuid;
+    v_status  public.invitation_status;
+    v_from    public.session_status;
+  BEGIN
+    SELECT i.session_id, i.invited_by_user_id, i.status INTO v_session, v_inviter, v_status
+    FROM public.invitation i WHERE i.id = session_abandon_declined.invitation;
+    IF v_session IS NULL OR NOT (session_user = 'mwf_migrator'
+         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND v_me IS NOT NULL AND v_me <> v_inviter)) THEN
+      RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_status <> 'DECLINED' THEN
+      RAISE EXCEPTION 'invitation is % , not DECLINED', v_status USING ERRCODE = 'check_violation';
+    END IF;
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
+    IF v_from IN ('CREATED', 'INVITED') THEN
+      UPDATE public.session s SET status = 'ABANDONED' WHERE s.id = v_session;
+    END IF;
+  END
+  $$;
+COMMENT ON FUNCTION app.session_abandon_declined(uuid) IS 'A DECLINED invitation ends its still CREATED / INVITED session (→ ABANDONED). The decliner (identity-bound, app_access, not the inviter). work-k5fk.10.5.';
+-- mwf_app (app_access): invitations.ts declineInvitation.
+REVOKE EXECUTE ON FUNCTION app.session_abandon_declined(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_abandon_declined(uuid) TO app_access;
+
+-- The caller's own sign-in subject for a provider (account-deletion.ts: the
+-- Clerk user to delete at Clerk, read before the walk deletes the identity).
+-- mwf_app holds nothing on user_identity (work-k5fk.1); this reads one row,
+-- the caller's.
+CREATE FUNCTION app.identity_subject(provider public.identity_provider) RETURNS text
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT i.subject FROM public.user_identity i
+    WHERE i.user_id = app.current_user_id() AND i.provider = identity_subject.provider
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.identity_subject(public.identity_provider) IS 'The caller''s own subject for a sign-in provider, or NULL (identity-bound, app_access). work-k5fk.10.5.';
+-- mwf_app (app_access): account-deletion.ts deleteAccountWithNotifications.
+REVOKE EXECUTE ON FUNCTION app.identity_subject(public.identity_provider) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.identity_subject(public.identity_provider) TO app_access;
+
 -- Hand the definer functions to the NOLOGIN mwf_definer (work-k5fk.10.4; TS-1 order, measured there with a
 -- non-superuser migrator): CREATE on the schema for the hand-over only. Their
 -- EXECUTE grants were issued above, next to each function, by the migrator as
@@ -3552,6 +3991,15 @@ ALTER FUNCTION app.anonymize_user_account(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.resolve_user(public.identity_provider, text) OWNER TO mwf_definer;
 ALTER FUNCTION app.create_user(public.identity_provider, text, text, text, text) OWNER TO mwf_definer;
 ALTER FUNCTION app.next_message_seq(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) OWNER TO mwf_definer;
+ALTER FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) OWNER TO mwf_definer;
+ALTER FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) OWNER TO mwf_definer;
+ALTER FUNCTION app.session_resume(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.choices_unshare(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.share_offers_expire(uuid, uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.share_offers_mark_notified(uuid[], boolean) OWNER TO mwf_definer;
+ALTER FUNCTION app.session_abandon_declined(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.identity_subject(public.identity_provider) OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
 
 -- ---------------------------------------------------------------------------
@@ -3605,7 +4053,8 @@ CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_i
 
 -- T-message-immutable: routing columns (the key (conversation_id, seq) among them, work-k5fk.4) and the once-only dedupe_key (work-fdc1)
 -- never change; content of AI/SYSTEM rows and of every delivered kind never
--- changes, except by the job (W13 re-encryption).
+-- changes, except by the migrator (W13's re-encryption names its own writer when it lands; mwf_job, which held this
+-- arm, is retired — work-k5fk.10.5).
 CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
@@ -3621,7 +4070,7 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
       RAISE EXCEPTION 'message routing is immutable' USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.content IS DISTINCT FROM OLD.content AND (OLD.role IN ('AI', 'SYSTEM') OR OLD.kind <> 'CHAT')
-       AND session_user NOT IN ('mwf_job', 'mwf_migrator') THEN
+       AND session_user <> 'mwf_migrator' THEN
       RAISE EXCEPTION 'this message''s content is immutable' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
@@ -3659,8 +4108,8 @@ CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
 -- the referencing table — message — so current_user there is mwf_migrator (no member of app_access)
 -- and the early return lets it through. Were mwf_app the owner again, every cascade (the job's session retention, account
 -- deletion) would run as mwf_app and be refused here: the triggers assume no runtime role owns them.
--- app.current_user_id() is read only after the early return, so other roles (job_access, and the
--- ai_access / worker_access of §7 row 9b) need no EXECUTE on it to write.
+-- app.current_user_id() is read only after the early return, so other roles (ai_access, worker_access)
+-- need no EXECUTE on it to write.
 CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
@@ -3734,6 +4183,110 @@ CREATE TRIGGER t_message_app_delete BEFORE DELETE ON public.message
 -- subject_user_id) / need (id, session_id, user_id); participant (user_id, kind)
 -- references "user" (id, kind) (tables.sql). participant-key.target.test.ts keeps
 -- each retired trigger's refusal.
+
+-- T-session-scope (work-k5fk.10.5; design note §6 "Session variables", Q20): the AI (ai_access) — and a worker
+-- task on the per-session tables of the Stage 4 closure (worker_access) — writes a row only in the one session its
+-- transaction names in app.session_scope (set by the ai / worker clients, lib/prisma-identity.ts). Unset is NULL, so
+-- a write with no scope is refused: the scope is required, not a filter that an absent value turns off. On message
+-- the AI writes only its own AI / SYSTEM lines (a participant's delivered line is app.deliver_message's). Arguments:
+-- TG_ARGV[0] the row's session column, TG_ARGV[1] the capability it binds, TG_ARGV[2] 'sessionless' when a row with
+-- no session is allowed (brain_activity: an inner-work call's telemetry). Exempt, as t_message_app_* are: any
+-- current_user that is not a member of that capability (mwf_app, every definer body — mwf_definer is a member of
+-- nothing — and every cascade, which runs as the table's owner) and any that holds the database owner's privileges
+-- (the owner, superusers). UPDATE checks the old and the new row: a row may not be moved into, or out of, scope.
+-- Role-catalog functions and a setting only, so the golden traces see no new relation.
+CREATE FUNCTION app.t_session_scope() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_col   text := TG_ARGV[0];
+    v_new   jsonb;
+    v_old   jsonb;
+    v_scope uuid;
+  BEGIN
+    IF NOT pg_catalog.pg_has_role(current_user, TG_ARGV[1], 'USAGE')
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    END IF;
+    IF TG_OP <> 'INSERT' THEN v_old := to_jsonb(OLD); END IF;
+    IF TG_OP <> 'DELETE' THEN v_new := to_jsonb(NEW); END IF;
+    IF NOT (coalesce(TG_ARGV[2], '') = 'sessionless'
+            AND (v_new IS NULL OR v_new ->> v_col IS NULL) AND (v_old IS NULL OR v_old ->> v_col IS NULL)) THEN
+      v_scope := app.session_scope();
+      IF v_scope IS NULL
+         OR (v_new IS NOT NULL AND (v_new ->> v_col)::uuid IS DISTINCT FROM v_scope)
+         OR (v_old IS NOT NULL AND (v_old ->> v_col)::uuid IS DISTINCT FROM v_scope) THEN
+        RAISE EXCEPTION '% writes % only within its app.session_scope (%)', current_user, TG_TABLE_NAME,
+          coalesce(v_scope::text, 'unset')
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    END IF;
+    IF TG_TABLE_NAME = 'message' AND TG_ARGV[1] = 'ai_access' AND v_new IS NOT NULL
+       AND (v_new ->> 'role') NOT IN ('AI', 'SYSTEM') THEN
+      RAISE EXCEPTION 'the AI writes only AI / SYSTEM lines, not %', v_new ->> 'role' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_scope() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_session_scope() IS 'The AI (and a worker task on the Stage 4 closure tables) writes only rows of the session app.session_scope names; required, so an unset scope refuses the write. work-k5fk.10.5.';
+-- mwf_ai's writes (tables.sql "-- mwf_ai:" grants). session and empathy_attempt: the one-column UPDATE the row locks need.
+CREATE TRIGGER t_session_scope BEFORE INSERT ON public.message
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access');
+CREATE TRIGGER t_session_scope BEFORE INSERT OR UPDATE ON public.ai_memory
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access');
+CREATE TRIGGER t_session_scope BEFORE INSERT OR UPDATE ON public.reconciler_result
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access');
+CREATE TRIGGER t_session_scope BEFORE INSERT ON public.reconciler_guidance
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access');
+CREATE TRIGGER t_session_scope BEFORE INSERT OR UPDATE ON public.context_share_offer
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access');
+CREATE TRIGGER t_session_scope BEFORE INSERT OR UPDATE ON public.brain_activity
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access', 'sessionless');
+CREATE TRIGGER t_session_scope BEFORE UPDATE ON public.session
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('id', 'ai_access');
+CREATE TRIGGER t_session_scope BEFORE UPDATE ON public.empathy_attempt
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'ai_access');
+-- mwf_worker's per-session writes: the Stage 4 closure (stage4-store insertAgreementsTx / insertClosureTx). Its
+-- cross-session writes (retention, due follow-ups and reminders, push tokens) are not session rows of one task.
+CREATE TRIGGER t_session_scope_worker BEFORE INSERT OR UPDATE ON public.agreement
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.agreement_party
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.session_closure
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.proposal_revision
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+CREATE TRIGGER t_session_scope_worker BEFORE UPDATE ON public.proposal
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+-- review F6: a follow-up the worker schedules is of one session (the closure, a check-in's next round, the coordination
+-- cycle's next round); its UPDATEs stay cross-session (open-due, step 20's exemptions).
+CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.follow_up
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+
+-- T-session-purge (review F6): the worker's DELETE of a session (session-retention's purge, a cascade of every
+-- session-scoped row) removes only an ARCHIVED session. Exempt, as t_session_scope: any current_user that is not a
+-- member of worker_access, and the database owner / superusers.
+CREATE FUNCTION app.t_session_purge() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF pg_catalog.pg_has_role(current_user, 'worker_access', 'USAGE')
+       AND NOT pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE')
+       AND OLD.status <> 'ARCHIVED' THEN
+      RAISE EXCEPTION 'the worker purges only ARCHIVED sessions, not %', OLD.status USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN OLD;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_purge() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_session_purge() IS 'The worker deletes only ARCHIVED sessions (session-retention''s purge). work-k5fk.10.5 review F6.';
+CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_purge();
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
@@ -4606,16 +5159,16 @@ BEGIN
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: app function(s) executable by PUBLIC: %', bad; END IF;
 
   -- Roles (work-k5fk.10.4; design note §6 "Roles — one per kind of actor", Q13/Q16/Q18). The runtime logins and
-  -- their one capability each: grants target the capability, the login only inherits them. mwf_job -> job_access is
-  -- the interim until §7 row 9b retires mwf_job. Roles are cluster-level (infra/aws/roles.sql, init-db.sh), so these
-  -- read the cluster as the migration finds it and refuse a baseline over a cluster that drifted.
+  -- their one capability each: grants target the capability, the login only inherits them. mwf_job and its interim
+  -- job_access are retired (work-k5fk.10.5, §7 row 9b). Roles are cluster-level (infra/aws/roles.sql, init-db.sh), so
+  -- these read the cluster as the migration finds it and refuse a baseline over a cluster that drifted.
   DECLARE
-    v_logins CONSTANT text[] := ARRAY['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician', 'mwf_job'];
+    v_logins CONSTANT text[] := ARRAY['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician'];
     v_caps   CONSTANT text[] := ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access',
-                                      'clinician_access', 'job_access'];
-    -- Reserved (review 9a F4): NOLOGIN until a call site (§7 row 9b: mwf_ai, mwf_worker) or the clinician portal
-    -- (Q18) uses them; 9b flips mwf_ai / mwf_worker to LOGIN here and in roles.sql.
-    v_reserved CONSTANT text[] := ARRAY['mwf_ai', 'mwf_worker', 'mwf_clinician'];
+                                      'clinician_access'];
+    -- Reserved (review 9a F4): NOLOGIN until the clinician portal (Q18) uses it. mwf_ai and mwf_worker log in since
+    -- §7 row 9b gave them their call sites.
+    v_reserved CONSTANT text[] := ARRAY['mwf_clinician'];
     -- What the definer bodies write (T4/T5; review 9a F3): mwf_definer's INSERT / UPDATE / DELETE grants, exactly.
     -- Reads are pinned by app-grants.target.test.ts's privilege matrix; a write beyond these widens what a
     -- definer bug, or an injection into one, can change.
@@ -4623,13 +5176,22 @@ BEGIN
       'ai_memory:DELETE', 'brain_activity:DELETE', 'consent:UPDATE', 'conversation:DELETE', 'conversation:UPDATE',
       'conversation_read_state:DELETE', 'draft:DELETE', 'empathy_attempt:DELETE', 'empathy_attempt:INSERT',
       'empathy_attempt:UPDATE', 'feature_state:DELETE', 'follow_up_checkin:DELETE', 'follow_up_note:DELETE',
+      'context_share_offer:UPDATE',
       'live_session_pair:DELETE', 'live_session_pair:INSERT', 'message:INSERT', 'mood_reading:DELETE', 'need:DELETE',
       'need_disposition:DELETE', 'need_share:INSERT', 'need_share:UPDATE', 'participant:UPDATE',
+      'participant_milestone:DELETE', 'participant_milestone:INSERT',
       'participant_key:UPDATE', 'proposal_choice:DELETE', 'reflection:DELETE', 'regulation_event:DELETE',
       'reminder:DELETE', 'session:UPDATE', 'user:INSERT', 'user:UPDATE', 'user_contact:DELETE', 'user_device:DELETE',
       'user_identity:DELETE', 'user_identity:INSERT', 'user_key:UPDATE', 'user_memory:DELETE',
       'user_preferences:DELETE'];
   BEGIN
+
+  -- work-k5fk.10.5 (§7 row 9b, Q13): mwf_job — once the AI's writer, the two-party writer and the definer owner at once —
+  -- and its interim capability job_access are gone from the cluster; infra/aws/roles.sql retires them.
+  SELECT string_agg(r.rolname, ', ' ORDER BY r.rolname) INTO bad FROM pg_roles r WHERE r.rolname IN ('mwf_job', 'job_access');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'step 20: retired role(s) still exist: % (infra/aws/roles.sql retires them; work-k5fk.10.5)', bad;
+  END IF;
 
   -- Every SECURITY DEFINER function in public/app is owned by the NOLOGIN mwf_definer, and it owns nothing else.
   SELECT string_agg(p.oid::regprocedure::text || ' (' || pg_get_userbyid(p.proowner) || ')', ', ' ORDER BY p.oid::regprocedure::text) INTO bad
@@ -4758,15 +5320,14 @@ BEGIN
   WHERE pg_get_userbyid(x.grantee) IN (SELECT unnest(v_logins));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: privilege(s) granted to a login instead of its capability: %', bad; END IF;
 
-  -- clinician_access holds nothing until the consent model exists (Q18); ai_access and worker_access get their
-  -- grants with their call sites (§7 row 9b). Read over the whole catalog of this database.
+  -- clinician_access holds nothing until the consent model exists (Q18). Read over the whole catalog of this database.
   SELECT string_agg(DISTINCT pg_get_userbyid(x.grantee), ', ') INTO bad FROM (
     SELECT a.grantee FROM pg_namespace s, aclexplode(s.nspacl) a
     UNION ALL SELECT a.grantee FROM pg_class c, aclexplode(c.relacl) a
     UNION ALL SELECT a.grantee FROM pg_attribute att, aclexplode(att.attacl) a
     UNION ALL SELECT a.grantee FROM pg_proc p, aclexplode(p.proacl) a
     UNION ALL SELECT a.grantee FROM pg_type t, aclexplode(t.typacl) a) x
-  WHERE pg_get_userbyid(x.grantee) IN ('clinician_access', 'ai_access', 'worker_access');
+  WHERE pg_get_userbyid(x.grantee) IN ('clinician_access');
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) that hold nothing yet hold a privilege: %', bad; END IF;
 
   -- work-k5fk.10.4.1: t_doc_schema and t_jsonb_envelope run with the writer's rights, so every role that may fire
@@ -4786,6 +5347,42 @@ BEGIN
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION 'step 20: role(s) that may write a validated column but cannot run its validator: %', bad;
   END IF;
+
+  -- work-k5fk.10.5 review F4: every write the AI or the worker holds is bound to its session by a t_session_scope
+  -- trigger naming that capability, for that event — or is one of the worker's cross-session writes named here
+  -- (retention, due follow-ups and reminders, push-token clean-up, and the purge, which t_session_purge binds to
+  -- ARCHIVED sessions). A grant added without its trigger, or a trigger dropped, refuses the baseline.
+  DECLARE
+    v_scope_exempt CONSTANT text[] := ARRAY[
+      'worker_access:brain_activity:UPDATE', 'worker_access:brain_activity:DELETE',
+      'worker_access:follow_up:UPDATE', 'worker_access:reminder:UPDATE', 'worker_access:user_device:UPDATE',
+      'worker_access:session:DELETE'];
+  BEGIN
+    SELECT string_agg(w.cap || ':' || w.rel || ':' || w.ev, ', ' ORDER BY w.cap, w.rel, w.ev) INTO bad
+    FROM (
+      SELECT DISTINCT r.rolname::text AS cap, c.relname::text AS rel, e.ev, e.bit, c.oid AS reloid
+      FROM pg_roles r
+      CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      CROSS JOIN (VALUES ('INSERT', 4), ('DELETE', 8), ('UPDATE', 16)) e(ev, bit)
+      WHERE r.rolname IN ('ai_access', 'worker_access') AND n.nspname = 'public' AND c.relkind = 'r'
+        AND (EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type = e.ev)
+             OR EXISTS (SELECT 1 FROM pg_attribute att, aclexplode(att.attacl) a
+                        WHERE att.attrelid = c.oid AND a.grantee = r.oid AND a.privilege_type = e.ev))
+    ) w
+    WHERE NOT (w.cap || ':' || w.rel || ':' || w.ev = ANY (v_scope_exempt))
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_trigger tg
+        WHERE tg.tgrelid = w.reloid AND NOT tg.tgisinternal AND tg.tgfoid = 'app.t_session_scope()'::regprocedure
+          AND (tg.tgtype & w.bit) <> 0
+          AND position(quote_literal(w.cap) IN pg_get_triggerdef(tg.oid)) > 0);
+    IF bad IS NOT NULL THEN
+      RAISE EXCEPTION 'step 20: AI / worker write(s) with no t_session_scope trigger for the event (capability:table:event): %', bad;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.session'::regclass
+                   AND tg.tgfoid = 'app.t_session_purge()'::regprocedure AND (tg.tgtype & 8) <> 0) THEN
+      RAISE EXCEPTION 'step 20: the worker''s DELETE of session is not bound to ARCHIVED sessions (t_session_purge)';
+    END IF;
+  END;
 
   -- The message counter moves only through app.next_message_seq (work-k5fk.4): no role but its owner mwf_definer
   -- (and the table's owner) may UPDATE conversation.next_seq.

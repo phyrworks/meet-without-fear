@@ -5,19 +5,19 @@
  * Manages the flow of sharing context between users when empathy gaps are detected.
  *
  * Target shape (TS-10, spec §1.2 context_share_offer, §1.3 consent):
- *   - the offer is the SUBJECT's: the job inserts it; only the subject reads it;
+ *   - the offer is the SUBJECT's: the AI inserts it; only the subject reads it;
  *   - the subject responds on the app connection: the offer's response columns
  *     plus a `consent` row naming the offer (no requester — CHECK; a DENIED
  *     decision can never be read by the author, spec §7 "declining leaves no
  *     author-visible trace");
- *   - the shared text is delivered by the job as a `message(kind
+ *   - the shared text is delivered by the AI as a `message(kind
  *     SHARED_CONTEXT)` in the AUTHOR's conversation, with the delivery stamp on
  *     the offer; the author's round moves through `app.empathy_set_status`
- *     (job).
+ *     (AI).
  */
 
 import { getNickname } from '../contacts';
-import { getJobPrisma, prisma, type DbClient } from '../../lib/prisma';
+import { getAiPrisma, prisma, type DbClient } from '../../lib/prisma';
 import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../../lib/share-moments';
 import { logger } from '../../lib/logger';
@@ -280,7 +280,7 @@ Respond with ONLY the message text, no additional formatting.`;
 // ============================================================================
 
 /**
- * The job's offer insert (trailer T7, TS-10 block): the next iteration of the
+ * The AI's offer insert (trailer T7, TS-10 block): the next iteration of the
  * attempt's offers.
  */
 async function insertOffer(
@@ -321,22 +321,22 @@ export async function generateShareSuggestionForDirection(
   guesserId: string,
   subjectId: string,
 ): Promise<void> {
-  // Analysis path: the job reads (Ruling R35).
-  const parties = await sessionParties(sessionId, getJobPrisma());
+  // Analysis path: the AI reads (Ruling R35).
+  const parties = await sessionParties(sessionId, getAiPrisma());
   const g = partyOf(parties, { userId: guesserId });
   const s = partyOf(parties, { userId: subjectId });
   if (!g || !s) {
     logger.error('generateShareSuggestionForDirection: guesser or subject not found', { guesserId, subjectId });
     return;
   }
-  const attempt = await currentAttempt(sessionId, g.userId, s.userId, getJobPrisma());
+  const attempt = await currentAttempt(sessionId, g.userId, s.userId, getAiPrisma());
   if (!attempt) return;
   const stored = await currentResultFor(attempt.id);
   if (!stored) {
     logger.warn('generateShareSuggestionForDirection: No reconciler result found', { guesserId, subjectId });
     return;
   }
-  const existing = await getJobPrisma().contextShareOffer.findFirst({
+  const existing = await getAiPrisma().contextShareOffer.findFirst({
     where: { resultId: stored.id, suggestedContent: { not: null } },
     select: { id: true },
   });
@@ -356,7 +356,7 @@ export async function generateShareSuggestionForDirection(
 /**
  * Generate the suggestion for the subject and persist it: a fresh analysis is
  * written with the suggestion (`persistAnalysis`), then the subject's offer
- * (PENDING) — both by the job. A suggestion that fails to generate leaves the
+ * (PENDING) — both by the AI. A suggestion that fails to generate leaves the
  * analysis stored and no offer, as before.
  */
 export async function generateShareSuggestion(
@@ -436,12 +436,12 @@ Respond in JSON:
   if (!suggestion || !resultId)
     return suggestion ? { suggestedContent: suggestion.suggestedContent, reason: suggestion.reason } : null;
 
-  const open = await getJobPrisma().contextShareOffer.findFirst({
+  const open = await getAiPrisma().contextShareOffer.findFirst({
     where: { resultId, status: { in: ['PENDING', 'OFFERED'] } },
     select: { id: true },
   });
   if (!open) {
-    await insertOffer(getJobPrisma(), {
+    await insertOffer(getAiPrisma(), {
       attemptId: persist.attemptId,
       resultId,
       sessionId,
@@ -567,14 +567,14 @@ export async function getShareSuggestionForUser(
  * The subject answers their offer (accept / refine / decline).
  *
  *  - decline: the offer DECLINED + a DENIED consent naming it (subject, app
- *    connection, one transaction); the author's round → READY (job,
+ *    connection, one transaction); the author's round → READY (AI,
  *    status-version guarded); then the reveal check. Nothing the author can
  *    read changes except the direction's status.
  *  - accept / refine: the offer ACCEPTED with the exact shared text + a
- *    GRANTED consent (subject, app); then the job delivers: SHARED_CONTEXT into
+ *    GRANTED consent (subject, app); then the AI delivers: SHARED_CONTEXT into
  *    the author's conversation, the reflection prompt for the author, the
  *    acknowledgement for the subject, the offer's delivery stamp, and the
- *    author's round → REFINING — one job transaction.
+ *    author's round → REFINING — one AI transaction.
  */
 export async function respondToShareSuggestion(
   sessionId: string,
@@ -699,7 +699,7 @@ export async function respondToShareSuggestion(
 
 /**
  * The accept path's writes (shared by respondToShareSuggestion and the
- * refinement-finalize endpoint): the subject's answer (app), then the job's
+ * refinement-finalize endpoint): the subject's answer (app), then the AI's
  * delivery.
  */
 export async function shareAccepted(opts: {
@@ -833,7 +833,7 @@ export async function resumeUndeliveredShare(
 }
 
 /**
- * The job's delivery of an accepted share, in one transaction; messages 100 ms
+ * The AI's delivery of an accepted share, in one transaction; messages 100 ms
  * apart for a stable order. Idempotent: the offer row is locked first and its
  * `delivery_status` is the key — the SHARED_CONTEXT copy and the DELIVERED
  * stamp commit together, so a second call finds DELIVERED and writes nothing.
@@ -856,7 +856,7 @@ export async function deliverAcceptedShare(opts: {
   const now = opts.at ?? new Date();
   let sharedMessageId: string | null = null;
   const base = now.getTime();
-  const delivered = await getJobPrisma().$transaction(async tx => {
+  const delivered = await getAiPrisma().$transaction(async tx => {
     const client = tx;
     // Lock order: the session row (as app.empathy_set_status), the offer, the attempt.
     const [sessionRow] = await tx.$queryRaw<Array<{ id: string }>>`SELECT s.id FROM session s
@@ -947,7 +947,7 @@ export async function getSharedContextForGuesser(
 // ============================================================================
 
 /**
- * The delivery status of what the subject shared: 'delivered' once the job
+ * The delivery status of what the subject shared: 'delivered' once the AI
  * delivered it, 'seen' once the recipient's chat showed the frame (work-2doq).
  */
 export async function getSharedContentDeliveryStatus(
@@ -995,19 +995,19 @@ export async function getSharedContentDeliveryStatus(
 
 /**
  * The share-offer fallback for a subject with an analysed direction about
- * them and no offer yet: crafts one and writes it OFFERED (job).
+ * them and no offer yet: crafts one and writes it OFFERED (AI).
  */
 export async function generateShareOffer(
   sessionId: string,
   subjectId: string,
 ): Promise<{ offerMessage: string; suggestedContent: string; suggestedReason: string; gapDescription: string } | null> {
-  // Analysis path: the job reads (Ruling R35) — the result and its attempt's
+  // Analysis path: the AI reads (Ruling R35) — the result and its attempt's
   // status are the reconciler's inputs, not the subject's app-side reads.
-  const parties = await sessionParties(sessionId, getJobPrisma());
+  const parties = await sessionParties(sessionId, getAiPrisma());
   const me = partyOf(parties, { userId: subjectId });
   if (!me) return null;
 
-  const result = await getJobPrisma().reconcilerResult.findFirst({
+  const result = await getAiPrisma().reconcilerResult.findFirst({
     where: {
       sessionId,
       subjectUserId: me.userId,
@@ -1123,7 +1123,7 @@ Respond in JSON:
   const suggestedContent = cleanVisibleAIText(suggestionResult.suggestedContent);
   const suggestedReason = cleanVisibleAIText(suggestionResult.reason);
 
-  await insertOffer(getJobPrisma(), {
+  await insertOffer(getAiPrisma(), {
     attemptId: result.attemptId,
     resultId: result.id,
     sessionId,

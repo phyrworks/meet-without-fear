@@ -25,7 +25,7 @@ umask 077
 if [ ! -f "$LOCAL/secrets.env" ]; then
   {
     for v in POSTGRES_PASSWORD APP_DB_PASSWORD READONLY_DB_PASSWORD MIGRATOR_DB_PASSWORD \
-             JOB_DB_PASSWORD OPS_DB_PASSWORD AUTH_DB_PASSWORD; do
+             AI_DB_PASSWORD WORKER_DB_PASSWORD OPS_DB_PASSWORD AUTH_DB_PASSWORD; do
       printf '%s=%s\n' "$v" "$(openssl rand -hex 18)"
     done
   } >"$LOCAL/secrets.env"
@@ -38,6 +38,14 @@ if ! grep -q '^FIELD_ENCRYPTION_KEY=' "$LOCAL/secrets.env"; then
   printf 'FIELD_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32)" >>"$LOCAL/secrets.env"
   echo "   added FIELD_ENCRYPTION_KEY to $LOCAL/secrets.env"
 fi
+# work-k5fk.10.5: the AI and worker logins (mwf_job retired). Added once to an older secrets.env;
+# a volume initialised before them needs infra/local/reset.sh (step 4 says so).
+for v in AI_DB_PASSWORD WORKER_DB_PASSWORD; do
+  if ! grep -q "^$v=" "$LOCAL/secrets.env"; then
+    printf '%s=%s\n' "$v" "$(openssl rand -hex 18)" >>"$LOCAL/secrets.env"
+    echo "   added $v to $LOCAL/secrets.env"
+  fi
+done
 # shellcheck source=/dev/null
 source "$LOCAL/secrets.env"
 write_if_changed() {  # $1 = path; content on stdin
@@ -53,7 +61,8 @@ POSTGRES_DB=mwf
 APP_DB_PASSWORD=$APP_DB_PASSWORD
 READONLY_DB_PASSWORD=$READONLY_DB_PASSWORD
 MIGRATOR_DB_PASSWORD=$MIGRATOR_DB_PASSWORD
-JOB_DB_PASSWORD=$JOB_DB_PASSWORD
+AI_DB_PASSWORD=$AI_DB_PASSWORD
+WORKER_DB_PASSWORD=$WORKER_DB_PASSWORD
 OPS_DB_PASSWORD=$OPS_DB_PASSWORD
 AUTH_DB_PASSWORD=$AUTH_DB_PASSWORD
 EOF
@@ -70,7 +79,8 @@ EOF
   cat <<EOF
 DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?connection_limit=4
 APP_DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
-JOB_DATABASE_URL=postgresql://mwf_job:$JOB_DB_PASSWORD@db:5432/mwf?connection_limit=5
+AI_DATABASE_URL=postgresql://mwf_ai:$AI_DB_PASSWORD@db:5432/mwf?connection_limit=5
+WORKER_DATABASE_URL=postgresql://mwf_worker:$WORKER_DB_PASSWORD@db:5432/mwf?connection_limit=3
 OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?connection_limit=2
 AUTH_DATABASE_URL=postgresql://mwf_auth:$AUTH_DB_PASSWORD@db:5432/mwf?connection_limit=12
 DB_IDENTITY_BINDING=on
@@ -147,8 +157,11 @@ step "4. db (Postgres 18 + pgvector; init-db.sh on a fresh volume)"
 compose up -d db
 wait_healthy db 40 || die "db did not become healthy"
 echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname LIKE '%\_access' OR rolname = 'slam_bot_readonly'")"
-if [ "$(psql_db -Atc "SELECT count(*) FROM pg_roles WHERE rolname IN ('app_access', 'job_access', 'mwf_definer', 'mwf_ai')")" != 4 ]; then
+if [ "$(psql_db -Atc "SELECT count(*) FROM pg_roles WHERE rolname IN ('app_access', 'ai_access', 'mwf_definer', 'mwf_ai')")" != 4 ]; then
   die "the replica's cluster has no capability roles (a volume initialised before work-k5fk.10.4): run infra/local/reset.sh, then up.sh"
+fi
+if [ "$(psql_db -Atc "SELECT count(*) FROM pg_roles WHERE (rolname IN ('mwf_ai', 'mwf_worker') AND rolcanlogin) OR rolname IN ('mwf_job', 'job_access')")" != 2 ]; then
+  die "the replica's cluster predates work-k5fk.10.5 (mwf_job still exists, or mwf_ai / mwf_worker cannot log in): run infra/local/reset.sh, then up.sh"
 fi
 
 # --- 4b. role-guard preflight, before migrating (work-k5fk.10.3; deploy.sh does the same) ---

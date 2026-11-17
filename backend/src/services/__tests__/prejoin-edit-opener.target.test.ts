@@ -57,7 +57,7 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
       sessionId,
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
+    await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1::uuid`, [sessionId]);
     const [me] = await run.sql<{ session_id: string; user_id: string }>(
       `SELECT session_id, user_id FROM participant WHERE session_id = $1`,
       [sessionId],
@@ -231,11 +231,15 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
       [s.adaParticipant.sessionId, s.adaParticipant.userId],
     );
     const { createFacilitatorMessage } = await import('../message-store');
-    await createFacilitatorMessage({
-      conversationId: conv.id,
-      content: 'That is a real shift.',
-      createdAt: saved.draft.updatedAt,
-    });
+    const { withSessionScope } = await import('../../lib/request-context');
+    // The AI's line names its session (app.session_scope; work-k5fk.10.5).
+    await withSessionScope(s.sessionId, () =>
+      createFacilitatorMessage({
+        conversationId: conv.id,
+        content: 'That is a real shift.',
+        createdAt: saved.draft.updatedAt,
+      }),
+    );
     expect(await reopenedAtOf(s.sessionId, s.adaParticipant)).toBeNull();
     expect((await draftOf(s.sessionId)).awaitingRevision).toBe(false);
   });

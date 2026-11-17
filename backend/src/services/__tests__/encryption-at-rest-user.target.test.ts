@@ -64,7 +64,7 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
     if (run) await run.drop();
   });
 
-  it('ai_memory SUMMARY (summarizer, raw INSERT as mwf_job): leaves sealed, the CHECK holds, the app reads the text', async () => {
+  it('ai_memory SUMMARY (summarizer, raw INSERT as mwf_ai): leaves sealed, the CHECK holds, the app reads the text', async () => {
     const [c] = await run.sql<{ id: string }>(
       `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
       [ids.session, ids.adaUser],
@@ -106,7 +106,7 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
     proven.add('ai_memory.doc');
   });
 
-  it('ai_memory NOTABLE_FACTS (partner-session classifier, raw INSERT as mwf_job): the facts array survives the CHECK', async () => {
+  it('ai_memory NOTABLE_FACTS (partner-session classifier, raw INSERT as mwf_ai): the facts array survives the CHECK', async () => {
     const spy = jest.spyOn(bedrock, 'getHaikuJson').mockResolvedValue({
       topicContext: 'x',
       notableFacts: [{ category: 'People', fact: 'PROBE_TS13_FACT Ada has a sister' }],

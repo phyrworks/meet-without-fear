@@ -12,8 +12,8 @@ previous=$(jq -r ' .image // empty' /var/lib/mwf/current-release.json 2>/dev/nul
 # Role-guard preflight (work-k5fk.10.3), with the NEW image and before anything changes: every
 # runtime role URL in application.env must be a least-privilege login that owns nothing and is a
 # member of no role, or the new API would refuse to start after the migration. On the current
-# production database it FAILS until the design note §7 row 9c cutover (mwf_app owns the database
-# and is a member of mwf_job): the old release keeps running. There is no switch to skip it.
+# production database it FAILS until the design note §7 row 9c cutover (mwf_app owns the database,
+# which no runtime login may): the old release keeps running. There is no switch to skip it.
 # The image runs directly on the internal database network only (compose project "mwf" ->
 # network mwf_database; the db service answers as "db" there), NOT `compose run api`: the api
 # service pins 172.29.0.3 on the edge network, which the running API already holds.

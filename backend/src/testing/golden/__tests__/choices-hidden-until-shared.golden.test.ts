@@ -36,7 +36,7 @@ import {
 import { viewName } from '../concept-views';
 import { listTables, withClient } from '../db';
 import type { ActorRef, Harness, StepResult } from '../driver';
-import { createHarness, jobUrlFor } from '../driver';
+import { appUrlFor, createHarness } from '../driver';
 import { findLeaks, fullRead, unexpectedLeakReport } from '../privacy';
 import { goldenScenarioChecks, targetFixtureDeltaChecks } from '../scenario-checks';
 import { isTargetShape } from '../shape';
@@ -478,12 +478,16 @@ describe(`golden: ${SCENARIO}`, () => {
          VALUES ($1, $2, $3::uuid, 'GRANTED', now())`,
         [bobP.session_id, bobP.user_id, open.id],
       );
-      const job = new Client({ connectionString: jobUrlFor(harness.fixture.target, harness.fixture.database) });
-      await job.connect();
+      // Bob shares his own need (app.need_share is the owner's since work-k5fk.10.5).
+      const app = new Client({ connectionString: appUrlFor(harness.fixture.target, harness.fixture.database) });
+      await app.connect();
       try {
-        await job.query(`SELECT app.need_share($1::uuid, 'An open shared need at closure')`, [open.id]);
+        await app.query('BEGIN');
+        await app.query("SELECT set_config('app.current_user_id', $1, true)", [bobP.user_id]);
+        await app.query(`SELECT app.need_share($1::uuid, 'An open shared need at closure')`, [open.id]);
+        await app.query('COMMIT');
       } finally {
-        await job.end();
+        await app.end();
       }
       const close = await harness.step({
         label: 'close as ada (outside the recorded steps)',

@@ -11,13 +11,15 @@
  *   - `createParticipantMessage` — the participant's own turn (role USER,
  *     kind CHAT, or a refining-need reply), on the APP connection;
  *   - `createFacilitatorMessage` — an AI or SYSTEM row in a participant's
- *     conversation, on the JOB connection (`getJobPrisma()`);
+ *     conversation, on the AI connection (`getAiPrisma()`, mwf_ai, scoped to
+ *     the session by app.session_scope — work-k5fk.10.5);
  *   - `createFacilitatorMessageOnce` — a once-only AI line keyed by
  *     `dedupe_key` (work-fdc1; one raw INSERT … ON CONFLICT DO NOTHING), on
- *     the JOB connection;
+ *     the AI connection;
  *   - `deliverMessage` — a delivered kind (EMPATHY_STATEMENT, SHARED_CONTEXT,
- *     …) written into ANOTHER participant's conversation, on the JOB
- *     connection.
+ *     …) written into ANOTHER participant's conversation, through the definer
+ *     app.deliver_message: on the APP connection as the author, or inside the
+ *     reconciler's AI transaction (sharing.ts deliverAcceptedShare).
  *
  * Keys (work-k5fk.4): a message is (conversation_id, seq); the trigger
  * t_message_seq numbers every INSERT, so no writer here sends seq, and each
@@ -32,7 +34,7 @@
 
 import { formatMessageId, parseMessageId, type MessageKey } from '@meet-without-fear/shared';
 import type { DbClient } from '../lib/prisma';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getAiPrisma, prisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import type { Seat } from './participant-resolver';
 import { messageStage, type MilestoneReached } from './stage-shim';
@@ -318,7 +320,7 @@ export function createOwnStatementMessage(opts: {
 /**
  * An AI or SYSTEM row in a participant's conversation — the facilitator never
  * has a sender (CHECK `role NOT IN ('AI','SYSTEM') OR sender IS NULL`).
- * Written through the JOB connection.
+ * Written through the AI connection.
  */
 export function createFacilitatorMessage(opts: {
   conversationId: string;
@@ -329,10 +331,10 @@ export function createFacilitatorMessage(opts: {
   /** The participant's need this reply refines (Stage 3 refinement turns). */
   refiningNeedId?: string | null;
   createdAt?: Date;
-  /** For tests: the client the job connection resolves to. */
+  /** For tests, and the AI's own transactions: the client the AI connection resolves to. */
   client?: DbClient;
 }): Promise<StoredMessage> {
-  return insert(opts.client ?? getJobPrisma(), {
+  return insert(opts.client ?? getAiPrisma(), {
     conversationId: opts.conversationId,
     senderUserId: null,
     role: opts.role ?? 'AI',
@@ -357,7 +359,7 @@ export function createFacilitatorMessage(opts: {
  * caller's transaction in 25P02). Raw SQL, so the content is sealed here with
  * `encryptColumnValue('message', 'content', …)`, as the Prisma extension seals
  * a model write (the same field of SENSITIVE_FIELD_MAP, key class per-row).
- * JOB connection, like every facilitator row (it may INSERT dedupe_key but
+ * AI connection, like every facilitator row (it may INSERT dedupe_key but
  * never SELECT it; RETURNING reads only seq, created_at).
  */
 export async function createFacilitatorMessageOnce(opts: {
@@ -365,12 +367,12 @@ export async function createFacilitatorMessageOnce(opts: {
   dedupeKey: MessageDedupeKey;
   content: string;
   createdAt?: Date;
-  /** The job connection by default; a transaction client of it is fine. */
+  /** The AI connection by default; a transaction client of it is fine. */
   client?: DbClient;
 }): Promise<StoredMessage | null> {
-  const client = opts.client ?? getJobPrisma();
+  const client = opts.client ?? getAiPrisma();
   // No conflict target: inferring one (ON CONFLICT (conversation_id, dedupe_key)
-  // WHERE …) needs SELECT on the arbiter columns, and mwf_job must not read
+  // WHERE …) needs SELECT on the arbiter columns, and mwf_ai must not read
   // dedupe_key (42501, verified). Without a target the arbiters are message's
   // unique indexes: the key and (key, session_id), whose seq t_message_seq has
   // just taken (cannot collide), and sql_message_once — so the only conflict is
@@ -402,8 +404,11 @@ export async function createFacilitatorMessageOnce(opts: {
 /**
  * A delivered item authored by one participant, written into ANOTHER
  * participant's conversation (role USER — delivered items are the author's;
- * spec T-message-immutable). JOB connection: the request path never writes
- * into someone else's conversation.
+ * spec T-message-immutable), through app.deliver_message (work-k5fk.10.5): the
+ * request path never INSERTs into someone else's conversation — the definer
+ * does, for the author (the APP connection, identity-bound: the default) or for
+ * the AI within its session scope (a transaction client of the AI connection).
+ * The content is sealed here, as the Prisma extension seals a model write.
  */
 export function deliverMessage(opts: {
   toConversationId: string;
@@ -417,16 +422,36 @@ export function deliverMessage(opts: {
   createdAt?: Date;
   client?: DbClient;
 }): Promise<StoredMessage> {
-  return insert(opts.client ?? getJobPrisma(), {
+  return deliverThroughDefiner(opts.client ?? prisma, opts);
+}
+
+async function deliverThroughDefiner(
+  client: DbClient,
+  opts: {
+    toConversationId: string;
+    fromUserId: string;
+    kind: Exclude<TargetMessageKind, 'CHAT'>;
+    content: string;
+    sourceAttemptId?: string | null;
+    createdAt?: Date;
+  },
+): Promise<StoredMessage> {
+  const [row] = await client.$queryRaw<Array<{ seq: number; created_at: Date }>>`SELECT d.seq, d.created_at
+    FROM app.deliver_message(${opts.toConversationId}::uuid, ${opts.fromUserId}::uuid, ${opts.kind}::message_kind,
+                             ${encryptColumnValue('message', 'content', opts.content)}, ${opts.sourceAttemptId ?? null}::uuid,
+                             ${opts.createdAt ?? new Date()}::timestamptz) d`;
+  return {
+    id: formatMessageId(opts.toConversationId, row.seq),
     conversationId: opts.toConversationId,
-    sessionId: opts.sessionId,
+    seq: row.seq,
     senderUserId: opts.fromUserId,
     role: 'USER',
     kind: opts.kind,
     content: opts.content,
-    sourceAttemptId: opts.sourceAttemptId,
-    createdAt: opts.createdAt,
-  });
+    refiningNeedId: null,
+    sourceAttemptId: opts.sourceAttemptId ?? null,
+    createdAt: row.created_at,
+  };
 }
 
 /** Delete one message by its API id (failed-turn cleanup); the owner's own connection. */

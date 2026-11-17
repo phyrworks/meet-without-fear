@@ -5,7 +5,7 @@
 -- the baseline built and seed-target-fixture.sql seeded (it changes data);
 -- run-baseline.sh adds test 18 (a second migrate deploy is a no-op), which
 -- needs the Prisma CLI. Every caller arm runs in a session that LOGGED
--- IN as mwf_app, mwf_job or mwf_auth (\connect), never as the superuser (20, the
+-- IN as mwf_app, mwf_ai, mwf_worker or mwf_auth (\connect), never as the superuser (20, the
 -- structural key checks, run as the superuser by design); identity is
 -- set_config('app.current_user_id', <user>, true), as the request layer does.
 --
@@ -14,9 +14,10 @@
 -- that writes as mwf_app proves the grant as well as the function or trigger.
 -- An expected refusal is caught by its SQLSTATE and logged PASS; anything else
 -- (or a refusal that does not happen: 'TEST FAILED') stops the run. Most
--- refusals come from the function or trigger under test; 6a–6d (mwf_job's
--- narrowed column grants) and 13b (no EXECUTE on need_share) are grant
--- refusals, by design — 13d reaches need_share's own job check.
+-- refusals come from the function or trigger under test; 6a–6d (mwf_ai's
+-- narrowed column grants) are grant refusals, by design. mwf_job is retired
+-- (work-k5fk.10.5): the AI's arms run as mwf_ai with app.session_scope set,
+-- the worker's as mwf_worker; 17 and 24 call as mwf_app via SET SESSION AUTHORIZATION.
 -- ============================================================================
 \set ON_ERROR_STOP on
 \pset pager off
@@ -90,7 +91,7 @@ DO $$ DECLARE n int; BEGIN
   RAISE NOTICE 'PASS 3b non-member sees no direction status and is not a member';
 END $$;
 
--- 4. only the job reveals: the author of a READY attempt cannot
+-- 4. only the AI reveals: the author of a READY attempt cannot
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
   BEGIN
@@ -100,10 +101,22 @@ DO $$ BEGIN
   END;
 END $$;
 
--- ============================ as mwf_job ======================================
-\connect - mwf_job
+-- ============================ as mwf_ai =======================================
+\connect - mwf_ai
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- The AI's arm needs the session in app.session_scope (work-k5fk.10.5, Q20); session-wide here, transaction-local in the app.
+SELECT set_config('app.session_scope', :'r_session', false) \g /dev/null
+
+-- 5a. the AI arm needs the scope: with another session's scope the attempt is not found to it
+DO $$ BEGIN
+  PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e1', true);
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'REVEALED');
+    RAISE EXCEPTION 'TEST FAILED: the AI moved an attempt outside its scope';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 5a the AI cannot move an attempt of another session than its scope: %', SQLERRM;
+  END;
+END $$;
 
 -- 5. the reveal gate: B→A is READY but A→B is AWAITING_SHARING → refused
 DO $$ BEGIN
@@ -114,28 +127,28 @@ DO $$ BEGIN
   END;
 END $$;
 
--- 6. the job's narrowed privileges (C3): no routing-column UPDATE, no U-class reads
+-- 6. the AI's narrowed privileges (C3): no routing-column UPDATE, no U-class reads
 DO $$ BEGIN
   BEGIN
     UPDATE participant SET user_id = user_id
     WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.b_user')::uuid;
-    RAISE EXCEPTION 'TEST FAILED: mwf_job updated participant.user_id';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6a mwf_job cannot UPDATE participant.user_id: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai updated participant.user_id';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6a mwf_ai cannot UPDATE participant.user_id: %', SQLERRM;
   END;
   BEGIN
     UPDATE empathy_attempt SET author_user_id = author_user_id WHERE id = current_setting('t.att_a')::uuid;
-    RAISE EXCEPTION 'TEST FAILED: mwf_job updated empathy_attempt.author_user_id';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6b mwf_job cannot UPDATE empathy_attempt.author_user_id: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai updated empathy_attempt.author_user_id';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6b mwf_ai cannot UPDATE empathy_attempt.author_user_id: %', SQLERRM;
   END;
   BEGIN
     PERFORM title FROM reflection LIMIT 1;
-    RAISE EXCEPTION 'TEST FAILED: mwf_job read reflection.title';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6c mwf_job cannot read reflection content: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai read reflection.title';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6c mwf_ai cannot read reflection content: %', SQLERRM;
   END;
   BEGIN
     PERFORM content FROM user_memory LIMIT 1;
-    RAISE EXCEPTION 'TEST FAILED: mwf_job read user_memory.content';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6d mwf_job cannot read user_memory content: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai read user_memory.content';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6d mwf_ai cannot read user_memory content: %', SQLERRM;
   END;
 END $$;
 
@@ -150,11 +163,13 @@ DO $$ BEGIN
   RAISE NOTICE 'PASS 7 author moves own attempt AWAITING_SHARING→READY';
 END $$;
 
--- ============================ as mwf_job ======================================
-\connect - mwf_job
+-- ============================ as mwf_ai =======================================
+\connect - mwf_ai
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
--- 8. the job reveals both; the subject's conversation gains exactly one copy, even when the reveal is repeated
+-- The AI's arm needs the session in app.session_scope (work-k5fk.10.5, Q20); session-wide here, transaction-local in the app.
+SELECT set_config('app.session_scope', :'r_session', false) \g /dev/null
+-- 8. the AI reveals both; the subject's conversation gains exactly one copy, even when the reveal is repeated
 DO $$ DECLARE n int; BEGIN
   PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'REVEALED');
   PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'REVEALED');
@@ -163,7 +178,7 @@ DO $$ DECLARE n int; BEGIN
   WHERE c.session_id = current_setting('t.r_session')::uuid AND c.user_id = current_setting('t.b_user')::uuid AND m.kind = 'EMPATHY_STATEMENT'
     AND m.source_attempt_id = current_setting('t.att_a')::uuid;
   IF n <> 1 THEN RAISE EXCEPTION 'TEST FAILED: % delivered copies in the subject''s conversation', n; END IF;
-  RAISE NOTICE 'PASS 8 job reveals once all directions are READY; subject''s conversation holds exactly 1 copy (after a repeated reveal)';
+  RAISE NOTICE 'PASS 8 the AI reveals once all directions are READY; subject''s conversation holds exactly 1 copy (after a repeated reveal)';
 END $$;
 
 -- ============================ as mwf_app ======================================
@@ -223,22 +238,11 @@ DO $$ BEGIN
   RAISE NOTICE 'PASS 11c owner revokes the share (need_share.revoked_at set, consent REVOKED)';
 END $$;
 
--- 12e. mwf_app holds no EXECUTE on anonymize_* (work-k5fk.10.2: the job is their only caller,
---      account-deletion.ts / session-deletion.ts). 12a–d, 13a and 15 then test the functions'
---      own identity checks against a non-job caller: EXECUTE is granted to mwf_app on this
---      throwaway clone (superuser) and revoked after 15, as 13d does for need_share.
+-- 12e. anonymize_* are mwf_app's since work-k5fk.10.5 (account-deletion.ts / session-deletion.ts run on the
+--      user's own request): 12a–d, 13a, 15, 17 and 24 test their own identity checks. mwf_app still cannot
+--      resolve or create a user (mwf_auth's).
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
-  BEGIN
-    PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000c1');
-    RAISE EXCEPTION 'TEST FAILED: mwf_app ran anonymize_user_account';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12e anonymize_user_account is not mwf_app''s (no EXECUTE): %', SQLERRM;
-  END;
-  BEGIN
-    PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1', NULL);
-    RAISE EXCEPTION 'TEST FAILED: mwf_app ran anonymize_user_in_session';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12f anonymize_user_in_session is not mwf_app''s (no EXECUTE): %', SQLERRM;
-  END;
   BEGIN
     PERFORM app.resolve_user('clerk', 'user_ts7cAda');
     RAISE EXCEPTION 'TEST FAILED: mwf_app ran resolve_user';
@@ -303,12 +307,6 @@ DO $$ BEGIN
   RAISE NOTICE 'PASS 21i mwf_app still edits the names (profile edit)';
 END $$;
 ROLLBACK;
-\connect - mwf_user
-SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON app.anonymize_* TO mwf_app)';
-GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) TO mwf_app;
-\connect - mwf_app
-SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 
 -- 12. anonymize_*: no identity, another user → not found; a modeled-style NULL comparison never passes
 DO $$ BEGIN
@@ -344,13 +342,14 @@ DO $$ BEGIN
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
   BEGIN
     PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000d1');
-    RAISE EXCEPTION 'TEST FAILED: temp pg_roles made mwf_app the job';
+    RAISE EXCEPTION 'TEST FAILED: temp pg_roles made mwf_app the migrator';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 13a temp-view pg_roles attack: anonymize another user still refused: %', SQLERRM;
   END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000d1', true);
   BEGIN
     PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e1', 'x');
-    RAISE EXCEPTION 'TEST FAILED: mwf_app ran need_share';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13b need_share stays the job''s (refused by the missing EXECUTE grant): %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: D shared C''s need';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13b need_share is its owner''s: another participant is refused (temp pg_roles too): %', SQLERRM;
   END;
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   IF app.is_member('00000000-0000-7e00-8000-0000000005e1') THEN
@@ -361,28 +360,15 @@ END $$;
 DROP VIEW pg_temp.pg_roles;
 DROP TABLE pg_temp.participant;
 
--- 13d. need_share's own job check, reached by a non-job caller: grant EXECUTE
---      to mwf_app on this throwaway clone (superuser), call it as mwf_app, revoke.
-\connect - mwf_user
-SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON app.need_share TO mwf_app)';
-GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO mwf_app;
-\connect - mwf_app
-SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- 13d. need_share with no identity bound: nobody's need
 DO $$ BEGIN
-  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
+  PERFORM set_config('app.current_user_id', '', true);
   BEGIN
     PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e1', 'x');
-    RAISE EXCEPTION 'TEST FAILED: need_share ran for mwf_app with EXECUTE granted';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13d need_share refuses a non-job caller by its own check (EXECUTE granted): %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: need_share ran with no identity';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13d need_share refuses a caller with no identity: %', SQLERRM;
   END;
 END $$;
-\connect - mwf_user
-SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.need_share FROM mwf_app)';
-REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM mwf_app;
-\connect - mwf_app
-SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 
 -- 14. A review by a non-subject is refused (I5). Since work-k5fk.3 (6a) by key, not by the retired t_review_subject:
 -- empathy_review (attempt_id, session_id, reviewer_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).
@@ -408,27 +394,35 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
-\connect - mwf_user
-SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.anonymize_* FROM mwf_app)';
-REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) FROM mwf_app;
-
--- ============================ as mwf_job ======================================
-\connect - mwf_job
-SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
--- 16. need_share is idempotent and refuses a deleted need
+-- 16. need_share, by the need's owner (consent.ts / needs-share.ts): idempotent; a need without the owner's GRANTED
+--     consent is refused; a missing need is nobody's
 DO $$ DECLARE n int; BEGIN
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
   PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e1', 'again');
   SELECT count(*) INTO n FROM need_share WHERE need_id = '00000000-0000-7e00-8000-0000000000e1';
   IF n <> 1 THEN RAISE EXCEPTION 'TEST FAILED: need_share not idempotent (% rows)', n; END IF;
-  RAISE NOTICE 'PASS 16a need_share on an already shared need is a no-op';
+  RAISE NOTICE 'PASS 16a need_share by its owner on an already shared need is a no-op';
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000d1', true);
+  BEGIN
+    PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e5', 'x');
+    RAISE EXCEPTION 'TEST FAILED: need_share without the owner''s GRANTED consent';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 16c need_share refuses the owner''s need without a GRANTED consent: %', SQLERRM;
+  END;
+END $$;
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
   BEGIN
     PERFORM app.need_share('00000000-0000-7e00-8000-0000000000ff', 'x');
     RAISE EXCEPTION 'TEST FAILED: need_share on a missing need';
-  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 16b need_share refuses a missing/deleted/superseded need: %', SQLERRM;
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 16b need_share refuses a missing need (it is nobody''s): %', SQLERRM;
   END;
 END $$;
+-- 17 and 24 read what mwf_app cannot (brain_activity, user_identity), so they run on a superuser connection and
+-- make the call itself as mwf_app (SET SESSION AUTHORIZATION: session_user is then mwf_app, as the definers' app
+-- arm reads it), with the leaver's / the account's own identity.
+\connect - mwf_user
 
--- 17. ruling R17 (rolled back): anonymize_user_in_session also deletes the
+-- 17. ruling R17 (rolled back; D leaves X on its own request, as mwf_app): anonymize_user_in_session also deletes the
 --     session's NULL-participant brain_activity rows — history that cannot
 --     be attributed (…ba1 in X). History of other sessions (…ba2 in S) and
 --     reflection telemetry (…ba3, no session) stay.
@@ -440,7 +434,10 @@ DO $$ DECLARE x_before int; s_before int; refl_before int; BEGIN
   IF x_before = 0 OR s_before = 0 OR refl_before = 0 THEN
     RAISE EXCEPTION 'TEST FAILED: setup — expected NULL-participant history in X (%), in S (%) and reflection telemetry (%)', x_before, s_before, refl_before;
   END IF;
+  EXECUTE 'SET SESSION AUTHORIZATION mwf_app';
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000d1', true);
   PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1');
+  EXECUTE 'RESET SESSION AUTHORIZATION';
   IF EXISTS (SELECT 1 FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_user_id IS NULL) THEN
     RAISE EXCEPTION 'TEST FAILED: NULL-participant brain_activity of the session survived anonymize_user_in_session';
   END IF;
@@ -453,16 +450,19 @@ DO $$ DECLARE x_before int; s_before int; refl_before int; BEGIN
 END $$;
 ROLLBACK;
 
--- 24. work-k5fk.1/.3 (rolled back): the walk deletes the account's identities and
+-- 24. work-k5fk.1/.3 (rolled back; D deletes its own account, as mwf_app): the walk deletes the account's identities and
 --     scrubs its personas; the AI row and a persona are never an account to delete.
 BEGIN;
 DO $$ BEGIN
+  EXECUTE 'SET SESSION AUTHORIZATION mwf_app';
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000d1', true);
   PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000d1');
+  EXECUTE 'RESET SESSION AUTHORIZATION';
   IF EXISTS (SELECT 1 FROM user_identity WHERE user_id = '00000000-0000-7e00-8000-0000000000d1') THEN
     RAISE EXCEPTION 'TEST FAILED: the walk left a user_identity of the tombstone';
   END IF;
   RAISE NOTICE 'PASS 24a the walk deletes the account''s user_identity rows';
-  -- mwf_job reads first_name and deleted_at (not last_name); the walk NULLs both names in one SET
+  -- the walk NULLs both names in one SET
   IF (SELECT row(first_name, deleted_at IS NOT NULL)::text FROM "user" WHERE id = '00000000-0000-7e00-8000-0000000000a9')
      IS DISTINCT FROM '(,t)' THEN
     RAISE EXCEPTION 'TEST FAILED: the owner''s persona was not scrubbed';
@@ -473,13 +473,16 @@ DO $$ BEGIN
   RAISE NOTICE 'PASS 24b the owner''s persona is scrubbed (names NULL, soft-deleted) and kept';
 END $$;
 ROLLBACK;
-\connect - mwf_job
+\connect - mwf_app
 DO $$ BEGIN
+  -- the walk's self arm with the AI's / the persona's own id as the identity: still not an account
+  PERFORM set_config('app.current_user_id', app.ai_user_id()::text, true);
   BEGIN
     PERFORM app.anonymize_user_account(app.ai_user_id());
     RAISE EXCEPTION 'TEST FAILED: anonymize_user_account ran on the AI row';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 24c the AI row is not an account: %', SQLERRM;
   END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a9', true);
   BEGIN
     PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000a9');
     RAISE EXCEPTION 'TEST FAILED: anonymize_user_account ran on a persona';
@@ -670,7 +673,7 @@ END $$;
 --     MWA03 not archivable), so each arm below catches exactly its code — a
 --     grant drift (42501) or an unrelated CHECK (23514) would stop the run.
 --     mwf_app holds no UPDATE of session.status; app.session_set_status
---     archives only for the job (retention); a job login cannot call
+--     archives only for a worker (retention); a worker login cannot call
 --     session_archive. Setup (superuser): D leaves X (RESOLVED, so
 --     T-cardinality-2 allows it); Y (…05e2), a CREATED session started by C
 --     alone, so D shared a session with C (X) but never joined Y (work-k5fk.2:
@@ -740,12 +743,12 @@ DO $$ DECLARE v_con text; BEGIN
     IF SQLERRM <> 'permission denied for table session' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 19h mwf_app cannot UPDATE session.archived_at: %', SQLERRM;
   END;
-  -- 19l. a current participant cannot archive through session_set_status either (→ ARCHIVED is the job's)
+  -- 19l. a current participant cannot archive through session_set_status either (→ ARCHIVED is the worker's)
   BEGIN
     PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ARCHIVED');
     RAISE EXCEPTION 'TEST FAILED: a participant archived through session_set_status';
   EXCEPTION WHEN insufficient_privilege THEN
-    IF SQLERRM NOT LIKE 'only the job archives through session_set_status%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'only a worker archives through session_set_status%' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 19l a current participant cannot archive through session_set_status: %', SQLERRM;
   END;
   -- 19m. session_check1: mwf_app cannot INSERT an ARCHIVED session (no archived_at)
@@ -781,40 +784,45 @@ DO $$ DECLARE v_at timestamptz; BEGIN
   EXCEPTION WHEN SQLSTATE 'MWA03' THEN RAISE NOTICE 'PASS 19j an ARCHIVED session is not archived again (MWA03): %', SQLERRM;
   END;
 END $$;
-\connect - mwf_job
+\connect - mwf_worker
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-DO $$ DECLARE v_con text; BEGIN
-  -- 19n. a job login cannot archive for a user: since work-k5fk.10.4 the owner is the NOLOGIN mwf_definer, so the
-  --      job holds no EXECUTE at all (the function's own session_user refusal is the second wall)
+DO $$ BEGIN
+  -- 19n. a worker login cannot archive for a user: it holds no EXECUTE on session_archive (the function's own
+  --      app_access refusal is the second wall)
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e6');
-    RAISE EXCEPTION 'TEST FAILED: a job login archived through session_archive';
+    RAISE EXCEPTION 'TEST FAILED: a worker login archived through session_archive';
   EXCEPTION WHEN insufficient_privilege THEN
     IF SQLERRM NOT LIKE 'permission denied for function session_archive%' THEN RAISE; END IF;
-    RAISE NOTICE 'PASS 19n a job login cannot call session_archive: %', SQLERRM;
+    RAISE NOTICE 'PASS 19n a worker login cannot call session_archive: %', SQLERRM;
   END;
-  -- 19o. session_check1 holds for the job's own grants (it keeps UPDATE (status) for its row locks): ARCHIVED
-  --      without archived_at
+  -- 19o. the worker writes no session column directly: status moves through session_set_status (work-k5fk.10.5:
+  --      mwf_job kept UPDATE (status) for its row locks; neither mwf_worker nor mwf_ai holds it)
   BEGIN
     UPDATE session SET status = 'ARCHIVED' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
-    RAISE EXCEPTION 'TEST FAILED: the job set ARCHIVED without archived_at';
-  EXCEPTION WHEN check_violation THEN
-    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
-    IF v_con <> 'session_check1' THEN RAISE; END IF;
-    RAISE NOTICE 'PASS 19o the job''s UPDATE to ARCHIVED without archived_at refused by %', v_con;
+    RAISE EXCEPTION 'TEST FAILED: the worker updated session.status directly';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS 19o the worker cannot UPDATE session.status directly: %', SQLERRM;
   END;
   -- 19p. the archive columns are written only through session_set_status / session_archive (work-k5fk.10.4:
-  --      their UPDATE grant is mwf_definer's): a direct UPDATE by the job is refused
+  --      their UPDATE grant is mwf_definer's): a direct UPDATE by the worker is refused
   BEGIN
     UPDATE session SET archived_by_user_id = '00000000-0000-7e00-8000-0000000000a1' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
-    RAISE EXCEPTION 'TEST FAILED: the job updated session.archived_by_user_id directly';
+    RAISE EXCEPTION 'TEST FAILED: the worker updated session.archived_by_user_id directly';
   EXCEPTION WHEN insufficient_privilege THEN
-    RAISE NOTICE 'PASS 19p the job cannot UPDATE the archive columns directly: %', SQLERRM;
+    RAISE NOTICE 'PASS 19p the worker cannot UPDATE the archive columns directly: %', SQLERRM;
+  END;
+  -- 19r. the worker's arm of session_set_status needs the session in app.session_scope (Q20)
+  PERFORM set_config('app.session_scope', '', true);
+  BEGIN
+    PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e6', 'ABANDONED');
+    RAISE EXCEPTION 'TEST FAILED: the worker moved a session without a scope';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 19r the worker cannot move a session outside its app.session_scope: %', SQLERRM;
   END;
 END $$;
 -- 19q. session_check1 / session_check2 bind every writer, the superuser too: ARCHIVED without archived_at, an
---      archiver on a session that is not archived (before work-k5fk.10.4 shown with the job's own UPDATE grants)
+--      archiver on a session that is not archived (before work-k5fk.10.4 shown with mwf_job's own UPDATE grants)
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (session_check1 / session_check2)';
 DO $$ DECLARE v_con text; BEGIN
@@ -835,20 +843,21 @@ DO $$ DECLARE v_con text; BEGIN
     RAISE NOTICE 'PASS 19q an archiver without archived_at refused by %', v_con;
   END;
 END $$;
--- 19k. the job (session-retention.ts) still archives through session_set_status: archived_at, no archiver;
---      and the retention purge of an archived session is not blocked by the archive columns. On W (…05e7), a
---      CREATED session made for it, and X (…05e1, archived by D in 19i), neither used below, so it is committed:
---      the job cannot read the archive columns (work-k5fk.10.4), so the superuser checks them after.
+-- 19k. the worker (session-retention.ts) archives through session_set_status, scoped to the session: archived_at,
+--      no archiver; and the retention purge of an archived session is not blocked by the archive columns. On W
+--      (…05e7), a CREATED session made for it, and X (…05e1, archived by D in 19i), neither used below, so it is
+--      committed: the worker cannot read the archive columns (work-k5fk.10.4), so the superuser checks them after.
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: session W for 19k)';
 INSERT INTO session (id, status) VALUES ('00000000-0000-7e00-8000-0000000005e7', 'CREATED');
-\connect - mwf_job
+\connect - mwf_worker
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 DO $$ BEGIN
+  PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e7', true);
   PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e7', 'ABANDONED');
   PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e7', 'ARCHIVED');
   IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e7' AND status = 'ARCHIVED') THEN
-    RAISE EXCEPTION 'TEST FAILED: the job''s archive did not archive';
+    RAISE EXCEPTION 'TEST FAILED: the worker''s archive did not archive';
   END IF;
   DELETE FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1';
   IF EXISTS (SELECT 1 FROM participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e1') THEN
@@ -856,13 +865,13 @@ DO $$ BEGIN
   END IF;
 END $$;
 \connect - mwf_user
-SELECT 'connected as ' || session_user || ' (19k: the archive columns the job wrote)';
+SELECT 'connected as ' || session_user || ' (19k: the archive columns the worker wrote)';
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e7' AND status = 'ARCHIVED'
                  AND archived_at IS NOT NULL AND archived_by_user_id IS NULL) THEN
-    RAISE EXCEPTION 'TEST FAILED: the job''s archive did not stamp archived_at alone';
+    RAISE EXCEPTION 'TEST FAILED: the worker''s archive did not stamp archived_at alone';
   END IF;
-  RAISE NOTICE 'PASS 19k the job archives (archived_at, no archiver); purging a participant-archived session cascades';
+  RAISE NOTICE 'PASS 19k the worker archives (archived_at, no archiver); purging a participant-archived session cascades';
 END $$;
 
 -- 20. session_set_status's member arm is CURRENT participants only (work-k5fk.10.12 review):
@@ -1057,11 +1066,13 @@ EXCEPTION WHEN SQLSTATE 'MWJ01' THEN
 END $$;
 ROLLBACK;
 
--- 27. ai_memory.doc's structure is validated per kind (json_schema ai_memory.<kind> v1), as mwf_job
+-- 27. ai_memory.doc's structure is validated per kind (json_schema ai_memory.<kind> v1), as mwf_ai
 --     (the summarizer and the partner-session classifier write it: INSERT … ON CONFLICT DO UPDATE)
-\connect - mwf_job
+\connect - mwf_ai
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- The AI's arm needs the session in app.session_scope (work-k5fk.10.5, Q20); session-wide here, transaction-local in the app.
+SELECT set_config('app.session_scope', :'r_session', false) \g /dev/null
 DO $$ DECLARE v_msg text; BEGIN
   -- the summarizer's document (conversation-summarizer.ts updateSessionSummary), every key it writes
   INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'SUMMARY',
@@ -1105,16 +1116,25 @@ DO $$ DECLARE v_msg text; BEGIN
     IF SQLERRM NOT LIKE '%ai_memory.notable_facts v1: $.facts[1]: missing required key fact' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 27c a fact without its text is refused: %', SQLERRM;
   END;
-  -- 27h. mwf_job writes doc only: never kind or the version
+  -- 27h. mwf_ai writes doc only: never kind or the version
   BEGIN
     UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.a_user')::uuid AND kind = 'SUMMARY';
-    RAISE EXCEPTION 'TEST FAILED: mwf_job changed a kind';
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai changed a kind';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
   BEGIN
     UPDATE ai_memory SET doc_schema_version = 1 WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.a_user')::uuid;
-    RAISE EXCEPTION 'TEST FAILED: mwf_job wrote doc_schema_version';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 27h mwf_job cannot UPDATE ai_memory.kind or doc_schema_version: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai wrote doc_schema_version';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 27h mwf_ai cannot UPDATE ai_memory.kind or doc_schema_version: %', SQLERRM;
+  END;
+  -- 27j. the scope is required: outside it, the AI's document is refused (t_session_scope)
+  PERFORM set_config('app.session_scope', '', true);
+  BEGIN
+    INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'SUMMARY',
+      '{"text": "s", "messageCount": 1, "generatedAt": "g"}')
+      ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc;
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote ai_memory with no app.session_scope';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 27j the AI cannot write ai_memory without app.session_scope: %', SQLERRM;
   END;
 END $$;
 -- 27d. GLOBAL_FACTS through mwf_app (global-memory.ts consolidateGlobalFacts writes it with a raw INSERT … ON CONFLICT
@@ -1215,7 +1235,7 @@ BEGIN
   END;
   RAISE NOTICE 'PASS 28b plaintext in, a malformed ciphertext in, a key beside, a non-string and a non-object envelope are refused (% cases and the INSERT arm), naming the reason and never the value (no DETAIL)', i;
 END $$;
--- 28c. the four other envelope columns, with the job's and the superuser's writes (rolled back)
+-- 28c. the four other envelope columns, with the superuser's writes (rolled back)
 \connect - mwf_user
 BEGIN;
 DO $$ DECLARE v_detail text; v_n int := 0; BEGIN
@@ -1250,7 +1270,7 @@ DO $$ DECLARE v_detail text; v_n int := 0; BEGIN
 END $$;
 ROLLBACK;
 
--- 29. app.json_schema is reference data: mwf_app and mwf_job read it (the invoker-rights triggers
+-- 29. app.json_schema is reference data: mwf_app and mwf_ai read it (the invoker-rights triggers
 --     do) and write nothing.
 \connect - mwf_app
 DO $$ BEGIN
@@ -1267,12 +1287,12 @@ DO $$ BEGIN
   END;
   RAISE NOTICE 'PASS 29a mwf_app reads the 4 schemas and can neither add nor rewrite one';
 END $$;
-\connect - mwf_job
+\connect - mwf_ai
 DO $$ BEGIN
   BEGIN
     DELETE FROM app.json_schema WHERE name = 'user_preferences';
-    RAISE EXCEPTION 'TEST FAILED: mwf_job deleted a schema';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 29b mwf_job cannot delete a schema: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: mwf_ai deleted a schema';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 29b mwf_ai cannot delete a schema: %', SQLERRM;
   END;
 END $$;
 -- 29c. a schema outside the subset cannot be seeded (the migrator's INSERT, rolled back)
@@ -1285,6 +1305,318 @@ EXCEPTION WHEN check_violation THEN
   GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
   IF v_con <> 'json_schema_schema_check' THEN RAISE; END IF;
   RAISE NOTICE 'PASS 29c a schema with an unsupported keyword is refused by %', v_con;
+END $$;
+ROLLBACK;
+
+
+-- 30. work-k5fk.10.5: the request path's two-party writes are definers (design note §7 row 9b). On S (…05e6): A (…a1,
+--     conversation …08a1) and B (…b1, …08b1); att_a is A→B (subject B), att_b is B→A (subject A). Rolled back. Each
+--     refusal is pinned by its control: the same call with only the checked fact changed succeeds. The setup is the
+--     superuser's (both rounds REVEALED, an ACTIVE session); every call runs as mwf_app (SET SESSION AUTHORIZATION:
+--     session_user is mwf_app, as the definers' app arm reads it), with the identity bound per call.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (30: setup as the superuser, the calls as mwf_app)';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- The latest round of each direction (test 10 resubmitted one; the earlier rounds are history).
+SELECT set_config('t.att_a', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.a_user')::uuid ORDER BY e.round DESC LIMIT 1), false),
+       set_config('t.att_b', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.b_user')::uuid ORDER BY e.round DESC LIMIT 1), false) \g /dev/null
+BEGIN;
+UPDATE session SET status = 'ACTIVE', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
+UPDATE participant SET left_at = NULL WHERE session_id = current_setting('t.r_session')::uuid;
+UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now() - interval '1 hour'),
+       delivery_status = 'PENDING', delivered_at = NULL, seen_at = NULL
+WHERE id IN (current_setting('t.att_a')::uuid, current_setting('t.att_b')::uuid);
+INSERT INTO invitation (id, session_id, invited_by_user_id, status, expires_at)
+VALUES ('00000000-0000-7e00-8000-0000000006f1', current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid,
+        'DECLINED', now() + interval '1 day');
+SET SESSION AUTHORIZATION mwf_app;
+DO $$ DECLARE v_seq int; v_sender uuid; v_at timestamptz; v_n int;
+  conv_a uuid := '00000000-0000-7e00-8000-0000000008a1'; conv_b uuid := '00000000-0000-7e00-8000-0000000008b1';
+  a uuid := current_setting('t.a_user')::uuid; b uuid := current_setting('t.b_user')::uuid;
+  att_a uuid := current_setting('t.att_a')::uuid; att_b uuid := current_setting('t.att_b')::uuid;
+  s uuid := current_setting('t.r_session')::uuid;
+BEGIN
+  -- 30a. A, the subject of B's revealed round, delivers feedback on it into B's conversation: role USER, sender A
+  PERFORM set_config('app.current_user_id', a::text, true);
+  SELECT d.seq INTO v_seq FROM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'feedback from A', att_b, NULL) d;
+  SELECT m.sender_user_id INTO v_sender FROM message m WHERE m.conversation_id = conv_b AND m.seq = v_seq;
+  IF v_sender IS DISTINCT FROM a THEN RAISE EXCEPTION 'TEST FAILED: the delivery is not A''s'; END IF;
+  RAISE NOTICE 'PASS 30a the subject delivers feedback on a revealed round into its author''s conversation (seq %)', v_seq;
+  -- 30b. the identity is the check that refuses: A cannot deliver as B (B present, B's feedback on att_a into A's
+  --      conversation); the same call with B's identity is delivered
+  BEGIN
+    PERFORM app.deliver_message(conv_a, b, 'VALIDATION_FEEDBACK', 'x', att_a, NULL);
+    RAISE EXCEPTION 'TEST FAILED: A delivered as B';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30b an item is delivered only as the caller: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', b::text, true);
+  PERFORM app.deliver_message(conv_a, b, 'VALIDATION_FEEDBACK', 'feedback from B', att_a, NULL);
+  RAISE NOTICE 'PASS 30b control: the same delivery as B, the identity, is written';
+  PERFORM set_config('app.current_user_id', a::text, true);
+  -- 30c. never into one's own conversation; never a kind but VALIDATION_FEEDBACK from the request path (F1)
+  BEGIN
+    PERFORM app.deliver_message(conv_a, a, 'VALIDATION_FEEDBACK', 'x', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: A delivered into their own conversation';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30c a delivery goes into another participant''s conversation: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'SHARED_CONTEXT', 'x', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the app delivered SHARED_CONTEXT';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30d the app delivers VALIDATION_FEEDBACK only (SHARED_CONTEXT: %)', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'EMPATHY_STATEMENT', 'x', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the app delivered an EMPATHY_STATEMENT';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30d the app delivers VALIDATION_FEEDBACK only (EMPATHY_STATEMENT: %)', SQLERRM;
+  END;
+  -- 30e. the source must be a revealed round whose subject is the caller and whose author owns the conversation
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', NULL, NULL);
+    RAISE EXCEPTION 'TEST FAILED: feedback with no source round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30e feedback names its round: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', att_a, NULL);
+    RAISE EXCEPTION 'TEST FAILED: feedback on a round A is not the subject of';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30e feedback only by the round''s subject: %', SQLERRM;
+  END;
+  -- 30f. the instant is bounded: neither backdated nor in the future (F1)
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', att_b, '2001-01-01');
+    RAISE EXCEPTION 'TEST FAILED: a backdated delivery';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30f a backdated instant is refused: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', att_b, now() + interval '1 hour');
+    RAISE EXCEPTION 'TEST FAILED: a future delivery';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30f a future instant is refused: %', SQLERRM;
+  END;
+  -- 30g. an outsider delivers into nobody's conversation
+  PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
+  BEGIN
+    PERFORM app.deliver_message(conv_b, current_setting('t.outsider')::uuid, 'VALIDATION_FEEDBACK', 'x', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: an outsider delivered';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30g an outsider cannot deliver: %', SQLERRM;
+  END;
+  -- 30h. A reaches a system milestone for B, once; never a self-assertable one; an outsider reaches none
+  PERFORM set_config('app.current_user_id', a::text, true);
+  IF NOT app.reach_milestone(s, b, 'closed') THEN RAISE EXCEPTION 'TEST FAILED: reach_milestone recorded nothing'; END IF;
+  IF app.reach_milestone(s, b, 'closed') THEN RAISE EXCEPTION 'TEST FAILED: reach_milestone recorded twice'; END IF;
+  RAISE NOTICE 'PASS 30h a participant reaches a system milestone for the partner, once';
+  BEGIN
+    PERFORM app.reach_milestone(s, b, 'compact_signed');
+    RAISE EXCEPTION 'TEST FAILED: A asserted B''s self-assertable milestone';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30h a self-assertable milestone is never reached through reach_milestone: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
+  BEGIN
+    PERFORM app.reach_milestone(s, b, 'paused');
+    RAISE EXCEPTION 'TEST FAILED: an outsider reached a milestone';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30h an outsider reaches no milestone: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.session_resume(s);
+    RAISE EXCEPTION 'TEST FAILED: an outsider resumed a session';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30i an outsider cannot resume a session: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.share_offers_expire(s, ARRAY[a, b]);
+    RAISE EXCEPTION 'TEST FAILED: an outsider expired the offers';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30i an outsider cannot expire a session''s offers: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', a::text, true);
+  PERFORM app.share_offers_expire(s, ARRAY[a, b]);
+  RAISE NOTICE 'PASS 30i control: a participant expires the session''s open offers';
+  -- 30j. a caller's own sign-in subject, never another's
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
+  IF app.identity_subject('clerk') IS DISTINCT FROM 'user_ts7cAda' THEN RAISE EXCEPTION 'TEST FAILED: identity_subject is not Ada''s'; END IF;
+  PERFORM set_config('app.current_user_id', '', true);
+  IF app.identity_subject('clerk') IS NOT NULL THEN RAISE EXCEPTION 'TEST FAILED: identity_subject with no identity'; END IF;
+  RAISE NOTICE 'PASS 30j identity_subject reads the caller''s own subject only';
+  -- 30k. the subject stamps the delivery of the author's revealed round; the author cannot; stamps only move forward
+  --      and their instant is bounded (F10)
+  PERFORM set_config('app.current_user_id', b::text, true);
+  BEGIN
+    PERFORM app.empathy_mark_delivery(att_b, 'SEEN');
+    RAISE EXCEPTION 'TEST FAILED: the author stamped their own attempt';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30k only the subject stamps an attempt''s delivery: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', a::text, true);
+  PERFORM app.empathy_mark_delivery(att_b, 'SEEN', '1999-01-01');
+  PERFORM app.empathy_mark_delivery(att_b, 'DELIVERED');
+  SELECT e.seen_at INTO v_at FROM empathy_attempt e WHERE e.id = att_b;
+  IF (SELECT e.delivery_status::text FROM empathy_attempt e WHERE e.id = att_b) <> 'SEEN' THEN
+    RAISE EXCEPTION 'TEST FAILED: SEEN was downgraded to DELIVERED';
+  END IF;
+  IF v_at < now() - interval '11 minutes' THEN RAISE EXCEPTION 'TEST FAILED: the stamp was backdated to %', v_at; END IF;
+  RAISE NOTICE 'PASS 30l the subject stamps SEEN; a later DELIVERED does not downgrade it; the instant is not backdated';
+  -- 30m. the session of a declined invitation ends only while it is CREATED / INVITED: an ACTIVE one is left alone
+  PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
+  PERFORM app.session_abandon_declined('00000000-0000-7e00-8000-0000000006f1');
+  IF (SELECT st.status::text FROM session st WHERE st.id = s) <> 'ACTIVE' THEN
+    RAISE EXCEPTION 'TEST FAILED: a declined invitation ended an ACTIVE session';
+  END IF;
+  RAISE NOTICE 'PASS 30m a declined invitation leaves an ACTIVE session alone';
+END $$;
+RESET SESSION AUTHORIZATION;
+-- 30n. stamping a round that was never revealed is refused (F10): B's round back to READY, A tries
+UPDATE empathy_attempt SET status = 'READY', revealed_at = NULL, delivery_status = 'PENDING', seen_at = NULL
+WHERE id = current_setting('t.att_b')::uuid;
+SET SESSION AUTHORIZATION mwf_app;
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  BEGIN
+    PERFORM app.empathy_mark_delivery(current_setting('t.att_b')::uuid, 'SEEN');
+    RAISE EXCEPTION 'TEST FAILED: an unrevealed round was stamped';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30n an unrevealed round is never stamped: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008b1', current_setting('t.a_user')::uuid,
+                                'VALIDATION_FEEDBACK', 'x', current_setting('t.att_b')::uuid, NULL);
+    RAISE EXCEPTION 'TEST FAILED: feedback on an unrevealed round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30n feedback only on a revealed round: %', SQLERRM;
+  END;
+END $$;
+ROLLBACK;
+
+-- 31. app.session_scope is required for the AI (t_session_scope, Q20): as mwf_ai, an AI line goes only into the
+--     session its transaction names, and the AI never writes a participant's line. Rolled back.
+\connect - mwf_ai
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+BEGIN;
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'no scope');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote with no app.session_scope';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31a no scope, no AI write: %', SQLERRM;
+  END;
+  PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e1', true);
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'other scope');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote outside its scope';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b another session''s scope, no AI write: %', SQLERRM;
+  END;
+  PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e6', true);
+  INSERT INTO message (conversation_id, session_id, role, kind, content)
+  VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'in scope');
+  RAISE NOTICE 'PASS 31c the AI writes its line in its scope';
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, sender_user_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000a1',
+            'USER', 'CHAT', 'as A');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote a participant''s line';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31d the AI never writes a participant''s line: %', SQLERRM;
+  END;
+END $$;
+ROLLBACK;
+
+-- 32. the AI's definer arms do only what its call sites do (F2, F3): on S, scoped. Rolled back.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (32: setup as the superuser, the calls as mwf_ai)';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- The latest round of each direction (test 10 resubmitted one; the earlier rounds are history).
+SELECT set_config('t.att_a', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.a_user')::uuid ORDER BY e.round DESC LIMIT 1), false),
+       set_config('t.att_b', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.b_user')::uuid ORDER BY e.round DESC LIMIT 1), false) \g /dev/null
+BEGIN;
+UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now() - interval '1 hour')
+WHERE id = current_setting('t.att_a')::uuid;
+UPDATE empathy_attempt SET status = 'HELD', revealed_at = NULL WHERE id = current_setting('t.att_b')::uuid;
+SET SESSION AUTHORIZATION mwf_ai;
+DO $$ BEGIN
+  PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  -- 32a. the AI never resubmits a round (SUPERSEDED writes the author's next round) nor reviews a revealed one
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'SUPERSEDED', 'AI WROTE THIS');
+    RAISE EXCEPTION 'TEST FAILED: the AI resubmitted a round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32a the AI cannot supersede a round: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'VALIDATED');
+    RAISE EXCEPTION 'TEST FAILED: the AI validated a revealed round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32a the AI cannot validate a revealed round: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'REFINING');
+    RAISE EXCEPTION 'TEST FAILED: the AI sent a revealed round back to refining';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32a the AI cannot move a revealed round to REFINING: %', SQLERRM;
+  END;
+  -- control: the reconciler's own move
+  PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'READY');
+  RAISE NOTICE 'PASS 32a control: the AI moves a HELD round to READY';
+  -- 32b. the AI delivers only SHARED_CONTEXT, and only for an ACCEPTED offer whose subject is the sender (F3)
+  BEGIN
+    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', current_setting('t.b_user')::uuid,
+                                'EMPATHY_STATEMENT', 'as B', current_setting('t.att_b')::uuid, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the AI delivered an EMPATHY_STATEMENT';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32b the AI delivers SHARED_CONTEXT only: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', current_setting('t.b_user')::uuid,
+                                'SHARED_CONTEXT', 'as B', NULL, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the AI delivered shared context with no accepted offer';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32b shared context needs the sender''s ACCEPTED offer: %', SQLERRM;
+  END;
+END $$;
+ROLLBACK;
+
+-- 33. the worker (F6): its session_set_status arm only ends sessions; its purge only deletes ARCHIVED sessions; its
+--     follow_up INSERT is scoped. On S. Rolled back.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (33: setup as the superuser, the calls as mwf_worker)';
+SELECT set_config('t.r_session', :'r_session', false) \g /dev/null
+BEGIN;
+UPDATE session SET status = 'INVITED', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
+SET SESSION AUTHORIZATION mwf_worker;
+DO $$ BEGIN
+  PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  BEGIN
+    PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ACTIVE');
+    RAISE EXCEPTION 'TEST FAILED: the worker activated a session';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33a the worker cannot move a session to ACTIVE: %', SQLERRM;
+  END;
+  BEGIN
+    DELETE FROM session WHERE id = current_setting('t.r_session')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: the worker deleted a live session';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33b the worker purges only ARCHIVED sessions: %', SQLERRM;
+  END;
+  PERFORM set_config('app.session_scope', '', true);
+  BEGIN
+    INSERT INTO follow_up (session_id, type, scope, status, scheduled_for, summary)
+    VALUES (current_setting('t.r_session')::uuid, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED', 'SCHEDULED', now(), 'unscoped');
+    RAISE EXCEPTION 'TEST FAILED: the worker scheduled a follow-up with no scope';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33c the worker''s follow_up INSERT is scoped: %', SQLERRM;
+  END;
+  -- control: ending the session is the worker's
+  PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ABANDONED');
+  RAISE NOTICE 'PASS 33a control: the worker abandons the session in its scope';
+END $$;
+ROLLBACK;
+
+-- 34. account deletion of a participant who already left a live session (F8): the walk ends the session itself. On S:
+--     B left (left_at), S still ACTIVE, B deletes the account as mwf_app. Rolled back.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (34: setup as the superuser, the call as mwf_app)';
+SELECT set_config('t.b_user', :'b_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+BEGIN;
+UPDATE session SET status = 'ACTIVE', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
+UPDATE participant SET left_at = now() - interval '1 day'
+WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.b_user')::uuid;
+DO $$ BEGIN
+  EXECUTE 'SET SESSION AUTHORIZATION mwf_app';
+  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
+  PERFORM app.anonymize_user_account(current_setting('t.b_user')::uuid);
+  EXECUTE 'RESET SESSION AUTHORIZATION';
+  IF (SELECT st.status::text FROM session st WHERE st.id = current_setting('t.r_session')::uuid) <> 'ABANDONED' THEN
+    RAISE EXCEPTION 'TEST FAILED: the leaver''s live session was not ended by the walk';
+  END IF;
+  RAISE NOTICE 'PASS 34 a participant who already left a live session deletes the account; the walk ends the session';
 END $$;
 ROLLBACK;
 

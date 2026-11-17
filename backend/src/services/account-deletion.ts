@@ -2,7 +2,7 @@
  * Account Deletion Service — the tombstone walk (TS-12; spec §4
  * `app.anonymize_user_account` "the complete walk", P3 D9).
  *
- * The walk is ONE SQL function, run by the JOB (`mwf_job`, the principal for
+ * The walk is ONE SQL function, run on the user's own request (mwf_app, the definer's self arm; until work-k5fk.10.5 the JOB, `mwf_job`, the principal for
  * work that crosses participants — R35) as one statement, so it is one
  * transaction: every live session → ABANDONED; each of the user's
  * participants loses its display name and leaves; the leaver's private-only
@@ -26,7 +26,7 @@
  * Clerk identity.
  */
 
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { publishSessionEvent } from './realtime';
 
@@ -74,16 +74,16 @@ export async function deleteAccountWithNotifications(userId: string): Promise<Ac
     select: { sessionId: true },
   });
   const dataRecordsDeleted = await countPrivateRows(userId);
-  // The Clerk subject, read by the job before the walk deletes the identity
-  // (mwf_app holds nothing on user_identity; work-k5fk.1).
-  const identity = await getJobPrisma().userIdentity.findUnique({
-    where: { userId_provider: { userId, provider: 'clerk' } },
-    select: { subject: true },
-  });
-  const clerkId = identity?.subject;
+  // The caller's own Clerk subject, read before the walk deletes the identity (mwf_app holds
+  // nothing on user_identity, work-k5fk.1: app.identity_subject reads the caller's one row;
+  // work-k5fk.10.5: was the job's read).
+  const [identity] = await prisma.$queryRaw<
+    Array<{ subject: string | null }>
+  >`SELECT app.identity_subject('clerk'::identity_provider) AS subject`;
+  const clerkId = identity?.subject ?? undefined;
 
-  // The walk: one statement, one transaction, as the job
-  await getJobPrisma().$executeRaw`SELECT app.anonymize_user_account(${userId}::uuid)`;
+  // The walk: one statement, one transaction, the caller's own (app.anonymize_user_account's self arm)
+  await prisma.$executeRaw`SELECT app.anonymize_user_account(${userId}::uuid)`;
 
   // After the commit: tell each live session's other side that it ended.
   // The event carries no private content (R36) and no name (fix round 1, M1):

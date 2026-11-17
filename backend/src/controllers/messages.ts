@@ -11,7 +11,7 @@ import { loadSessionPartner } from '../services/contacts';
 import { Request, Response } from 'express';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getAiPrisma, prisma } from '../lib/prisma';
 import { withSerializableRetry } from '../lib/serializable-retry';
 import { getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
 import { buildInitialMessagePrompt, buildStagePromptString } from '../services/stage-prompts';
@@ -193,10 +193,10 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
 
         // If user has joined but session status is still INVITED, move it to
         // ACTIVE — through app.session_set_status, the only writer of
-        // session.status (spec §4), as the job (a two-party fact).
+        // session.status (spec §4), as the current participant who joined
+        // (work-k5fk.10.5: was the job's).
         if (hasJoined && !isCreator) {
-          await getJobPrisma()
-            .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`;
+          await prisma.$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`;
           logger.info(`[confirmFeelHeard] Updated session ${sessionId} status to ACTIVE (user has joined)`);
         }
         // Creator can proceed while session is INVITED
@@ -697,19 +697,19 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Save the AI message (trim whitespace that Claude sometimes adds).
     // This endpoint can be called twice during the Ready/compact transition;
     // make the final write idempotent so concurrent calls do not create twins:
-    // one Serializable transaction on the JOB connection (the facilitator's
-    // rows are the job's) checks the participant's conversation, then writes.
+    // one Serializable transaction on the AI connection (the facilitator's
+    // rows are the AI's, scoped to the seated session) checks the participant's conversation, then writes.
     // The probe is "the conversation holds a line" — its first, by seq (work-k5fk.4).
     // Not "seq 1 exists": a failed first stream turn writes and deletes seq 1, so
     // an empty conversation can start at 2 (step 7 review F1). It reads only the
-    // key — the job may SELECT (conversation_id, seq, created_at) from message
+    // key — the AI may SELECT (conversation_id, seq, created_at) from message
     // (tables.sql) — and the line is re-read on the app connection after the
     // transaction. Two concurrent calls queue on the conversation row
     // (t_message_seq takes the number under its lock); under Serializable the
     // later one loses (P2034, or SQLSTATE 40001 through the raw INSERT) and its
     // retry (withSerializableRetry) finds the line.
     const written = await withSerializableRetry(() =>
-      getJobPrisma().$transaction(
+      getAiPrisma().$transaction(
         async tx => {
           const existing = await tx.message.findFirst({
             where: { conversationId },

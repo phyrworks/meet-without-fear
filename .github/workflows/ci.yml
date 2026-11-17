@@ -144,11 +144,12 @@ jobs:
       NODE_ENV: test
       TZ: UTC
       # Admin (superuser) URL: tooling, the golden harness's template and run
-      # databases, and test DDL. The app, the job and auth log in as their own
-      # roles (lib/database-urls.ts), on the test database owned by mwf_migrator.
+      # databases, and test DDL. The app, the AI, the worker and auth log in as their
+      # own roles (lib/database-urls.ts), on the test database owned by mwf_migrator.
       DATABASE_URL: postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
       APP_DATABASE_URL: postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/mwf_target_test
-      JOB_DATABASE_URL: postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_test
+      AI_DATABASE_URL: postgresql://mwf_ai:mwf_ai_dev@127.0.0.1:5432/mwf_target_test
+      WORKER_DATABASE_URL: postgresql://mwf_worker:mwf_worker_dev@127.0.0.1:5432/mwf_target_test
       AUTH_DATABASE_URL: postgresql://mwf_auth:mwf_auth_dev@127.0.0.1:5432/mwf_target_test
       GOLDEN_DATABASE_URL: postgresql://mwf_user:mwf_password@127.0.0.1:5432/meet_without_fear
       MWF_PG_CONTAINER: mwf-postgres
@@ -205,7 +206,8 @@ jobs:
         run: |
           docker exec -i mwf-postgres psql -X -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear \
             -v migrator_password=mwf_migrator_dev -v app_password=mwf_app_dev \
-            -v job_password=mwf_job_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
+            -v ai_password=mwf_ai_dev -v worker_password=mwf_worker_dev \
+            -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
             <infra/aws/roles.sql
           docker exec -i mwf-postgres psql -X -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear \
             <backend/scripts/d0-check.sql

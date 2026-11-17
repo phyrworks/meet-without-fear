@@ -1,4 +1,4 @@
-import { identityBindingEnabled, keepRequestContextAcrossBatching } from '../prisma-identity';
+import { assertIdentityBindingOn, identityBindingEnabled, keepRequestContextAcrossBatching } from '../prisma-identity';
 import { PrismaClient } from '../../generated/prisma/client';
 import { createPrismaPgAdapter } from '../prisma-pg';
 
@@ -15,6 +15,19 @@ describe('identityBindingEnabled', () => {
 
   it('rejects anything else rather than guessing', () => {
     expect(() => identityBindingEnabled({ DB_IDENTITY_BINDING: 'true' })).toThrow(/DB_IDENTITY_BINDING/);
+  });
+});
+
+// work-k5fk.10.5 review F7 (decided): the definers' app arms and every identity-bound read need the request's
+// identity in the database, so the API refuses to start without it — fail closed, never a silently unbound app.
+describe('assertIdentityBindingOn (startup)', () => {
+  it('refuses to start with identity binding off or unset', () => {
+    expect(() => assertIdentityBindingOn({})).toThrow(/DB_IDENTITY_BINDING=on is required/);
+    expect(() => assertIdentityBindingOn({ DB_IDENTITY_BINDING: 'off' })).toThrow(/DB_IDENTITY_BINDING=on is required/);
+  });
+
+  it('starts with it on', () => {
+    expect(() => assertIdentityBindingOn({ DB_IDENTITY_BINDING: 'on' })).not.toThrow();
   });
 });
 

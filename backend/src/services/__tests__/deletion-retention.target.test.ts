@@ -28,7 +28,7 @@ jest.setTimeout(240_000);
 type Http = Awaited<ReturnType<typeof httpAs>>;
 const DAY = 24 * 60 * 60 * 1000;
 
-describeTarget('deletion and retention on the target (the job as mwf_job, the app as mwf_app)', () => {
+describeTarget('deletion and retention on the target (retention as mwf_worker, deletion as mwf_app)', () => {
   let run: TargetRun;
   let http: Http;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;

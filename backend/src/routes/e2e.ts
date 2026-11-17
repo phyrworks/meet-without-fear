@@ -5,6 +5,7 @@
  * (E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e; lib/e2e-bypass.ts).
  */
 
+import { withSessionScope } from '../lib/request-context';
 import { Router, Request, Response, NextFunction } from 'express';
 import { getE2EToolingPrisma } from '../lib/prisma';
 import { loadFixture } from '../lib/e2e-fixtures';
@@ -456,8 +457,9 @@ export async function triggerE2EReconciler(req: Request, res: Response, next: Ne
       return;
     }
 
-    // Run the reconciler for the specified direction
-    const result = await runReconcilerForDirection(sessionId, guesserId, subjectId);
+    // Run the reconciler for the specified direction — the AI's work on this one session, whose scope
+    // this unseated tooling route names itself (app.session_scope; work-k5fk.10.5).
+    const result = await withSessionScope(sessionId, () => runReconcilerForDirection(sessionId, guesserId, subjectId));
 
     res.status(200).json({
       success: true,

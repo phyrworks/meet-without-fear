@@ -8,14 +8,15 @@
  *   node dist/backend/src/scripts/role-guard-preflight.js   (in the API image)
  *   npx tsx src/scripts/role-guard-preflight.ts              (from backend/)
  *
- * Checks the URL each runtime client would use (database-urls.ts): app and job
- * (each falling back to DATABASE_URL, so a privileged DATABASE_URL fallback is
- * refused too), and ops and auth when their own variable is set. There is no switch to skip it.
+ * Checks the URL each runtime client would use (database-urls.ts): app (falling
+ * back to DATABASE_URL, so a privileged DATABASE_URL fallback is refused too),
+ * ai and worker (required: they never fall back — work-k5fk.10.5), and ops and
+ * auth when their own variable is set. There is no switch to skip it.
  */
 import { DATABASE_URL_VARS, databaseUrlFor, type DatabaseRole } from '../lib/database-urls';
 import { readRoleFactsAt, roleGuardViolations } from '../lib/prisma-role-guard';
 
-const ALWAYS: DatabaseRole[] = ['app', 'job'];
+const ALWAYS: DatabaseRole[] = ['app', 'ai', 'worker'];
 const WHEN_SET: DatabaseRole[] = ['ops', 'auth'];
 
 export async function preflight(env: Record<string, string | undefined> = process.env): Promise<string[]> {
@@ -25,7 +26,13 @@ export async function preflight(env: Record<string, string | undefined> = proces
     if (WHEN_SET.includes(role) && !env[DATABASE_URL_VARS[role]]) continue;
     const url = databaseUrlFor(role, env);
     if (!url) {
-      if (ALWAYS.includes(role)) failures.push(`${role}: neither ${DATABASE_URL_VARS[role]} nor DATABASE_URL is set`);
+      if (ALWAYS.includes(role)) {
+        failures.push(
+          role === 'app'
+            ? `${role}: neither ${DATABASE_URL_VARS[role]} nor DATABASE_URL is set`
+            : `${role}: ${DATABASE_URL_VARS[role]} is not set (it never falls back to DATABASE_URL)`,
+        );
+      }
       continue;
     }
     try {
@@ -50,8 +57,8 @@ if (require.main === module) {
         console.error(
           '  A runtime login owns the schema or reaches a role other than its capability. This release needs the\n' +
             '  ownership move of design note §7 row 9c (work-k5fk): the database and every object owned by\n' +
-            '  mwf_migrator, each runtime login a member of its one capability role only (REVOKE mwf_job FROM\n' +
-            '  mwf_app; infra/aws/roles.sql), and\n' +
+            '  mwf_migrator, each runtime login a member of its one capability role only (infra/aws/roles.sql,\n' +
+            '  which also retires mwf_job — work-k5fk.10.5), and\n' +
             '  migrations run as mwf_migrator. Do that cutover first; nothing here switches the check off.',
         );
       }

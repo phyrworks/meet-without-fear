@@ -163,14 +163,19 @@ export interface Harness {
 }
 
 /**
- * The job login (`mwf_job`) on a run database. Its password is the dev
- * literal from docs/development/local-setup.md (`GOLDEN_JOB_PASSWORD`
- * overrides). Tagged with the app-under-test application_name, so the job's
- * statements are part of the trace like the app's.
+ * The AI login (`mwf_ai`, work-k5fk.10.5) and the worker login (`mwf_worker`) on a run database.
+ * Their passwords are the dev literals from docs/development/local-setup.md (`GOLDEN_AI_PASSWORD`,
+ * `GOLDEN_WORKER_PASSWORD` override). Tagged with the app-under-test application_name, so their
+ * statements are part of the trace like the app's (mwf_job's were, before 9b retired it).
  */
-export function jobUrlFor(t: { host: string; port: number }, database: string): string {
-  const pw = encodeURIComponent(process.env.GOLDEN_JOB_PASSWORD ?? 'mwf_job_dev');
-  return `postgresql://mwf_job:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
+export function aiUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_AI_PASSWORD ?? 'mwf_ai_dev');
+  return `postgresql://mwf_ai:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
+}
+
+export function workerUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_WORKER_PASSWORD ?? 'mwf_worker_dev');
+  return `postgresql://mwf_worker:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
 }
 
 /** TS-10: the request role (`mwf_app`) on a run database (dev password, local-setup.md; GOLDEN_APP_PASSWORD overrides). */
@@ -354,17 +359,19 @@ export async function createHarness(opts: {
     // one left in a developer's environment would point the app elsewhere.
     delete process.env.APP_DATABASE_URL;
   }
-  // The job connection (TS-9: AI/SYSTEM and delivered messages, system
-  // milestones and AI memory are written through it). On the target it logs
-  // in as mwf_job ON THE RUN DATABASE (roles are cluster-wide), so the run
-  // exercises the job's real grants; identity binding is on, so the
-  // identity-bound reads (app.current_user_id(), v_empathy_direction_status)
-  // behave as in production. On the current shape neither applies.
+  // The AI and worker connections (work-k5fk.10.5: mwf_job's call sites split between them).
+  // On the target they log in as mwf_ai / mwf_worker ON THE RUN DATABASE (roles are
+  // cluster-wide), so the run exercises their real grants and app.session_scope;
+  // identity binding is on, so the identity-bound reads (app.current_user_id(),
+  // v_empathy_direction_status) and the definers' app arms behave as in production.
+  // On the current shape neither applies.
   if (isTargetShape()) {
-    process.env.JOB_DATABASE_URL = jobUrlFor(fixture.target, fixture.database);
+    process.env.AI_DATABASE_URL = aiUrlFor(fixture.target, fixture.database);
+    process.env.WORKER_DATABASE_URL = workerUrlFor(fixture.target, fixture.database);
     process.env.DB_IDENTITY_BINDING = 'on';
   } else {
-    delete process.env.JOB_DATABASE_URL;
+    delete process.env.AI_DATABASE_URL;
+    delete process.env.WORKER_DATABASE_URL;
   }
   process.env.E2E_AUTH_BYPASS = 'true';
   process.env.MOCK_LLM = 'true';
@@ -528,9 +535,9 @@ export async function createHarness(opts: {
     },
     async teardown() {
       await new Promise<void>(resolve => server.close(() => resolve()));
-      const { prisma, disconnectJobPrisma } = await import('../../lib/prisma');
+      const { prisma, disconnectRolePrismas } = await import('../../lib/prisma');
       await prisma.$disconnect().catch(() => undefined);
-      await disconnectJobPrisma().catch(() => undefined);
+      await disconnectRolePrismas().catch(() => undefined);
       await marker?.end().catch(() => undefined);
       // The per-database capture settings need no cleanup: they live on the run
       // database and go with it. `log_line_prefix` is server-wide and stays —

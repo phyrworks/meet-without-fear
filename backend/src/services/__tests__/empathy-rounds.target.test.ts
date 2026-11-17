@@ -2,7 +2,7 @@
  * TS-10 real-role tests: immutable rounds, the status writer, the review path.
  *
  * Against a clone of the RECONCILER_SHOWN_B target fixture, with the app
- * logged in as `mwf_app` (identity binding on) and the job as `mwf_job`
+ * logged in as `mwf_app` (identity binding on) and the AI as `mwf_ai` (work-k5fk.10.5)
  * (the harness default since work-k5fk.10.1). Every status move goes through
  * `app.empathy_set_status`; the assertions read the rows back on the
  * fixture's owner connection.
@@ -24,7 +24,7 @@ const REVISED = 'TS10_ROUND_TWO: I see now you are running on empty and need som
 const UNSENT = 'TS10_UNSENT_FEEDBACK: the evenings are the loneliest part.';
 const SENT = 'TS10_SENT_FEEDBACK: it is the evenings, not the work, that I needed you to see.';
 
-describeTarget('empathy rounds, the status writer and the review path (mwf_app + mwf_job, identity binding on)', () => {
+describeTarget('empathy rounds, the status writer and the review path (mwf_app + mwf_ai, identity binding on)', () => {
   let harness: Harness;
   let ada: { sessionId: string; userId: string };
   let bob: { sessionId: string; userId: string };
@@ -84,8 +84,8 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     if (harness) await harness.teardown();
   });
 
-  it('runs as the real roles: the app is mwf_app with an identity, the job is mwf_job', async () => {
-    const { prisma, getJobPrisma } = await import('../../lib/prisma');
+  it('runs as the real roles: the app is mwf_app with an identity, the AI is mwf_ai (work-k5fk.10.5)', async () => {
+    const { prisma, getAiPrisma } = await import('../../lib/prisma');
     const [app] = await as(
       ada.userId,
       () =>
@@ -94,8 +94,8 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
         >`SELECT session_user AS u, app.current_user_id()::text AS me`,
     );
     expect(app).toEqual({ u: 'mwf_app', me: ada.userId });
-    const [job] = await getJobPrisma().$queryRaw<Array<{ u: string }>>`SELECT session_user AS u`;
-    expect(job.u).toBe('mwf_job');
+    const [ai] = await getAiPrisma().$queryRaw<Array<{ u: string }>>`SELECT session_user AS u`;
+    expect(ai.u).toBe('mwf_ai');
   });
 
   // --- rounds -----------------------------------------------------------------
@@ -145,7 +145,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     // Bob's round about Ada is HELD; Ada is its subject.
     for (const to of ['READY', 'AWAITING_SHARING'] as const) {
       await expect(as(ada.userId, () => setAttemptStatus(bobRound1, to, { actor: 'participant' }))).rejects.toThrow(
-        /only the author or the job moves this attempt/,
+        /only the author or the AI moves this attempt/,
       );
     }
     expect((await attempts()).find(a => a.id === bobRound1)!.status).toBe('HELD');
@@ -156,17 +156,20 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     await as(bob.userId, () => setAttemptStatus(bobRound1, 'READY', { actor: 'participant' }));
     await expect(
       as(bob.userId, () => setAttemptStatus(bobRound1, 'REVEALED', { actor: 'participant' })),
-    ).rejects.toThrow(/only the job reveals/);
+    ).rejects.toThrow(/only the AI reveals/);
     await expect(
       rows(`SELECT set_config('app.current_user_id', $1, false), app.empathy_set_status($2, 'REVEALED', NULL)`, [
         bob.userId,
         bobRound1,
       ]),
-    ).rejects.toThrow(/only the job reveals/);
+    ).rejects.toThrow(/only the AI reveals/);
   });
 
   it('the reveal is refused while a direction is not READY, and then writes the subject’s delivered copy', async () => {
-    const { setAttemptStatus, currentAttempt } = await store();
+    const { setAttemptStatus: setAny, currentAttempt } = await store();
+    // The AI's moves name their session (app.session_scope, work-k5fk.10.5).
+    const { withSessionScope } = await import('../../lib/request-context');
+    const setAttemptStatus: typeof setAny = (...a) => withSessionScope(ada.sessionId, () => setAny(...a));
     // Bob READY, Ada's round 2 HELD → the gate does not hold.
     await expect(setAttemptStatus(bobRound1, 'REVEALED', { actor: 'job' })).rejects.toThrow(/reveal gate not met/);
     expect((await attempts()).find(a => a.id === bobRound1)!.revealed).toBe(false);

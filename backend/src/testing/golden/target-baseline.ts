@@ -50,7 +50,7 @@ const BUILDABLE = /^(mwf_tfx_[a-z0-9_]+|mwf_trun_[a-z0-9_]+)$/;
  * The owner of every target database and of every object in it (work-k5fk.10.1,
  * design note §6 layer 1): `mwf_migrator`, a NOSUPERUSER login, exactly as
  * `run-baseline.sh --as-migrator` deploys. No runtime role owns anything, so
- * the app (mwf_app) and the job (mwf_job) run on nothing but their grants.
+ * the app (mwf_app), the AI (mwf_ai) and the worker (mwf_worker) run on nothing but their grants.
  */
 export const TARGET_OWNER = 'mwf_migrator';
 

@@ -5,8 +5,8 @@
 --
 -- Carries what TS-1's migration 20261019173038_phase3_app_schema_helpers did
 -- before the table DDL existed (that migration is gone with the old history,
--- OD7): the roles assertion, the SET ROLE mwf_definer check, schema app and
--- app.current_user_id(). The membership helpers app.is_member and
+-- OD7): the roles assertion, the SET ROLE mwf_definer check, schema app,
+-- app.current_user_id() and app.session_scope() (work-k5fk.10.5). The membership helpers app.is_member and
 -- app.partner_user_id are created by the trailer, over participant.
 -- ============================================================================
 
@@ -22,8 +22,8 @@ DECLARE
 BEGIN
   SELECT string_agg(r, ', ' ORDER BY r) INTO missing
   FROM unnest(ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access', 'clinician_access',
-                    'job_access', 'mwf_definer',
-                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician', 'mwf_job']) AS r
+                    'mwf_definer',
+                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician']) AS r
   WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = r);
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'target_shape_baseline: database role(s) % do not exist', missing
@@ -55,8 +55,8 @@ $$;
 CREATE SCHEMA app;
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 -- The capability roles (work-k5fk.10.4) and mwf_definer, whose definer helpers call
--- app.* functions. ai_access, worker_access and clinician_access: nothing yet.
-GRANT USAGE ON SCHEMA app TO app_access, job_access, ops_access, auth_access, mwf_definer;
+-- app.* functions. clinician_access: nothing yet (Q18).
+GRANT USAGE ON SCHEMA app TO app_access, ai_access, worker_access, ops_access, auth_access, mwf_definer;
 
 -- The caller's identity, from the transaction-local setting the request layer
 -- writes with set_config('app.current_user_id', <id>, true). NULL when unset
@@ -67,4 +67,22 @@ CREATE FUNCTION app.current_user_id() RETURNS uuid
   AS $$ SELECT NULLIF(pg_catalog.current_setting('app.current_user_id', true), '')::uuid $$;
 
 REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, job_access, ops_access, auth_access, mwf_definer;
+GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, ops_access, auth_access, mwf_definer;
+
+-- The one session a transaction of the AI (mwf_ai) or a worker task (mwf_worker) acts on
+-- (design note §6 "Session variables", Q20; work-k5fk.10.5), from the transaction-local setting
+-- the ai / worker clients write with set_config('app.session_scope', <id>, true)
+-- (lib/prisma-identity.ts). NULL when unset or empty, so every check against it fails closed:
+-- t_session_scope refuses an AI / worker row outside it, and the definers' AI / worker arms
+-- refuse a session other than it. Never set for mwf_app (whose rows follow
+-- app.current_user_id) nor for the migrator or the admin.
+-- SECURITY INVOKER: it reads only the caller's own setting.
+CREATE FUNCTION app.session_scope() RETURNS uuid
+  LANGUAGE sql STABLE PARALLEL SAFE SECURITY INVOKER
+  AS $$ SELECT NULLIF(pg_catalog.current_setting('app.session_scope', true), '')::uuid $$;
+COMMENT ON FUNCTION app.session_scope() IS 'The session the transaction of mwf_ai / mwf_worker acts on (transaction-local setting app.session_scope; NULL when unset, so every check fails closed). Design note §6 Q20.';
+
+-- ai_access, worker_access: t_session_scope (trailer T5, invoker) reads it with the writer's
+-- rights. mwf_definer: the definers' AI / worker arms.
+REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;

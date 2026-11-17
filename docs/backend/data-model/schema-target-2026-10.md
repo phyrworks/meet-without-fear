@@ -8,6 +8,8 @@ status: living
 
 # Target Schema — October 2026
 
+> **2026-11 update (work-k5fk.10.5):** `mwf_job` / `job_access` / `JOB_DATABASE_URL` are retired. Its call sites moved to `mwf_ai` (AI, scoped by `app.session_scope`), `mwf_worker` (scheduled jobs, notification delivery, Stage 4 closure) and request-path SECURITY DEFINER functions called by `mwf_app`. Mentions of the job below are historical.
+
 Companion to [`schema-review-2026-10.md`](./schema-review-2026-10.md) (the review and the owner
 decisions D1–D4 of 2026-10-13 in its §9) and [`schema-migration-plan-2026-10.md`](./schema-migration-plan-2026-10.md)
 (how to get there). Security predicates re-base [`phase3-design-summary.md`](./phase3-design-summary.md)

@@ -31,7 +31,7 @@ The flow below is unchanged in product terms; the data layer under it is the tar
   are submitted. The circuit breaker counts rounds.
 - **Every status move** goes through `app.empathy_set_status` — the author's and subject's own
   moves on the app connection under their identity, the reconciler's moves and the reveal on the
-  job connection (`mwf_job`, the only principal the function lets reveal; the function owns the
+  AI connection (`mwf_ai`, scoped by `app.session_scope`; the only principal the function lets reveal; the function owns the
   gate and writes the subject's `EMPATHY_STATEMENT` copy). Reconciler moves are guarded by the
   attempt's `status_version`, so a late analysis never overwrites a newer decision.
 - **Who sees what.** The waiting state comes from `v_empathy_direction_status`; a subject reads an

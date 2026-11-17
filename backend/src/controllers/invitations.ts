@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { readPreferences } from '../services/user-settings';
 import { notifyPartner, notifyPartnerWithFallback, publishSessionCreated } from '../services/realtime';
 import { z } from 'zod';
@@ -732,10 +732,10 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
       },
     });
 
-    // The session ends (INVITED/CREATED → ABANDONED through the sole status
-    // writer). The decliner is no participant, so the job moves it (R35).
-    await getJobPrisma()
-      .$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ABANDONED'::session_status)`;
+    // The session ends (INVITED/CREATED → ABANDONED). The decliner is no participant, so
+    // app.session_abandon_declined moves it on the strength of the DECLINED invitation just
+    // written (work-k5fk.10.5: was the job's session_set_status, R35).
+    await prisma.$executeRaw`SELECT app.session_abandon_declined(${id}::uuid)`;
 
     // Notify inviter via realtime that invitation was declined
     if (inviterUserId) {

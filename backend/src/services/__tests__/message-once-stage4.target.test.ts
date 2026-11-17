@@ -33,6 +33,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   let http: Awaited<ReturnType<typeof httpAs>>;
   let store: typeof import('../message-store');
   let ctx: typeof import('../../lib/request-context');
+  /** The AI's once-only line, scoped to the run's session (app.session_scope; work-k5fk.10.5). */
+  const onceInScope = (o: Parameters<typeof store.createFacilitatorMessageOnce>[0]) =>
+    ctx.withSessionScope(ids.session, () => store.createFacilitatorMessageOnce(o));
   let conv: { ada: string; bob: string };
   const ada = () => ({ id: ids.adaUser, email: 'ada@e2e.test' });
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
@@ -97,7 +100,11 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
         WHERE i.indrelid = 'public.message'::regclass AND i.indisunique ORDER BY 1`,
     );
     // work-k5fk.4: the key (conversation_id, seq) and what the read state pins to, (conversation_id, seq, session_id).
-    expect(uniques.map(u => u.name)).toEqual(['message_conversation_id_seq_session_id_key', 'message_pkey', 'sql_message_once']);
+    expect(uniques.map(u => u.name)).toEqual([
+      'message_conversation_id_seq_session_id_key',
+      'message_pkey',
+      'sql_message_once',
+    ]);
     expect(idx.def).toMatch(
       /ON public\.message USING btree \(conversation_id, dedupe_key\) WHERE \(dedupe_key IS NOT NULL\)/,
     );
@@ -117,20 +124,21 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const own = await asUser(ids.adaUser, () =>
       store.createParticipantMessage({ conversationId: conv.ada, seat: ids.ada, content: 'PROBE_FDC1_TURN' }),
     );
-    const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE conversation_id || ':' || seq = $1`, [
-      own.id,
-    ]);
+    const [row] = await run.sql<{ dedupe_key: string | null }>(
+      `SELECT dedupe_key FROM message WHERE conversation_id || ':' || seq = $1`,
+      [own.id],
+    );
     expect(row).toEqual({ dedupe_key: null });
   });
 
   it('createFacilitatorMessageOnce: one row per (conversation, key), on a repeat and on concurrent calls', async () => {
-    const first = await store.createFacilitatorMessageOnce({
+    const first = await onceInScope({
       conversationId: conv.bob,
       dedupeKey: 'STAGE2_VALIDATED_WAIT',
       content: 'PROBE_FDC1_ONCE',
     });
     expect(first).toMatchObject({ role: 'AI', kind: 'CHAT', content: 'PROBE_FDC1_ONCE' });
-    const again = await store.createFacilitatorMessageOnce({
+    const again = await onceInScope({
       conversationId: conv.bob,
       dedupeKey: 'STAGE2_VALIDATED_WAIT',
       content: 'PROBE_FDC1_ONCE (different text, same key)',
@@ -141,7 +149,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     // Concurrent: a fresh key in another conversation, five writers at once.
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
-        store.createFacilitatorMessageOnce({
+        onceInScope({
           conversationId: conv.ada,
           dedupeKey: 'STAGE2_VALIDATED_WAIT',
           content: 'PROBE_FDC1_RACE',
@@ -159,9 +167,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
       `SELECT conversation_id || ':' || seq AS id FROM message WHERE conversation_id = $1 AND dedupe_key = 'STAGE2_VALIDATED_WAIT'`,
       [conv.bob],
     );
-    await expect(run.sql(`UPDATE message SET dedupe_key = NULL WHERE conversation_id || ':' || seq = $1`, [id])).rejects.toThrow(
-      /message routing is immutable/,
-    );
+    await expect(
+      run.sql(`UPDATE message SET dedupe_key = NULL WHERE conversation_id || ':' || seq = $1`, [id]),
+    ).rejects.toThrow(/message routing is immutable/);
     await expect(
       run.sql(`UPDATE message SET dedupe_key = 'STAGE4_HANDOFF_BRIDGE' WHERE conversation_id || ':' || seq = $1`, [id]),
     ).rejects.toThrow(/message routing is immutable/);
@@ -169,32 +177,35 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   });
 
   it('inside an interactive transaction a duplicate returns null and the transaction goes on', async () => {
-    const { getJobPrisma } = await import('../../lib/prisma');
-    const out = await getJobPrisma().$transaction(async tx => {
-      const dup = await store.createFacilitatorMessageOnce({
-        conversationId: conv.bob,
-        dedupeKey: 'STAGE2_VALIDATED_WAIT',
-        content: 'PROBE_FDC1_TX_DUP',
-        client: tx,
-      });
-      // A later statement in the same transaction still runs (no 25P02).
-      const fresh = await store.createFacilitatorMessageOnce({
-        conversationId: conv.bob,
-        dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
-        content: 'PROBE_FDC1_TX_FRESH',
-        client: tx,
-      });
-      return { dup, fresh };
-    });
+    const { getAiPrisma } = await import('../../lib/prisma');
+    const { withSessionScope } = await import('../../lib/request-context');
+    const out = await withSessionScope(ids.session, () =>
+      getAiPrisma().$transaction(async tx => {
+        const dup = await store.createFacilitatorMessageOnce({
+          conversationId: conv.bob,
+          dedupeKey: 'STAGE2_VALIDATED_WAIT',
+          content: 'PROBE_FDC1_TX_DUP',
+          client: tx,
+        });
+        // A later statement in the same transaction still runs (no 25P02).
+        const fresh = await store.createFacilitatorMessageOnce({
+          conversationId: conv.bob,
+          dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
+          content: 'PROBE_FDC1_TX_FRESH',
+          client: tx,
+        });
+        return { dup, fresh };
+      }),
+    );
     expect(out.dup).toBeNull();
     expect(out.fresh).toMatchObject({ content: 'PROBE_FDC1_TX_FRESH' });
     expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);
     expect(await keyed(conv.bob, 'STAGE2_VALIDATED_WAIT')).toBe(1);
   });
 
-  it('the job connection may write a dedupe key but not read it', async () => {
+  it('the AI connection may write a dedupe key but not read it', async () => {
     await expect(
-      run.as('mwf_job', null, `SELECT dedupe_key FROM message WHERE conversation_id = $1`, [conv.ada]),
+      run.as('mwf_ai', null, `SELECT dedupe_key FROM message WHERE conversation_id = $1`, [conv.ada]),
     ).rejects.toThrow(/permission denied/);
   });
 

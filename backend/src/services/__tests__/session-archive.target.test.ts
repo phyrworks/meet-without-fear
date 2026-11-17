@@ -91,10 +91,10 @@ describeTarget('session archive on the target, as mwf_app', () => {
         `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Other')`,
         [session, other, ada.id],
       );
-      await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [session]);
+      await run.sql(`UPDATE session SET status = 'ACTIVE' WHERE id = $1::uuid`, [session]);
     }
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [left]);
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [both]);
+    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [left], left);
+    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [both], both);
     await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [left, carol.id]);
     http = await httpAs();
   });
@@ -128,16 +128,16 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(await status(ids.session)).toBe('CREATED');
   });
 
-  it('a job login cannot archive for a user, even a current participant (no EXECUTE since mwf_definer owns it)', async () => {
+  it('a worker or AI login cannot archive for a user, even a current participant (EXECUTE is app_access only)', async () => {
     let got = 'ok';
     try {
-      await run.as('mwf_job', ada.id, `SELECT app.session_archive($1::uuid)`, [ids.session]);
+      await run.as('mwf_worker', ada.id, `SELECT app.session_archive($1::uuid)`, [ids.session], ids.session);
     } catch (e) {
       const { code, message } = e as { code?: string; message?: string };
       got = `${code} ${message}`;
     }
-    // work-k5fk.10.4: mwf_job no longer owns the function, so it holds no EXECUTE (the function's own
-    // session_user refusal stays as a second wall, for mwf_migrator).
+    // work-k5fk.10.5: mwf_job is retired; neither its successors holds EXECUTE (the function's own
+    // app_access refusal stays as a second wall, for mwf_migrator).
     expect(got).toBe('42501 permission denied for function session_archive');
     expect(await status(ids.session)).toBe('CREATED');
   });
@@ -169,7 +169,7 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(await asApp(ada.id, `UPDATE session SET archived_at = now() WHERE id = $1`, [left])).toBe('42501');
     expect(await asApp(ada.id, `UPDATE session SET archived_by_user_id = NULL WHERE id = $1`, [left])).toBe('42501');
     expect(await asAppMessage(ada.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).toBe(
-      '42501 only the job archives through session_set_status; a participant uses app.session_archive',
+      '42501 only a worker archives through session_set_status; a participant uses app.session_archive',
     );
     expect(await status(left)).toBe('ABANDONED');
   });

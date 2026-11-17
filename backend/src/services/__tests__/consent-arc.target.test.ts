@@ -25,7 +25,7 @@ jest.setTimeout(180_000);
 
 const FIXED = 'consent target is not yours';
 
-describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, identity binding on)', () => {
+describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_ai, identity binding on)', () => {
   let harness: Harness;
   let ada: { sessionId: string; userId: string };
   let bob: { sessionId: string; userId: string };

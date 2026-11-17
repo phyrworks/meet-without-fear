@@ -6,7 +6,11 @@
  */
 
 const queryRaw = jest.fn();
-jest.mock('../../lib/prisma', () => ({ prisma: { $queryRaw: queryRaw }, getJobPrisma: () => ({}) }));
+jest.mock('../../lib/prisma', () => ({
+  prisma: { $queryRaw: queryRaw },
+  getAiPrisma: () => ({}),
+  getWorkerPrisma: () => ({}),
+}));
 const warn = jest.fn();
 const error = jest.fn();
 jest.mock('../../lib/logger', () => ({ logger: { warn, error, info: jest.fn(), debug: jest.fn() } }));
