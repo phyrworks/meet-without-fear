@@ -80,7 +80,10 @@ TLS='sslmode=verify-full&sslrootcert=/etc/mwf-db-tls/ca.crt'
   echo "hostssl  mwf       postgres                                      172.29.1.3/32    scram-sha-256"
   echo
   sed -n '/^# Everything else: refused/,$p' "$REPO/infra/aws/pg_hba.conf"
-} | sed -e "s/172\.29\.1\./$NET.78./g" -e "s/172\.29\.2\.1/$NET.79.1/g" | write_if_changed "$LOCAL/pg_hba.conf"
+} | sed -e "s/172\.29\.1\./$NET.78./g" -e "s|172\.29\.2\.1/32 |$NET.79.0/24 |g" | write_if_changed "$LOCAL/pg_hba.conf"
+# (The admin line takes the whole admin subnet here: under podman a connection to the published
+# port arrives from the db container's own admin address, not the gateway as under Docker's
+# userland proxy. Only db is on that network.)
 # The migrations' URL, as production's /etc/mwf/migrator.env (deploy.sh): never in application.env.
 write_if_changed "$LOCAL/migrator.env" <<EOF
 MIGRATOR_DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?sslmode=require&sslcert=/etc/mwf-db-tls/ca.crt&sslaccept=strict
