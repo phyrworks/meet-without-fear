@@ -66,14 +66,14 @@ npm run test -- --coverage --workspace=backend
 |---|---|---|---|
 | **Inner loop** | every edit | `npm test --workspace=backend -- --findRelatedTests <files>`, plus the one `*.target.test.ts` for the area you touched (`npm run test:db --workspace=backend -- <name>`) | seconds |
 | **Before a commit** | each commit | `npm run test` (backend `fast` + shared + mobile) and `npm run check` | ~6 s + 5 s + 7 s, warm cache |
-| **Pre-merge** | before merging a branch | `npm run test:premerge --workspace=backend` (fast + db + the five pre-merge goldens); `run-baseline.sh` if `backend/scripts/target-shape` or `prisma/` changed; `npm run test:e2e` if the change reaches the UI | ~4.5 min est. (e2e smoke extra) |
+| **Pre-merge** | before merging a branch | `npm run test:premerge --workspace=backend` (fast + db + the seven pre-merge goldens); `run-baseline.sh` if `backend/scripts/target-shape` or `prisma/` changed; `npm run test:e2e` if the change reaches the UI | ~4.5 min est. (e2e smoke extra) |
 | **Nightly / CI** | CI, or by hand overnight | `npm run test:all --workspace=backend` (CI runs this); `npm run test:e2e:full`; the live-AI config by hand | ~35 min est. |
 
 The backend jest projects (`backend/jest.config.js`) are chosen by file name:
 
 - `fast`: everything else. No database; a suite here that connects fails.
 - `db`: `*.target.test.ts`, `*.pg.test.ts`, `src/__tests__/db/`. Each suite clones a golden template into its own database, so it runs on 2 workers (`MWF_DB_WORKERS`). Exhaustive sweeps that cannot catch an app regression (the email domain's Unicode sweeps) run only under `MWF_TEST_ALL=1`, which `test:all` sets.
-- `golden`: `*.golden.test.ts`, serial (they read the shared container's statement log). `test:golden:premerge` runs the five that hold the read boundary (session-read, empathy-reveal, author-sees-status-only, choices-hidden-until-shared, needs-hidden-until-shared); the other six (the reveal orders, tombstone, declined-offer, unrevealed-attempt, reflection) run only in `test:golden` / `test:all`.
+- `golden`: `*.golden.test.ts`, serial (they read the shared container's statement log). `test:golden:premerge` runs the seven whose read-boundary claim no target suite makes as broadly (session-read, empathy-reveal, author-sees-status-only, choices-hidden-until-shared, needs-hidden-until-shared, unrevealed-attempt-hidden, reflection-never-crosses). The other four run only in `test:golden` / `test:all`, each because a target suite makes the same claim: declined-offer-no-trace (`consent-arc.target`, the decline leaves the author's reads unchanged), tombstone (`deletion-retention.target`, account deletion), and the two reveal orders (`empathy-rounds.target`, the reveal gate and its one delivered copy each; `reveal-serialization.target`).
 
 The e2e tiers (`e2e/`):
 

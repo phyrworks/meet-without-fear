@@ -12,7 +12,7 @@
     "test": "jest --selectProjects fast --maxWorkers=${MWF_FAST_WORKERS:-4}",
     "test:db": "jest --selectProjects db --maxWorkers=${MWF_DB_WORKERS:-2}",
     "test:golden": "jest --selectProjects golden --maxWorkers=1",
-    "test:golden:premerge": "jest --selectProjects golden --maxWorkers=1 '/(session-read|empathy-reveal|author-sees-status-only|choices-hidden-until-shared|needs-hidden-until-shared)\\.golden\\.test\\.ts$'",
+    "test:golden:premerge": "jest --selectProjects golden --maxWorkers=1 '/(session-read|empathy-reveal|author-sees-status-only|choices-hidden-until-shared|needs-hidden-until-shared|unrevealed-attempt-hidden|reflection-never-crosses)\\.golden\\.test\\.ts$'",
     "test:premerge": "npm run test && npm run test:db && npm run test:golden:premerge",
     "test:all": "npm run test && MWF_TEST_ALL=1 npm run test:db && npm run test:golden",
     "test:watch": "jest --selectProjects fast --watch",
