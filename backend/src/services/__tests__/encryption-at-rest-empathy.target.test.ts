@@ -134,13 +134,16 @@ describeTarget(
 
     it('fix round 1 (I1): text the author types in the ciphertext format is stored encrypted and the partner still reads their conversation', async () => {
       const typed = 'enc:v1:a:b:c';
-      const delivered = await messages.deliverMessage({
-        toConversationId: conv.bob,
-        sessionId: ids.session,
-        fromUserId: ids.adaUser,
-        kind: 'SHARED_CONTEXT',
-        content: typed,
-      });
+      // The author's own delivery (app.deliver_message's app arm: identity-bound; work-k5fk.10.5).
+      const delivered = await asUser(ids.adaUser, () =>
+        messages.deliverMessage({
+          toConversationId: conv.bob,
+          sessionId: ids.session,
+          fromUserId: ids.adaUser,
+          kind: 'SHARED_CONTEXT',
+          content: typed,
+        }),
+      );
       const [stored] = (await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = $1`, [delivered.id])) as string[];
       expect(stored).not.toBe(typed);
       const bobs = await asUser(ids.bobUser, () =>
