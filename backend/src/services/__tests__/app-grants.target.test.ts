@@ -95,7 +95,9 @@ describeTarget('mwf_app grants (target)', () => {
       [ids.session, ids.adaUser],
     );
     expect(own).toBeDefined();
-    expect(await asApp(`UPDATE message SET content = content WHERE conversation_id || ':' || seq = $1`, [own.id])).toBe('42501');
+    expect(await asApp(`UPDATE message SET content = content WHERE conversation_id || ':' || seq = $1`, [own.id])).toBe(
+      '42501',
+    );
     expect(await asApp(`UPDATE message SET created_at = created_at WHERE false`)).toBe('42501');
     const [r] = await run.sql<{ upd: boolean }>(
       `SELECT has_any_column_privilege('mwf_app', 'message', 'UPDATE') AS upd`,
@@ -154,7 +156,9 @@ describeTarget('mwf_app grants (target)', () => {
 
     it('INSERT: own USER CHAT / EMPATHY_STATEMENT only; never an AI/SYSTEM row or a delivered kind', async () => {
       expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
-      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'EMPATHY_STATEMENT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'EMPATHY_STATEMENT')).toMatch(
+        /^[0-9a-f-]{36}:[0-9]+$/,
+      );
       expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'AI', 'CHAT')).toBe('42501');
       expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'SHARED_CONTEXT')).toBe('42501');
     });
@@ -217,7 +221,9 @@ describeTarget('mwf_app grants (target)', () => {
         await c.query('ROLLBACK').catch(() => undefined);
         await c.end();
       }
-      const [{ n }] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = $1`, [login]);
+      const [{ n }] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = $1`, [
+        login,
+      ]);
       expect(n).toBe(0);
     });
 

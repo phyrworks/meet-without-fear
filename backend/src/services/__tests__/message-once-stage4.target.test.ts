@@ -100,7 +100,11 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
         WHERE i.indrelid = 'public.message'::regclass AND i.indisunique ORDER BY 1`,
     );
     // work-k5fk.4: the key (conversation_id, seq) and what the read state pins to, (conversation_id, seq, session_id).
-    expect(uniques.map(u => u.name)).toEqual(['message_conversation_id_seq_session_id_key', 'message_pkey', 'sql_message_once']);
+    expect(uniques.map(u => u.name)).toEqual([
+      'message_conversation_id_seq_session_id_key',
+      'message_pkey',
+      'sql_message_once',
+    ]);
     expect(idx.def).toMatch(
       /ON public\.message USING btree \(conversation_id, dedupe_key\) WHERE \(dedupe_key IS NOT NULL\)/,
     );
@@ -120,9 +124,10 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const own = await asUser(ids.adaUser, () =>
       store.createParticipantMessage({ conversationId: conv.ada, seat: ids.ada, content: 'PROBE_FDC1_TURN' }),
     );
-    const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE conversation_id || ':' || seq = $1`, [
-      own.id,
-    ]);
+    const [row] = await run.sql<{ dedupe_key: string | null }>(
+      `SELECT dedupe_key FROM message WHERE conversation_id || ':' || seq = $1`,
+      [own.id],
+    );
     expect(row).toEqual({ dedupe_key: null });
   });
 
@@ -162,9 +167,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
       `SELECT conversation_id || ':' || seq AS id FROM message WHERE conversation_id = $1 AND dedupe_key = 'STAGE2_VALIDATED_WAIT'`,
       [conv.bob],
     );
-    await expect(run.sql(`UPDATE message SET dedupe_key = NULL WHERE conversation_id || ':' || seq = $1`, [id])).rejects.toThrow(
-      /message routing is immutable/,
-    );
+    await expect(
+      run.sql(`UPDATE message SET dedupe_key = NULL WHERE conversation_id || ':' || seq = $1`, [id]),
+    ).rejects.toThrow(/message routing is immutable/);
     await expect(
       run.sql(`UPDATE message SET dedupe_key = 'STAGE4_HANDOFF_BRIDGE' WHERE conversation_id || ':' || seq = $1`, [id]),
     ).rejects.toThrow(/message routing is immutable/);
@@ -174,22 +179,24 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   it('inside an interactive transaction a duplicate returns null and the transaction goes on', async () => {
     const { getAiPrisma } = await import('../../lib/prisma');
     const { withSessionScope } = await import('../../lib/request-context');
-    const out = await withSessionScope(ids.session, () => getAiPrisma().$transaction(async tx => {
-      const dup = await store.createFacilitatorMessageOnce({
-        conversationId: conv.bob,
-        dedupeKey: 'STAGE2_VALIDATED_WAIT',
-        content: 'PROBE_FDC1_TX_DUP',
-        client: tx,
-      });
-      // A later statement in the same transaction still runs (no 25P02).
-      const fresh = await store.createFacilitatorMessageOnce({
-        conversationId: conv.bob,
-        dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
-        content: 'PROBE_FDC1_TX_FRESH',
-        client: tx,
-      });
-      return { dup, fresh };
-    }));
+    const out = await withSessionScope(ids.session, () =>
+      getAiPrisma().$transaction(async tx => {
+        const dup = await store.createFacilitatorMessageOnce({
+          conversationId: conv.bob,
+          dedupeKey: 'STAGE2_VALIDATED_WAIT',
+          content: 'PROBE_FDC1_TX_DUP',
+          client: tx,
+        });
+        // A later statement in the same transaction still runs (no 25P02).
+        const fresh = await store.createFacilitatorMessageOnce({
+          conversationId: conv.bob,
+          dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
+          content: 'PROBE_FDC1_TX_FRESH',
+          client: tx,
+        });
+        return { dup, fresh };
+      }),
+    );
     expect(out.dup).toBeNull();
     expect(out.fresh).toMatchObject({ content: 'PROBE_FDC1_TX_FRESH' });
     expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);

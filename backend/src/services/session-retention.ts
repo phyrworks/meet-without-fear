@@ -2,7 +2,7 @@
  * Session Retention
  *
  * Enforces the two-tier session decay policy for MWF conflict-resolution
- * sessions. Runs as the JOB (`mwf_job`; TS-12, R35 — retention is job work):
+ * sessions. Runs as the WORKER (`mwf_worker`; TS-12, R35 — retention is job work; work-k5fk.10.5):
  *
  *   - `ACTIVE` sessions with no activity for 90 days → ended. The target's
  *     transition set (spec §1.1 session; `app.session_set_status`) has no

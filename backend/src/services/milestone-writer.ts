@@ -51,7 +51,9 @@ export async function reachMilestone(
   if (!isSelfAssertable(key)) {
     // A system milestone: app.reach_milestone checks the caller is a current participant of the
     // session and refuses a self-assertable key (work-k5fk.10.5).
-    const [row] = await client.$queryRaw<Array<{ reached: boolean }>>`SELECT app.reach_milestone(${seat.sessionId}::uuid, ${seat.userId}::uuid, ${key}, ${at}::timestamptz) AS reached`;
+    const [row] = await client.$queryRaw<
+      Array<{ reached: boolean }>
+    >`SELECT app.reach_milestone(${seat.sessionId}::uuid, ${seat.userId}::uuid, ${key}, ${at}::timestamptz) AS reached`;
     return row?.reached === true;
   }
   // Exactly the columns mwf_app may INSERT (the participant's key — session_id, user_id,

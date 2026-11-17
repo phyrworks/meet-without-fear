@@ -92,8 +92,7 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
     if (partnerSigned) {
       const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
       if (session && session.status !== 'ACTIVE' && session.status !== 'RESOLVED') {
-        await prisma
-          .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`
+        await prisma.$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`
           .then(() => logger.info(`[signCompact] Updated session ${sessionId} status to ACTIVE (both signed)`))
           .catch((err: unknown) => logger.warn(`[signCompact] Session ${sessionId} not moved to ACTIVE:`, err));
       }

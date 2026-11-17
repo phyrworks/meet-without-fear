@@ -200,16 +200,40 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       // 6a review F2: these pin the parent's PERSON too, not only its session — a key weakened to (id, session_id)
       // would still pass `keyed` above and be masked by the participant key in the loops below.
       const pinsUser: Array<[string, string, string[], string[]]> = [
-        ['empathy_review', 'empathy_attempt', ['attempt_id', 'session_id', 'reviewer_user_id'], ['id', 'session_id', 'subject_user_id']],
-        ['reconciler_result', 'empathy_attempt', ['attempt_id', 'session_id', 'subject_user_id'], ['id', 'session_id', 'subject_user_id']],
-        ['context_share_offer', 'empathy_attempt', ['attempt_id', 'session_id', 'subject_user_id'], ['id', 'session_id', 'subject_user_id']],
-        ['reconciler_guidance', 'reconciler_result', ['result_id', 'session_id', 'subject_user_id'], ['id', 'session_id', 'subject_user_id']],
+        [
+          'empathy_review',
+          'empathy_attempt',
+          ['attempt_id', 'session_id', 'reviewer_user_id'],
+          ['id', 'session_id', 'subject_user_id'],
+        ],
+        [
+          'reconciler_result',
+          'empathy_attempt',
+          ['attempt_id', 'session_id', 'subject_user_id'],
+          ['id', 'session_id', 'subject_user_id'],
+        ],
+        [
+          'context_share_offer',
+          'empathy_attempt',
+          ['attempt_id', 'session_id', 'subject_user_id'],
+          ['id', 'session_id', 'subject_user_id'],
+        ],
+        [
+          'reconciler_guidance',
+          'reconciler_result',
+          ['result_id', 'session_id', 'subject_user_id'],
+          ['id', 'session_id', 'subject_user_id'],
+        ],
         ['need_share', 'need', ['need_id', 'session_id', 'user_id'], ['id', 'session_id', 'user_id']],
       ];
       const missing = pinsUser.filter(
         ([t, r, cols, refCols]) =>
           !fks.some(
-            f => f.table === t && f.refTable === r && f.columns.join() === cols.join() && f.refColumns.join() === refCols.join(),
+            f =>
+              f.table === t &&
+              f.refTable === r &&
+              f.columns.join() === cols.join() &&
+              f.refColumns.join() === refCols.join(),
           ),
       );
       expect(missing.map(([t, r]) => `${t} → ${r}`)).toEqual([]);
@@ -218,12 +242,19 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
     it('participant.kind is the user’s kind, pinned by FOREIGN KEY (user_id, kind) REFERENCES "user" (id, kind)', async () => {
       expect(
         fks.filter(f => f.table === 'participant' && f.refTable === '"user"').map(f => [f.columns, f.refColumns]),
-      ).toEqual([[['user_id', 'kind'], ['id', 'kind']]]);
+      ).toEqual([
+        [
+          ['user_id', 'kind'],
+          ['id', 'kind'],
+        ],
+      ]);
       const [t] = await run.sql<{ t: string }>(
         `SELECT format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = 'participant'::regclass AND attname = 'kind'`,
       );
       expect(t.t).toBe('user_kind');
-      const [n] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM pg_type WHERE typname = 'participant_kind'`);
+      const [n] = await run.sql<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_type WHERE typname = 'participant_kind'`,
+      );
       expect(n.n).toBe(0);
     });
 
@@ -253,7 +284,10 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
          ORDER BY round DESC LIMIT 1`,
         [s, b],
       );
-      const proposalA = await one(`SELECT id FROM proposal WHERE session_id = $1 AND created_by_user_id = $2 LIMIT 1`, [s, a]);
+      const proposalA = await one(`SELECT id FROM proposal WHERE session_id = $1 AND created_by_user_id = $2 LIMIT 1`, [
+        s,
+        a,
+      ]);
       const shared = await one(
         `SELECT ns.need_id AS id FROM need_share ns WHERE ns.session_id = $1
          AND NOT EXISTS (SELECT 1 FROM proposal_need pn WHERE pn.need_id = ns.need_id AND pn.proposal_id = $2) LIMIT 1`,
@@ -272,7 +306,10 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       const seat = [s, a];
       await run.sql(`INSERT INTO mood_reading (session_id, user_id, intensity) VALUES ($1, $2, 5)`, seat);
       await run.sql(`INSERT INTO regulation_event (session_id, user_id, type) VALUES ($1, $2, 'GROUNDING')`, seat);
-      await run.sql(`INSERT INTO participant_key (session_id, user_id, key_id, wrapped_dek) VALUES ($1, $2, 'k', '\\x00')`, seat);
+      await run.sql(
+        `INSERT INTO participant_key (session_id, user_id, key_id, wrapped_dek) VALUES ($1, $2, 'k', '\\x00')`,
+        seat,
+      );
       await run.sql(`INSERT INTO follow_up_note (session_id, user_id, content) VALUES ($1, $2, 'a note')`, seat);
       await run.sql(
         `INSERT INTO ai_memory (session_id, user_id, kind, doc)
@@ -284,9 +321,19 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
          VALUES ($1, 'USER_INITIATED_REENTRY', 'INDIVIDUAL', $2, 'OPEN') RETURNING id`,
         seat,
       );
-      await run.sql(`INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id) VALUES ($3, $1, $2)`, [...seat, followUp]);
-      await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [proposalA, shared, s]);
-      await run.sql(`INSERT INTO need_disposition (session_id, user_id, need_id) VALUES ($1, $2, $3)`, [...seat, shared]);
+      await run.sql(`INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id) VALUES ($3, $1, $2)`, [
+        ...seat,
+        followUp,
+      ]);
+      await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [
+        proposalA,
+        shared,
+        s,
+      ]);
+      await run.sql(`INSERT INTO need_disposition (session_id, user_id, need_id) VALUES ($1, $2, $3)`, [
+        ...seat,
+        shared,
+      ]);
       await run.sql(
         `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action) VALUES ($3, $1, $2, 'REVISED')`,
         [...seat, proposalA],
@@ -466,10 +513,7 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attname = 'session_id' AND NOT a.attnotnull`);
       const keys = fks.filter(
-        f =>
-          f.refTable === 'participant' &&
-          f.table !== 'participant' &&
-          nullable.some(n => n.t === f.table),
+        f => f.refTable === 'participant' && f.table !== 'participant' && nullable.some(n => n.t === f.table),
       );
       expect([...new Set(keys.map(k => k.table))].sort()).toEqual(['ai_memory', 'brain_activity']);
       const outcomes: Record<string, string | undefined> = {};
@@ -478,7 +522,9 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         outcomes[k.name] = await inRolledBackTx(async c => {
           await c.query(`ALTER TABLE ${k.table} DISABLE TRIGGER USER`);
           const f = await failure(
-            c.query(`UPDATE ${k.table} SET session_id = NULL WHERE ctid = (SELECT ctid FROM ${k.table} WHERE ${notNull} LIMIT 1)`),
+            c.query(
+              `UPDATE ${k.table} SET session_id = NULL WHERE ctid = (SELECT ctid FROM ${k.table} WHERE ${notNull} LIMIT 1)`,
+            ),
           );
           return f.code;
         });
@@ -643,10 +689,10 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       await inRolledBackTx(async c => {
         // the attempt's other dependants (agreement-free here) cascade; no trigger stands in the way of the FK actions
         await c.query(`DELETE FROM empathy_attempt WHERE id = $1`, [m.source_attempt_id]);
-        const r = await c.query(`SELECT source_attempt_id, session_id FROM message WHERE conversation_id = $1 AND seq = $2`, [
-          m.conversation_id,
-          m.seq,
-        ]);
+        const r = await c.query(
+          `SELECT source_attempt_id, session_id FROM message WHERE conversation_id = $1 AND seq = $2`,
+          [m.conversation_id, m.seq],
+        );
         // work-k5fk.4 (k5fk.21): one key, SET NULL (source_attempt_id): the session stays.
         expect(r.rows).toEqual([{ source_attempt_id: null, session_id: ids.session }]);
       });

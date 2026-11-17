@@ -547,7 +547,10 @@ export interface CreateAgreementsArgs {
 
 export async function createAgreementsAsJob(args: CreateAgreementsArgs): Promise<string[]> {
   // The worker, scoped to the session (work-k5fk.10.5: t_session_scope binds its agreement writes to it).
-  return withSessionScope(args.sessionId, async () => await getWorkerPrisma().$transaction(tx => insertAgreementsTx(tx, args)));
+  return withSessionScope(
+    args.sessionId,
+    async () => await getWorkerPrisma().$transaction(tx => insertAgreementsTx(tx, args)),
+  );
 }
 
 /** The writes of `createAgreementsAsJob`, inside a caller's worker transaction scoped to the session. */
@@ -598,7 +601,10 @@ export interface CloseSessionArgs {
 }
 
 export async function closeSessionAsJob(args: CloseSessionArgs): Promise<void> {
-  await withSessionScope(args.sessionId, async () => await getWorkerPrisma().$transaction(tx => insertClosureTx(tx, args)));
+  await withSessionScope(
+    args.sessionId,
+    async () => await getWorkerPrisma().$transaction(tx => insertClosureTx(tx, args)),
+  );
   await reachClosedForAll(args.sessionId, args.at ?? new Date());
 }
 

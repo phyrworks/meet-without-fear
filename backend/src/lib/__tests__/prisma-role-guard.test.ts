@@ -96,16 +96,20 @@ describe('roleGuardViolations', () => {
     expect(roleGuardViolations({ ...clean(), memberships: ['app_access', 'mwf_ai'] }, 'app')[0]).toMatch(
       /reaches role\(s\) mwf_ai/,
     );
-    expect(ROLE_GUARD_SQL).toMatch(/'memberships', ARRAY\(\s*SELECT r\.rolname::text FROM pg_catalog\.pg_roles r\s*WHERE r\.oid <> me\.oid AND pg_catalog\.pg_has_role\(me\.oid, r\.oid, 'MEMBER'\)/);
+    expect(ROLE_GUARD_SQL).toMatch(
+      /'memberships', ARRAY\(\s*SELECT r\.rolname::text FROM pg_catalog\.pg_roles r\s*WHERE r\.oid <> me\.oid AND pg_catalog\.pg_has_role\(me\.oid, r\.oid, 'MEMBER'\)/,
+    );
   });
 
   it('review 9a F1: refuses a login that can SET ROLE to any role (its capability included)', () => {
     // SET ROLE app_access would make current_user app_access: the triggers keyed on the login (and any
     // future per-login policy) would no longer see mwf_app.
-    expect(
-      roleGuardViolations({ ...clean(), memberships: ['app_access'], setRoles: ['app_access'] }, 'app'),
-    ).toEqual(['mwf_app can SET ROLE to app_access (a runtime login holds its capability WITH SET FALSE)']);
-    expect(ROLE_GUARD_SQL).toMatch(/'setRoles', ARRAY\(\s*SELECT r\.rolname::text FROM pg_catalog\.pg_roles r\s*WHERE r\.oid <> me\.oid AND pg_catalog\.pg_has_role\(me\.oid, r\.oid, 'SET'\)/);
+    expect(roleGuardViolations({ ...clean(), memberships: ['app_access'], setRoles: ['app_access'] }, 'app')).toEqual([
+      'mwf_app can SET ROLE to app_access (a runtime login holds its capability WITH SET FALSE)',
+    ]);
+    expect(ROLE_GUARD_SQL).toMatch(
+      /'setRoles', ARRAY\(\s*SELECT r\.rolname::text FROM pg_catalog\.pg_roles r\s*WHERE r\.oid <> me\.oid AND pg_catalog\.pg_has_role\(me\.oid, r\.oid, 'SET'\)/,
+    );
   });
 
   it('refuses a capability held WITH ADMIN OPTION', () => {

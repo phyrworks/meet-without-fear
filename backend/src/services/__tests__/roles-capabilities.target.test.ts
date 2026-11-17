@@ -46,19 +46,48 @@ const CAPABILITIES = Object.values(LOGIN_CAPABILITY) as string[];
  * what a definer bug or an injection into one can change.
  */
 const DEFINER_WRITES = [
-  'user:INSERT', 'user:UPDATE', 'user_identity:INSERT', 'user_identity:DELETE', 'user_contact:DELETE',
-  'session:UPDATE', 'participant:UPDATE', 'live_session_pair:INSERT', 'live_session_pair:DELETE',
-  'conversation:UPDATE', 'conversation:DELETE', 'message:INSERT',
+  'user:INSERT',
+  'user:UPDATE',
+  'user_identity:INSERT',
+  'user_identity:DELETE',
+  'user_contact:DELETE',
+  'session:UPDATE',
+  'participant:UPDATE',
+  'live_session_pair:INSERT',
+  'live_session_pair:DELETE',
+  'conversation:UPDATE',
+  'conversation:DELETE',
+  'message:INSERT',
   // work-k5fk.10.5: the request path's two-party writes (reach_milestone, session_resume, choices_unshare,
   // share_offers_expire, share_offers_mark_notified)
-  'participant_milestone:INSERT', 'participant_milestone:DELETE', 'context_share_offer:UPDATE',
-  'empathy_attempt:INSERT', 'empathy_attempt:UPDATE', 'empathy_attempt:DELETE',
-  'need:DELETE', 'need_share:INSERT', 'need_share:UPDATE', 'consent:UPDATE',
-  'participant_key:UPDATE', 'user_key:UPDATE',
-  'conversation_read_state:DELETE', 'draft:DELETE', 'ai_memory:DELETE', 'mood_reading:DELETE',
-  'regulation_event:DELETE', 'need_disposition:DELETE', 'follow_up_note:DELETE', 'proposal_choice:DELETE',
-  'follow_up_checkin:DELETE', 'brain_activity:DELETE', 'reflection:DELETE', 'feature_state:DELETE',
-  'user_memory:DELETE', 'user_device:DELETE', 'user_preferences:DELETE', 'reminder:DELETE',
+  'participant_milestone:INSERT',
+  'participant_milestone:DELETE',
+  'context_share_offer:UPDATE',
+  'empathy_attempt:INSERT',
+  'empathy_attempt:UPDATE',
+  'empathy_attempt:DELETE',
+  'need:DELETE',
+  'need_share:INSERT',
+  'need_share:UPDATE',
+  'consent:UPDATE',
+  'participant_key:UPDATE',
+  'user_key:UPDATE',
+  'conversation_read_state:DELETE',
+  'draft:DELETE',
+  'ai_memory:DELETE',
+  'mood_reading:DELETE',
+  'regulation_event:DELETE',
+  'need_disposition:DELETE',
+  'follow_up_note:DELETE',
+  'proposal_choice:DELETE',
+  'follow_up_checkin:DELETE',
+  'brain_activity:DELETE',
+  'reflection:DELETE',
+  'feature_state:DELETE',
+  'user_memory:DELETE',
+  'user_device:DELETE',
+  'user_preferences:DELETE',
+  'reminder:DELETE',
 ];
 /** Capabilities that hold no privilege (Q18). */
 const EMPTY = ['clinician_access'];
@@ -134,7 +163,9 @@ describeTarget('capability roles and mwf_definer (target)', () => {
        FROM pg_roles r WHERE r.rolname = ANY($1::text[]) ORDER BY 1`,
       [LOGINS],
     );
-    expect(rows).toEqual([...LOGINS].sort().map(rolname => ({ rolname, attrs: ACTIVE.includes(rolname) ? 'LOGIN' : '' })));
+    expect(rows).toEqual(
+      [...LOGINS].sort().map(rolname => ({ rolname, attrs: ACTIVE.includes(rolname) ? 'LOGIN' : '' })),
+    );
     const pw = await run.sql<{ rolname: string; has: boolean }>(
       `SELECT rolname::text, rolpassword IS NOT NULL AS has FROM pg_authid WHERE rolname = ANY($1::text[]) ORDER BY 1`,
       [RESERVED],
@@ -281,9 +312,7 @@ describeTarget('capability roles and mwf_definer (target)', () => {
 
   it('the logins work through their capability: mwf_app reads milestone, mwf_auth calls resolve_user, mwf_clinician reads nothing', async () => {
     expect((await run.as('mwf_app', null, `SELECT count(*)::int AS n FROM milestone`))[0]).toEqual({ n: 13 });
-    expect(
-      (await run.as('mwf_auth', null, `SELECT app.resolve_user('clerk', 'nobody') AS u`))[0],
-    ).toEqual({ u: null });
+    expect((await run.as('mwf_auth', null, `SELECT app.resolve_user('clerk', 'nobody') AS u`))[0]).toEqual({ u: null });
     const [r] = await run.sql<{ any: boolean }>(
       `SELECT bool_or(has_table_privilege('mwf_clinician', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
                       OR has_any_column_privilege('mwf_clinician', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) AS any

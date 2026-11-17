@@ -60,16 +60,18 @@ async function unreadContext(me: Me) {
     where: { sessionId_userId: { sessionId: me.sessionId, userId: me.userId } },
     select: { lastViewedShareTabAt: true },
   });
-  return prisma.message.findMany({
-    where: {
-      conversationId: me.mainConversationId,
-      kind: 'SHARED_CONTEXT',
-      senderUserId: { not: me.userId },
-      ...(readState?.lastViewedShareTabAt ? { createdAt: { gt: readState.lastViewedShareTabAt } } : {}),
-    },
-    orderBy: { seq: 'desc' },
-    select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
-  }).then(rows => rows.map(withMessageId));
+  return prisma.message
+    .findMany({
+      where: {
+        conversationId: me.mainConversationId,
+        kind: 'SHARED_CONTEXT',
+        senderUserId: { not: me.userId },
+        ...(readState?.lastViewedShareTabAt ? { createdAt: { gt: readState.lastViewedShareTabAt } } : {}),
+      },
+      orderBy: { seq: 'desc' },
+      select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
+    })
+    .then(rows => rows.map(withMessageId));
 }
 
 async function openOffers(me: Me) {

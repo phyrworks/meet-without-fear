@@ -292,24 +292,28 @@ export async function closeStage4WithoutAgreement(args: {
   ]);
   const individual = willingIndividualCommitments(proposals, choices).filter(visibleToCloser(args.seat));
   const now = new Date();
-  await withSessionScope(args.sessionId, async () => await getWorkerPrisma().$transaction(tx =>
-    insertClosureTx(tx, {
-      sessionId: args.sessionId,
-      kind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
-      reason: args.reason,
-      summary: buildClosureSummary(
-        Stage4ClosureKind.NO_SHARED_AGREEMENT,
-        0,
-        individual.length,
-        items.openNeedIds.length,
-        args.summary,
-      ),
-      closedByUserId: args.seat.userId,
+  await withSessionScope(
+    args.sessionId,
+    async () =>
+      await getWorkerPrisma().$transaction(tx =>
+        insertClosureTx(tx, {
+          sessionId: args.sessionId,
+          kind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
+          reason: args.reason,
+          summary: buildClosureSummary(
+            Stage4ClosureKind.NO_SHARED_AGREEMENT,
+            0,
+            individual.length,
+            items.openNeedIds.length,
+            args.summary,
+          ),
+          closedByUserId: args.seat.userId,
 
-      checkInAt: null,
-      at: now,
-    }),
-  ));
+          checkInAt: null,
+          at: now,
+        }),
+      ),
+  );
   await reachClosedForAll(args.sessionId, now);
   return { individualCount: individual.length, openNeedCount: items.openNeedIds.length };
 }

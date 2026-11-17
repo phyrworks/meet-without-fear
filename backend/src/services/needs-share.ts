@@ -10,7 +10,7 @@
  *      (T-consent-owner: the decider must own the need);
  *   2. the JOB transforms the text (`transformNeedForSharing`) and calls
  *      `app.need_share(need, shared_text)` on the JOB connection. That definer
- *      function is the only writer of `need_share` (EXECUTE is mwf_job's
+ *      function is the only writer of `need_share` (the need owner's since work-k5fk.10.5; EXECUTE was mwf_job's
  *      alone; it refuses a need without its owner's GRANTED consent and copies
  *      participant/session/category from the need). The app never INSERTs
  *      `need_share`;

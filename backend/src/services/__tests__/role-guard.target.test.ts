@@ -70,10 +70,14 @@ describeTarget('runtime role guard (target)', () => {
     expect(await firstQuery(workerUrlFor(fx.target, fx.database), 'worker')).toEqual([{ who: 'mwf_worker' }]);
     const aiAsApp = await firstQuery(aiUrlFor(fx.target, fx.database), 'app');
     expect(aiAsApp).toBeInstanceOf(RuntimeRoleRefusedError);
-    expect((aiAsApp as Error).message).toMatch(/mwf_ai reaches role\(s\) ai_access .*the app login may reach app_access only/);
+    expect((aiAsApp as Error).message).toMatch(
+      /mwf_ai reaches role\(s\) ai_access .*the app login may reach app_access only/,
+    );
     expect((aiAsApp as Error).message).not.toMatch(/owns objects/);
     const workerAsAi = await firstQuery(workerUrlFor(fx.target, fx.database), 'ai');
-    expect((workerAsAi as Error).message).toMatch(/mwf_worker reaches role\(s\) worker_access .*the ai login may reach ai_access only/);
+    expect((workerAsAi as Error).message).toMatch(
+      /mwf_worker reaches role\(s\) worker_access .*the ai login may reach ai_access only/,
+    );
   });
 
   it('H1: refuses a superuser login whose session starts as mwf_app (options=-c role=mwf_app)', async () => {
@@ -169,7 +173,11 @@ describeTarget('runtime role guard (target)', () => {
         await refusalInTx([`GRANT app_access TO ${login} WITH INHERIT TRUE, SET FALSE`, `GRANT ${empty} TO ${login}`]),
       ).toContain(`${login} reaches role(s) ${empty}`);
       const [{ n }] = (
-        await withClient(fx.target, c => c.query(`SELECT count(*)::int AS n FROM pg_auth_members WHERE roleid = 'app_access'::regrole`), fx.database)
+        await withClient(
+          fx.target,
+          c => c.query(`SELECT count(*)::int AS n FROM pg_auth_members WHERE roleid = 'app_access'::regrole`),
+          fx.database,
+        )
       ).rows as Array<{ n: number }>;
       expect(n).toBe(1); // only mwf_app: nothing was committed
     });

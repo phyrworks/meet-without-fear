@@ -121,8 +121,12 @@ describeTarget(
           content: 'PROBE_TS13_TURN',
         }),
       );
-      const ai = await asAi(() => messages.createFacilitatorMessage({ conversationId: conv.ada, content: 'PROBE_TS13_AI_REPLY' }));
-      await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = ANY($1::text[])`, [[own.id, ai.id]]);
+      const ai = await asAi(() =>
+        messages.createFacilitatorMessage({ conversationId: conv.ada, content: 'PROBE_TS13_AI_REPLY' }),
+      );
+      await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = ANY($1::text[])`, [
+        [own.id, ai.id],
+      ]);
       await expectNoContentDerivedValue(own.id, 'PROBE_TS13_TURN');
       await expectNoContentDerivedValue(ai.id, 'PROBE_TS13_AI_REPLY');
       const listed = await asUser(ids.adaUser, () =>
@@ -144,7 +148,9 @@ describeTarget(
           content: typed,
         }),
       );
-      const [stored] = (await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = $1`, [delivered.id])) as string[];
+      const [stored] = (await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = $1`, [
+        delivered.id,
+      ])) as string[];
       expect(stored).not.toBe(typed);
       const bobs = await asUser(ids.bobUser, () =>
         messages.listConversationMessages({ conversationId: conv.bob, limit: 500, order: 'asc' }),
@@ -202,15 +208,21 @@ describeTarget(
       result.gaps.mostImportantGap = 'PROBE_TS13_MOST_IMPORTANT';
       result.recommendation.rationale = 'PROBE_TS13_RATIONALE';
       result.recommendation.suggestedShareFocus = 'PROBE_TS13_FOCUS';
-      const id = await asAi(() => analysis.persistAnalysis({
-        attemptId: bobRound1,
-        sessionId: ids.session,
-        authorUserId: ids.bobUser,
-        subjectUserId: ids.adaUser,
-        result,
-        guidance: { areaHint: 'PROBE_TS13_AREA', guidanceType: 'challenge_assumptions', promptSeed: 'PROBE_TS13_SEED' },
-        suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
-      }));
+      const id = await asAi(() =>
+        analysis.persistAnalysis({
+          attemptId: bobRound1,
+          sessionId: ids.session,
+          authorUserId: ids.bobUser,
+          subjectUserId: ids.adaUser,
+          result,
+          guidance: {
+            areaHint: 'PROBE_TS13_AREA',
+            guidanceType: 'challenge_assumptions',
+            promptSeed: 'PROBE_TS13_SEED',
+          },
+          suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
+        }),
+      );
       expect(id).toEqual(expect.any(String));
       for (const column of [
         'most_important_gap',

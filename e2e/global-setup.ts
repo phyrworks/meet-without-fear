@@ -22,9 +22,7 @@ async function globalSetup(_config: FullConfig) {
   console.log('\nE2E Global Setup Starting...');
 
   const backendDir = path.resolve(__dirname, '../backend');
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    'postgresql://mwf_user:mwf_password@localhost:5432/mwf_target_e2e';
+  const databaseUrl = process.env.DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/mwf_target_e2e';
 
   console.log('Using database:', databaseUrl.replace(/:[^:@]+@/, ':***@'));
 

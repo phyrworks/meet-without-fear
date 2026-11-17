@@ -7,7 +7,7 @@
  * Designed to be wired into any scheduler (Render cron, EC2 crontab, GitHub
  * Actions schedule). The policies are in `services/session-retention.ts`
  * (expired sessions) and `services/data-retention.ts` (brain_activity, spec
- * §1.8 short retention). Both run as the job (JOB_DATABASE_URL, mwf_job; TS-12).
+ * §1.8 short retention). Both run as the worker (WORKER_DATABASE_URL, mwf_worker; TS-12, work-k5fk.10.5).
  */
 
 import { enforceSessionRetention } from '../services/session-retention';

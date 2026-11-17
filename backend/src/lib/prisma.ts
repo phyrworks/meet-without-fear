@@ -174,7 +174,9 @@ const globalForTooling = globalThis as unknown as { e2eToolingPrisma: PrismaClie
 
 export function getE2EToolingPrisma(): PrismaClient {
   if (!isE2EBypassEnabled()) {
-    throw new Error('The E2E tooling connection exists only with E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e');
+    throw new Error(
+      'The E2E tooling connection exists only with E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e',
+    );
   }
   if (!globalForTooling.e2eToolingPrisma) {
     const url = process.env.DATABASE_URL;

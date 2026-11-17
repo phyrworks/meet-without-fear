@@ -2,7 +2,7 @@
  * Account Deletion Service — the tombstone walk (TS-12; spec §4
  * `app.anonymize_user_account` "the complete walk", P3 D9).
  *
- * The walk is ONE SQL function, run by the JOB (`mwf_job`, the principal for
+ * The walk is ONE SQL function, run on the user's own request (mwf_app, the definer's self arm; until work-k5fk.10.5 the JOB, `mwf_job`, the principal for
  * work that crosses participants — R35) as one statement, so it is one
  * transaction: every live session → ABANDONED; each of the user's
  * participants loses its display name and leaves; the leaver's private-only

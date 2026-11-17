@@ -736,7 +736,10 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
     // positive integer, no such line) reads as null, as a non-message chat-item id did.
     const conversationId = participant.mainConversationId;
     const seen =
-      conversationId && Number.isInteger(lastSeenSeq) && (lastSeenSeq as number) >= 1 && (lastSeenSeq as number) <= 2147483647
+      conversationId &&
+      Number.isInteger(lastSeenSeq) &&
+      (lastSeenSeq as number) >= 1 &&
+      (lastSeenSeq as number) <= 2147483647
         ? await prisma.message.findUnique({
             where: { conversationId_seq: { conversationId, seq: lastSeenSeq as number } },
             select: { conversationId: true, seq: true },

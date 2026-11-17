@@ -23,7 +23,7 @@
  * owner's opt-in) on the APP connection; the scheduler, the open-due job,
  * status moves of a follow-up and reminder delivery on the JOB connection
  * (spec: follow_up "I member / job (scheduler) · U owner or job (status)",
- * reminder "status → DELIVERED by mwf_job").
+ * reminder "status → DELIVERED by mwf_job" — mwf_worker since work-k5fk.10.5).
  *
  * The DTOs (`shared/src/dto/strategy.ts` Tending*) keep their shape: ids are
  * the follow-up / check-in ids, user ids are the participants' user ids.
