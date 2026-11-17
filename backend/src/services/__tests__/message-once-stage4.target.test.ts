@@ -33,6 +33,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   let http: Awaited<ReturnType<typeof httpAs>>;
   let store: typeof import('../message-store');
   let ctx: typeof import('../../lib/request-context');
+  /** The AI's once-only line, scoped to the run's session (app.session_scope; work-k5fk.10.5). */
+  const onceInScope = (o: Parameters<typeof store.createFacilitatorMessageOnce>[0]) =>
+    ctx.withSessionScope(ids.session, () => store.createFacilitatorMessageOnce(o));
   let conv: { ada: string; bob: string };
   const ada = () => ({ id: ids.adaUser, email: 'ada@e2e.test' });
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
@@ -124,13 +127,13 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   });
 
   it('createFacilitatorMessageOnce: one row per (conversation, key), on a repeat and on concurrent calls', async () => {
-    const first = await store.createFacilitatorMessageOnce({
+    const first = await onceInScope({
       conversationId: conv.bob,
       dedupeKey: 'STAGE2_VALIDATED_WAIT',
       content: 'PROBE_FDC1_ONCE',
     });
     expect(first).toMatchObject({ role: 'AI', kind: 'CHAT', content: 'PROBE_FDC1_ONCE' });
-    const again = await store.createFacilitatorMessageOnce({
+    const again = await onceInScope({
       conversationId: conv.bob,
       dedupeKey: 'STAGE2_VALIDATED_WAIT',
       content: 'PROBE_FDC1_ONCE (different text, same key)',
@@ -141,7 +144,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     // Concurrent: a fresh key in another conversation, five writers at once.
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
-        store.createFacilitatorMessageOnce({
+        onceInScope({
           conversationId: conv.ada,
           dedupeKey: 'STAGE2_VALIDATED_WAIT',
           content: 'PROBE_FDC1_RACE',

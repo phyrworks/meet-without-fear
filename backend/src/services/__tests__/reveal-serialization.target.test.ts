@@ -54,7 +54,8 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
       const [{ pid }] = (await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows;
 
       const state = await import('../reconciler/state');
-      const reveal = state.checkAndRevealBothIfReady(ids.session);
+      const { withSessionScope } = await import('../../lib/request-context');
+      const reveal = withSessionScope(ids.session, () => state.checkAndRevealBothIfReady(ids.session));
       // Wait until some backend is blocked behind the blocker's row lock — the reveal's copy into Ada's conversation.
       for (let i = 0; ; i++) {
         const [{ n }] = await run.sql<{ n: number }>(

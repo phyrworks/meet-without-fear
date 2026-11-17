@@ -145,7 +145,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     // Bob's round about Ada is HELD; Ada is its subject.
     for (const to of ['READY', 'AWAITING_SHARING'] as const) {
       await expect(as(ada.userId, () => setAttemptStatus(bobRound1, to, { actor: 'participant' }))).rejects.toThrow(
-        /only the author or the job moves this attempt/,
+        /only the author or the AI moves this attempt/,
       );
     }
     expect((await attempts()).find(a => a.id === bobRound1)!.status).toBe('HELD');

@@ -169,7 +169,7 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(await asApp(ada.id, `UPDATE session SET archived_at = now() WHERE id = $1`, [left])).toBe('42501');
     expect(await asApp(ada.id, `UPDATE session SET archived_by_user_id = NULL WHERE id = $1`, [left])).toBe('42501');
     expect(await asAppMessage(ada.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).toBe(
-      '42501 only the job archives through session_set_status; a participant uses app.session_archive',
+      '42501 only a worker archives through session_set_status; a participant uses app.session_archive',
     );
     expect(await status(left)).toBe('ABANDONED');
   });

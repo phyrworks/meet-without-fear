@@ -102,9 +102,9 @@ describeTarget('memory and preferences on the target, as mwf_app (and the job as
 
   it("push: the JOB (mwf_job) reads another user's tokens and clears an unregistered one", async () => {
     const settings = await import('../user-settings');
-    expect(await settings.pushTokensAsJob(ada.id)).toEqual([TOKEN_B]);
-    await settings.clearPushTokenAsJob(ada.id, TOKEN_B);
-    expect(await settings.pushTokensAsJob(ada.id)).toEqual([]);
+    expect(await settings.pushTokensAsWorker(ada.id)).toEqual([TOKEN_B]);
+    await settings.clearPushTokenAsWorker(ada.id, TOKEN_B);
+    expect(await settings.pushTokensAsWorker(ada.id)).toEqual([]);
     // …and the job still holds no read of anything else on user_device
     await expect(run.as('mwf_worker', null, `SELECT biometric_enabled FROM user_device`)).rejects.toThrow(
       /permission denied/,
