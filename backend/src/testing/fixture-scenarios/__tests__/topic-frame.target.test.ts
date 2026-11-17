@@ -127,6 +127,6 @@ describeTarget('target writer — the seeded invitation and accept (work-9klf, w
       rows: [{ session: 'ACTIVE', invitation: 'ACCEPTED', participants: 2 }],
     });
   });
-  // EMPATHY_SHARED_A's accept: post-accept-seed.test.ts (one app harness per test file —
+  // EMPATHY_SHARED_A's accept: post-accept-seed.target.test.ts (one app harness per test file —
   // lib/prisma caches its client on globalThis, pointed at the first run database).
 });

@@ -263,10 +263,13 @@ jobs:
           done
           exit $status
 
-      - name: Run tests (backend)
-        run: npm run test --workspace=backend
+      # Every tier: fast (no DB), db (*.target.test.ts, 2 workers) and all 11
+      # goldens, serial (docs/architecture/testing.md, "Which tests to run when").
+      - name: Run tests (backend, test:all)
+        run: npm run test:all --workspace=backend
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          MWF_DB_WORKERS: '2'
 
       # The server log holds bind values inlined into plan predicates (ids, not
       # message text: docs/development/local-setup.md); it is uploaded only on

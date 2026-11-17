@@ -5,6 +5,8 @@
   "description": "E2E tests for Meet Without Fear",
   "scripts": {
     "e2e": "playwright test",
+    "test:e2e": "playwright test --config=playwright.smoke.config.ts",
+    "test:e2e:full": "playwright test --config=playwright.config.ts; a=$?; playwright test --config=playwright.two-browser.config.ts; b=$?; [ $a -eq 0 ] && [ $b -eq 0 ]",
     "e2e:headed": "playwright test --headed",
     "e2e:ui": "playwright test --ui",
     "e2e:report": "playwright show-report",

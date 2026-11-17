@@ -3,7 +3,7 @@ title: Testing Patterns
 sidebar_position: 9
 description: "Analysis Date: 2026-03-11"
 created: 2026-03-11
-updated: 2026-05-07
+updated: 2026-11-17
 status: living
 ---
 # Testing Patterns
@@ -35,9 +35,10 @@ status: living
 
 **Run Commands:**
 ```bash
-# Backend
-npm run test --workspace=backend              # Run all tests
-npm run test:watch --workspace=backend        # Watch mode
+# Backend (tiers: see "Which tests to run when" below)
+npm run test --workspace=backend              # fast project only (no database)
+npm run test:all --workspace=backend          # fast + db + every golden
+npm run test:watch --workspace=backend        # Watch mode (fast project)
 npm run test -- --verbose --workspace=backend # With console output
 
 # Mobile
@@ -48,6 +49,8 @@ npm run test:watch --workspace=mobile         # Watch mode
 npm run test                                  # All tests (parallel where safe)
 
 # E2E
+npm run test:e2e                              # Smoke tier (2 specs)
+npm run test:e2e:full                         # Default + two-browser configs
 cd e2e && npx playwright test                 # Standard fixtures (mocked AI)
 cd e2e && npx playwright test --headed        # With browser visible
 cd e2e && npx playwright test --ui            # Playwright UI mode
@@ -56,6 +59,28 @@ cd e2e && npx playwright test --config=playwright.live-ai.config.ts # Real AI
 # Coverage (not enforced)
 npm run test -- --coverage --workspace=backend
 ```
+
+## Which tests to run when
+
+| Tier | When | Command | Time (measured 2026-11-17, this Mac) |
+|---|---|---|---|
+| **Inner loop** | every edit | `npm test --workspace=backend -- --findRelatedTests <files>`, plus the one `*.target.test.ts` for the area you touched (`npm run test:db --workspace=backend -- <name>`) | seconds |
+| **Before a commit** | each commit | `npm run test` (backend `fast` + shared + mobile) and `npm run check` | ~6 s + 5 s + 7 s, warm cache |
+| **Pre-merge** | before merging a branch | `npm run test:premerge --workspace=backend` (fast + db + the seven pre-merge goldens); `run-baseline.sh` if `backend/scripts/target-shape` or `prisma/` changed; `npm run test:e2e` if the change reaches the UI | ~4 min: fast 6 s + db 88 s (2 workers) + seven goldens ~145 s; e2e smoke +1.7 min |
+| **Nightly / CI** | CI, or by hand overnight | `npm run test:all --workspace=backend` (CI runs this); `npm run test:e2e:full`; the live-AI config by hand | backend ~6 min (fast 6 s, db 88 s, goldens 272 s); e2e full 24 min (default config 7.4 min, two-browser 16.8 min) |
+
+The backend jest projects (`backend/jest.config.js`) are chosen by file name:
+
+- `fast`: everything else. No database; a suite here that connects fails.
+- `db`: `*.target.test.ts`, `*.pg.test.ts`, `src/__tests__/db/`. Each suite clones a golden template into its own database, so it runs on 2 workers (`MWF_DB_WORKERS`). Exhaustive sweeps that cannot catch an app regression (the email domain's Unicode sweeps) run only under `MWF_TEST_ALL=1`, which `test:all` sets.
+- `golden`: `*.golden.test.ts`, serial (they read the shared container's statement log). `test:golden:premerge` runs the seven whose read-boundary claim no target suite makes as broadly (session-read, empathy-reveal, author-sees-status-only, choices-hidden-until-shared, needs-hidden-until-shared, unrevealed-attempt-hidden, reflection-never-crosses). The other four run only in `test:golden` / `test:all`, each because a target suite makes the same claim: declined-offer-no-trace (`consent-arc.target`, the decline leaves the author's reads unchanged), tombstone (`deletion-retention.target`, account deletion), and the two reveal orders (`empathy-rounds.target`, the reveal gate and its one delivered copy each; `reveal-serialization.target`).
+
+The e2e tiers (`e2e/`):
+
+- `npm run test:e2e`: smoke, `playwright.smoke.config.ts`. `single-user-journey` and `two-browser-stage-4-redesign` (selection privacy) on one server boot. Kept small on purpose: headless Chromium runs track the memory growth that has panicked the development Mac.
+- `npm run test:e2e:full`: `playwright.config.ts` then `playwright.two-browser.config.ts`. No spec runs in both.
+
+Rules that keep the fast tiers fast: a schema invariant goes in step 20 (`backend/scripts/target-shape/trailer.sql`), not in jest; a new privacy rule gets one target test of the refusal, not a new golden; one file per behaviour area, not per review finding.
 
 ## Test File Organization
 
@@ -620,7 +645,7 @@ npm run e2e
 **CI Pipeline:**
 - `.github/workflows/ci.yml` runs on pushes to `main` and `phoenix/target-shape` and on PRs into `main` or `phoenix/**` (a feature branch is CI'd through its PR; a docs-only push skips the code jobs), as two parallel jobs, both with `TZ=UTC`:
   - `checks`: `npm run check` (type-check only; eslint is not clean yet, work-k5fk.10.20), then the shared and mobile jest suites (no database);
-  - `backend` (the target-shape gate): a `mwf-postgres` container from production's PG 18 image pin, built as a developer's is (`docs/development/local-setup.md`: superuser `mwf_user`, `infra/aws/roles.sql` with the `mwf_*_dev` passwords and the D0 check asserted, a `podman` → `docker` shim so the scripts and the golden trace reader work unchanged), `run-baseline.sh ts7_ci_gate --as-migrator`, `mwf_target_test` owned by and deployed as `mwf_migrator`, one golden template per committed manifest (`golden/cli.ts build <stage>`; the rebuilt manifests must equal the committed ones with seeded ids and `builtAt` masked), then the full backend suite with `DATABASE_URL` (superuser) and `APP_`/`JOB_`/`AUTH_DATABASE_URL` (role logins) on `mwf_target_test`, `GOLDEN_DATABASE_URL`, and `NODE_OPTIONS=--max-old-space-size=8192`.
+  - `backend` (the target-shape gate): a `mwf-postgres` container from production's PG 18 image pin, built as a developer's is (`docs/development/local-setup.md`: superuser `mwf_user`, `infra/aws/roles.sql` with the `mwf_*_dev` passwords and the D0 check asserted, a `podman` → `docker` shim so the scripts and the golden trace reader work unchanged), `run-baseline.sh ts7_ci_gate --as-migrator`, `mwf_target_test` owned by and deployed as `mwf_migrator`, one golden template per committed manifest (`golden/cli.ts build <stage>`; the rebuilt manifests must equal the committed ones with seeded ids and `builtAt` masked), then `npm run test:all` in backend (all three jest projects) with `DATABASE_URL` (superuser) and `APP_`/`JOB_`/`AUTH_DATABASE_URL` (role logins) on `mwf_target_test`, `GOLDEN_DATABASE_URL`, and `NODE_OPTIONS=--max-old-space-size=8192`.
   - `CI Result` is the single gate job for branch protection.
 - A separate `python-eval` CI job runs when eval files change (`scripts/mwf_*.py`, `eval/gold-scenarios.json`, `eval/icm/**`, `eval/moments/**`, etc.): runs `py_compile` syntax checks across all gold-loop scripts and executes `scripts/test_mwf_moment_eval.py`
 - E2E tests run on merge to main (slower, separate job)

@@ -25,7 +25,7 @@
  *     was, because the labeller mapped it to <relationship:main>, so it
  *     asserted nothing). RELATIONSHIP_ID_CONCEPT_RULE compares the restored
  *     session row's relationship_id as absent, in every concept allow-list
- *     (empathy-reveal's included); concept-views.test names the column in
+ *     (empathy-reveal's included); concept-views.target.test names the column in
  *     DROPPED_COLUMNS.
  *   - participant rows gain `added_by_user_id`; the concept participant view
  *     does not project it, and no scenario step writes a participant, so no
