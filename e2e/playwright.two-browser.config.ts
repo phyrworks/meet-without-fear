@@ -12,9 +12,11 @@
 import { defineConfig } from '@playwright/test';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { E2E_API_PORT, E2E_WEB_PORT, E2E_API_URL, E2E_API_URL_IP, E2E_WEB_URL, applyE2EPortEnv } from './e2e-ports';
 
 // Load test environment variables
 dotenv.config({ path: path.resolve(__dirname, '.env.test') });
+applyE2EPortEnv();
 
 export default defineConfig({
   testDir: './tests',
@@ -43,7 +45,7 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
     browserName: 'chromium',
-    baseURL: 'http://localhost:8082',
+    baseURL: E2E_WEB_URL,
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     viewport: { width: 375, height: 667 },
@@ -56,7 +58,7 @@ export default defineConfig({
       testIgnore: /live-ai-.*\.spec\.ts/,
       use: {
         browserName: 'chromium',
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
   ],
@@ -69,7 +71,7 @@ export default defineConfig({
       // migrations finish; mutating the schema beneath a live client causes
       // long pool stalls on the first browser requests.
       command: 'npx tsx e2e/prepare-database.ts && npm run dev:api',
-      url: 'http://localhost:3000/health',
+      url: `${E2E_API_URL}/health`,
       reuseExistingServer: false,
       cwd: '..',
       timeout: 60000,
@@ -80,6 +82,8 @@ export default defineConfig({
         // (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
         NODE_ENV: 'development',
         MOCK_LLM: 'true',
+        PORT: String(E2E_API_PORT),
+        E2E_WEB_PORT: String(E2E_WEB_PORT),
         // NO E2E_FIXTURE_ID - per-user fixtures via request headers
       },
     },
@@ -88,8 +92,8 @@ export default defineConfig({
       // the main E2E suite. In dev mode, CREATED sessions intentionally use a
       // lightweight __DEV__ chat surface that omits the compact/invitation
       // controls exercised by these tests.
-      command: 'cd ../mobile && EXPO_PUBLIC_E2E_MODE=true EXPO_PUBLIC_API_URL=http://127.0.0.1:3000 npx expo start --web --port 8082 --no-dev',
-      url: 'http://localhost:8082',
+      command: `cd ../mobile && EXPO_PUBLIC_E2E_MODE=true EXPO_PUBLIC_API_URL=${E2E_API_URL_IP} npx expo start --web --port ${E2E_WEB_PORT} --no-dev --clear`,
+      url: E2E_WEB_URL,
       reuseExistingServer: false,
       timeout: 300000,
     },
