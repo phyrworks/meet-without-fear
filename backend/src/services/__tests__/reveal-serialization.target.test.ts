@@ -16,7 +16,7 @@
  */
 
 import { Client } from 'pg';
-import { jobUrlFor } from '../../testing/golden/driver';
+import { aiUrlFor } from '../../testing/golden/driver';
 import { isTargetShape } from '../../testing/golden/shape';
 import { openTargetRun, type TargetRun } from './target-roles';
 
@@ -41,10 +41,12 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
                    UPDATE empathy_attempt SET status = 'READY' WHERE session_id = '${ids.session}';
                    ALTER TABLE empathy_attempt ENABLE TRIGGER USER; COMMIT;`);
 
-    const blocker = new Client({ connectionString: jobUrlFor(run.fx.target, run.fx.database) });
+    const blocker = new Client({ connectionString: aiUrlFor(run.fx.target, run.fx.database) });
     await blocker.connect();
     try {
       await blocker.query('BEGIN');
+      // The AI writes within its session (app.session_scope; work-k5fk.10.5).
+      await blocker.query("SELECT set_config('app.session_scope', $1, true)", [ids.session]);
       await blocker.query(
         `INSERT INTO message (conversation_id, session_id, role, kind, content) VALUES ($1, $2, 'AI', 'CHAT', 'concurrent line')`,
         [ids.adaConv, ids.session],

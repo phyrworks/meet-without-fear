@@ -244,10 +244,12 @@ describeTarget('mwf_app grants (target)', () => {
   // into tables.sql next to each table, so the move is proven a pure move: this snapshot did not
   // change with it. work-k5fk.10.4 re-homed it: mwf_job's grants are job_access's, except those it
   // held only as the definers' owner, now mwf_definer's (with the routines it owns); mwf_ops' are
-  // ops_access's, mwf_auth's auth_access's.
-  it('the job_access / ops_access / auth_access / mwf_definer / mwf_migrator privilege matrix is exactly the recorded one', async () => {
+  // ops_access's, mwf_auth's auth_access's. work-k5fk.10.5 retired job_access: its grants split by call
+  // site into ai_access and worker_access (retire-mwf-job.target.test.ts pins those two exactly) and the
+  // request-path definers (mwf_definer).
+  it('the ai_access / worker_access / ops_access / auth_access / mwf_definer / mwf_migrator privilege matrix is exactly the recorded one', async () => {
     const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [
-      ['job_access', 'ops_access', 'auth_access', 'mwf_definer', 'mwf_migrator'],
+      ['ai_access', 'worker_access', 'ops_access', 'auth_access', 'mwf_definer', 'mwf_migrator'],
     ]);
     const owners = await run.sql<{ line: string }>(
       `SELECT 'routine owner ' || p.oid::regprocedure::text || ': ' || pg_get_userbyid(p.proowner) AS line
