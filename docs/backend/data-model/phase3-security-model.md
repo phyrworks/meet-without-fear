@@ -8,6 +8,8 @@ status: proposal
 
 # Phase 3 — Database Security Model
 
+> **2026-11 update (work-k5fk.10.5):** `mwf_job` / `job_access` / `JOB_DATABASE_URL` are retired. Its call sites moved to `mwf_ai` (AI, scoped by `app.session_scope`), `mwf_worker` (scheduled jobs, notification delivery, Stage 4 closure) and request-path SECURITY DEFINER functions called by `mwf_app`. Mentions of the job below are historical.
+
 **This is a design, not an implementation.** No migration has been written, no
 application code changed, no database altered. Everything below is a proposal for the owner to
 approve, amend or reject. Issue: `work-a39h.3`.

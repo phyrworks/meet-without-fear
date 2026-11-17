@@ -78,7 +78,8 @@ Get your API key from [Ably Dashboard](https://ably.com/dashboard).
 |----------|-------------|
 | `DATABASE_URL` | Root/migration connection string. Migrations (`prisma.config.ts`, `infra/aws/deploy.sh`) always use it, and every role URL below falls back to it |
 | `APP_DATABASE_URL` | Optional. HTTP request path (`mwf_app`); used by `lib/prisma.ts`. Falls back to `DATABASE_URL` when unset or empty |
-| `JOB_DATABASE_URL` | Optional. Background jobs and two-party paths (`mwf_job`). Falls back to `DATABASE_URL`. Accepted but not yet used by any code path (W4a/W10) |
+| `AI_DATABASE_URL` | **Required**, fails closed (never falls back to `DATABASE_URL`). The AI (`mwf_ai`, capability `ai_access`): reconciler, facilitator AI/SYSTEM message lines, conversation summarizer and partner-session classifier, brain telemetry. Every AI transaction carries `app.session_scope`; the database refuses an AI write outside it. The API's startup check opens it |
+| `WORKER_DATABASE_URL` | **Required**, fails closed (never falls back to `DATABASE_URL`). Scheduled jobs, notification delivery and Stage 4 closure (`mwf_worker`, capability `worker_access`). The API's startup check opens it |
 | `OPS_DATABASE_URL` | Required for the ops dashboard. `/api/brain/*` (`mwf_ops`, read-only). Does NOT fall back to `DATABASE_URL`: unset, the dashboard routes fail closed (TS-12) |
 | `AUTH_DATABASE_URL` | **Required on the target shape** (work-k5fk.1): `mwf_auth`, the login that runs `app.resolve_user` on every Clerk-signed request and `app.create_user` on a first login. Size its pool like the app's (`connection_limit=12` in `infra/local/up.sh`): every request uses it. Falls back to `DATABASE_URL` when unset, which the startup role guard refuses if it is privileged, and which (as `mwf_app`) has no EXECUTE on either function: every Clerk sign-in would fail |
 | `DB_IDENTITY_BINDING` | `on` binds the request's user id to every database statement (`set_config('app.current_user_id', …, true)` inside a transaction; `backend/src/lib/prisma-identity.ts`). Default `off`; any other value fails start-up. Experimental (Phase 3 D1 spike): adds a BEGIN/set_config/COMMIT round-trip set to every authenticated statement and relies on Prisma 7.10 client internals |
@@ -184,9 +185,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']),
   PORT: z.string().transform(Number).default('3000'),
   DATABASE_URL: z.string().url(),
-  // Per-role URLs, each falling back to DATABASE_URL (backend/src/lib/database-urls.ts)
+  // Per-role URLs: APP_ and AUTH_ fall back to DATABASE_URL; AI_, WORKER_ and OPS_ fail closed (backend/src/lib/database-urls.ts)
   APP_DATABASE_URL: z.string().url().optional(),
-  JOB_DATABASE_URL: z.string().url().optional(),
+  AI_DATABASE_URL: z.string().url().optional(), // required at use; fails closed
+  WORKER_DATABASE_URL: z.string().url().optional(), // required at use; fails closed
   OPS_DATABASE_URL: z.string().url().optional(),
   AUTH_DATABASE_URL: z.string().url().optional(),
   JWT_SECRET: z.string().min(32),

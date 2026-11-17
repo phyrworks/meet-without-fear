@@ -8,6 +8,8 @@ status: living
 
 # Schema Design Review — October 2026
 
+> **2026-11 update (work-k5fk.10.5):** `mwf_job` / `job_access` / `JOB_DATABASE_URL` are retired. Its call sites moved to `mwf_ai` (AI, scoped by `app.session_scope`), `mwf_worker` (scheduled jobs, notification delivery, Stage 4 closure) and request-path SECURITY DEFINER functions called by `mwf_app`. Mentions of the job below are historical.
+
 Scope: `backend/prisma/schema.prisma` at migration 76 (uuidv7 ids). Inputs: the product journey
 (`database-redesign-user-flow.md`), the August audit and ERD, the approved Phase 3 security design,
 the vessel and reconciler docs, and a production call-site grep over `backend/src` (method in §11).
