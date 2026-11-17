@@ -35,7 +35,7 @@
 import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
 import { appUrlFor, httpAs, openTargetRun, type TargetRun } from './target-roles';
-import { jobUrlFor } from '../../testing/golden/driver';
+import { aiUrlFor } from '../../testing/golden/driver';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -79,11 +79,13 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
     );
 
   /** One client per role, so statements can overlap (the default `as` opens and closes one per call). */
-  async function clientAs(role: 'mwf_app' | 'mwf_job', userId: string | null): Promise<Client> {
-    const url = role === 'mwf_app' ? appUrlFor(run.fx.target, run.fx.database) : jobUrlFor(run.fx.target, run.fx.database);
+  async function clientAs(role: 'mwf_app' | 'mwf_ai', userId: string | null): Promise<Client> {
+    const url = role === 'mwf_app' ? appUrlFor(run.fx.target, run.fx.database) : aiUrlFor(run.fx.target, run.fx.database);
     const c = new Client({ connectionString: url });
     await c.connect();
     if (userId) await c.query("SELECT set_config('app.current_user_id', $1, false)", [userId]);
+    // work-k5fk.10.5: the AI writes only within its session (app.session_scope; session-wide on this test client).
+    if (role === 'mwf_ai') await c.query("SELECT set_config('app.session_scope', $1, false)", [ids.session]);
     return c;
   }
 
@@ -158,7 +160,7 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       );
       expect(f.definer).toBe(true);
       expect(f.owner).toBe('mwf_definer');
-      for (const role of ['mwf_app', 'mwf_job', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
+      for (const role of ['mwf_app', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
         const [{ ok }] = await run.sql<{ ok: boolean }>(
           `SELECT has_function_privilege($1, 'app.next_message_seq(uuid)', 'EXECUTE') AS ok`,
           [role],
@@ -184,17 +186,17 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
           .sql<{ ok: boolean }>(`SELECT has_column_privilege($1, $2, $3, $4) AS ok`, [role, table, col, p])
           .then(r => r[0].ok);
       // work-k5fk.10.4: mwf_job held UPDATE (next_seq) only as the definers' owner; it moved with them to mwf_definer.
-      for (const role of ['mwf_app', 'mwf_job', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
+      for (const role of ['mwf_app', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
         expect({ role, next_seq: await priv(role, 'conversation', 'next_seq', 'UPDATE') }).toEqual({ role, next_seq: false });
       }
       expect(await priv('mwf_definer', 'conversation', 'next_seq', 'UPDATE')).toBe(true);
-      for (const role of ['mwf_app', 'mwf_job', 'mwf_auth', 'mwf_ops']) {
+      for (const role of ['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_auth', 'mwf_ops']) {
         expect({ role, ins: await priv(role, 'message', 'seq', 'INSERT'), upd: await priv(role, 'message', 'seq', 'UPDATE') })
           .toEqual({ role, ins: false, upd: false });
       }
-      // The job reads the key and the instant (RETURNING seq, created_at; the initial-message probe).
-      expect(await priv('mwf_job', 'message', 'seq', 'SELECT')).toBe(true);
-      expect(await priv('mwf_job', 'message', 'conversation_id', 'SELECT')).toBe(true);
+      // The AI reads the key and the instant (RETURNING seq, created_at; the initial-message probe).
+      expect(await priv('mwf_ai', 'message', 'seq', 'SELECT')).toBe(true);
+      expect(await priv('mwf_ai', 'message', 'conversation_id', 'SELECT')).toBe(true);
     });
   });
 
@@ -213,14 +215,14 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       }
     });
 
-    it('concurrent inserts into one conversation, app and job at once, take consecutive numbers', async () => {
+    it('concurrent inserts into one conversation, app and AI at once, take consecutive numbers', async () => {
       const before = await seqsOf(ids.adaConv);
       const start = await nextSeqOf(ids.adaConv);
       const clients = await Promise.all([
         clientAs('mwf_app', ids.ada),
-        clientAs('mwf_job', null),
+        clientAs('mwf_ai', null),
         clientAs('mwf_app', ids.ada),
-        clientAs('mwf_job', null),
+        clientAs('mwf_ai', null),
       ]);
       try {
         // Hold the conversation's lock in one transaction so the others queue behind it.
@@ -245,7 +247,7 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
 
     it('a rolled-back insert burns no number', async () => {
       const start = await nextSeqOf(ids.bobConv);
-      const c = await clientAs('mwf_job', null);
+      const c = await clientAs('mwf_ai', null);
       try {
         await c.query('BEGIN');
         expect((await aiLine(c, ids.bobConv, 'rolled back')).rows[0].seq).toBe(start);
@@ -260,10 +262,13 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
     it('each conversation counts on its own', async () => {
       const a = await nextSeqOf(ids.adaConv);
       const b = await nextSeqOf(ids.bobConv);
-      await run.as('mwf_job', null, `INSERT INTO message (conversation_id, session_id, role, content) VALUES ($1, $2, 'AI', 'x')`, [
-        ids.bobConv,
+      await run.as(
+        'mwf_ai',
+        null,
+        `INSERT INTO message (conversation_id, session_id, role, content) VALUES ($1, $2, 'AI', 'x')`,
+        [ids.bobConv, ids.session],
         ids.session,
-      ]);
+      );
       expect(await nextSeqOf(ids.adaConv)).toBe(a);
       expect(await nextSeqOf(ids.bobConv)).toBe(b + 1);
     });
@@ -290,14 +295,18 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       expect(
         (await failure(run.as('mwf_app', ids.ada, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv]))).code,
       ).toBe('42501');
-      // work-k5fk.10.4: mwf_job no longer holds UPDATE (next_seq) — the NOLOGIN mwf_definer owns app.next_message_seq
-      // and holds it alone — so no runtime login can move the counter directly.
-      const [{ job }] = await run.sql<{ job: boolean }>(
-        `SELECT has_column_privilege('mwf_job', 'conversation', 'next_seq', 'UPDATE') AS job`,
+      // work-k5fk.10.4: no runtime login holds UPDATE (next_seq) — the NOLOGIN mwf_definer owns app.next_message_seq
+      // and holds it alone — so none can move the counter directly (mwf_job's call sites went to mwf_ai, 10.5).
+      const [{ ai }] = await run.sql<{ ai: boolean }>(
+        `SELECT has_column_privilege('mwf_ai', 'conversation', 'next_seq', 'UPDATE') AS ai`,
       );
-      expect(job).toBe(false);
+      expect(ai).toBe(false);
       expect(
-        (await failure(run.as('mwf_job', null, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv]))).code,
+        (
+          await failure(
+            run.as('mwf_ai', null, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv], ids.session),
+          )
+        ).code,
       ).toBe('42501');
     });
 
@@ -321,10 +330,11 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       const missing = '01900000-0000-7000-8000-00000000abcd';
       const f = await failure(
         run.as(
-          'mwf_job',
+          'mwf_ai',
           null,
           `INSERT INTO message (conversation_id, session_id, role, kind, content) VALUES ($1, $2, 'AI', 'CHAT', 'PROBE_F5_ROW')`,
           [missing, ids.session],
+          ids.session,
         ),
       );
       expect({ code: f.code, detail: f.detail }).toEqual({ code: '23503', detail: undefined });

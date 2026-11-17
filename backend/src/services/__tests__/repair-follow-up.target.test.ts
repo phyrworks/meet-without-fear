@@ -161,7 +161,7 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
       `INSERT INTO consent (session_id, user_id, need_id, decision, decided_at) VALUES ($1::uuid, $2::uuid, $3, 'GRANTED', now())`,
       [ids.session, ids.bobUser, open.id],
     );
-    await run.as('mwf_job', null, `SELECT app.need_share($1::uuid, 'An open shared need')`, [open.id]);
+    await run.as('mwf_app', ids.bobUser, `SELECT app.need_share($1::uuid, 'An open shared need')`, [open.id]);
     // Ada keeps her individual commitment (she is WILLING on it).
     await asUser(ids.adaUser, () =>
       store.upsertChoice({ proposalId: proposal.individual, seat: ids.ada, decision: 'WILLING' }),
@@ -238,9 +238,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
               ($1, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED', 'CANCELLED', $2::timestamptz - interval '1 day', 'cancelled')`,
       [ids.session, due_at],
     );
-    const { getJobPrisma } = await import('../../lib/prisma');
-    const [who] = await getJobPrisma().$queryRaw<Array<{ u: string }>>`SELECT session_user AS u`;
-    expect(who.u).toBe('mwf_job');
+    const { getWorkerPrisma } = await import('../../lib/prisma');
+    const [who] = await getWorkerPrisma().$queryRaw<Array<{ u: string }>>`SELECT session_user AS u`;
+    expect(who.u).toBe('mwf_worker');
     const result = await tending.openDueTendingEntries(new Date(due_at.getTime() + 1000));
     expect(result.opened).toBe(2);
     const rows = await run.sql<{ summary: string; status: string; deadline: boolean }>(

@@ -1,7 +1,7 @@
 /**
- * TS-9 fix round 1: the JOB path on the target, for real — the app's job
- * client logs in as `mwf_job` on the run database (driver: JOB_DATABASE_URL)
- * with identity binding on, so every job write runs under the job's actual
+ * TS-9 fix round 1: the JOB path on the target, for real — since work-k5fk.10.5 the
+ * app's AI client logs in as `mwf_ai` on the run database (driver: AI_DATABASE_URL;
+ * mwf_job retired) with identity binding on, so every AI write runs under the AI's actual
  * column grants (tables.sql, next to each table) and every identity-bound read under the
  * caller's identity. Not a golden (nothing recorded).
  *
@@ -54,14 +54,14 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   // makes the reconciler a job-connection reader of the two parties' chat: role, content and
   // sender are now granted ("reconciler reader", trailer T7 TS-10 block). Everything else of
   // message stays unreadable to the job.
-  it('the job login reads exactly the message columns its grants name (R35 adds role, content, sender)', async () => {
-    const { getJobPrisma } = await import('../../../lib/prisma');
-    await expect(getJobPrisma().$queryRaw`SELECT dedupe_key FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    await expect(getJobPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(
+  it('the AI login reads exactly the message columns its grants name (R35 adds role, content, sender)', async () => {
+    const { getAiPrisma } = await import('../../../lib/prisma');
+    await expect(getAiPrisma().$queryRaw`SELECT dedupe_key FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    await expect(getAiPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(
       /permission denied/,
     );
-    await expect(getJobPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
+    await expect(getAiPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    const ok = await getAiPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
       WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_user_id IS NULL OR sender_user_id IS NOT NULL)`;
     expect(ok[0].n).toBeGreaterThan(0);
   });
@@ -101,12 +101,12 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     expect(await drafts()).toEqual([{ content: 'DRAFT_LAST', version: before[0].version + 4 }]);
   });
 
-  it('the job client is mwf_job on the run database, and identity binding is on', async () => {
-    const { getJobPrisma } = await import('../../../lib/prisma');
-    const [who] = await getJobPrisma().$queryRaw<
+  it('the AI client is mwf_ai on the run database (work-k5fk.10.5: mwf_job retired), and identity binding is on', async () => {
+    const { getAiPrisma } = await import('../../../lib/prisma');
+    const [who] = await getAiPrisma().$queryRaw<
       Array<{ u: string; db: string }>
     >`SELECT session_user AS u, current_database() AS db`;
-    expect(who).toEqual({ u: 'mwf_job', db: harness.fixture.database });
+    expect(who).toEqual({ u: 'mwf_ai', db: harness.fixture.database });
     expect(process.env.DB_IDENTITY_BINDING).toBe('on');
   });
 

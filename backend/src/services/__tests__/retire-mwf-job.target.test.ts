@@ -51,7 +51,7 @@ const AI_GRANTS = [
   'reconciler_result:UPDATE(superseded_at)',
   'session:SELECT(id)',
   'session:UPDATE(updated_at)',
-  'user:SELECT(first_name,id,name)',
+  'user:SELECT(first_name,id,kind,name)',
 ];
 
 /**

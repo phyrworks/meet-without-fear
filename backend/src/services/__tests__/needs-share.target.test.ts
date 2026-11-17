@@ -70,16 +70,20 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     userSpy.mockRestore();
   });
 
-  it('mwf_app cannot call the need_share writer at all', async () => {
+  it('mwf_app calls the need_share writer only for its own need (work-k5fk.10.5: the owner is the principal)', async () => {
     const [need] = await needsOf(ids.bob);
-    await expect(run.as('mwf_app', ids.bobUser, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
+    await expect(run.as('mwf_app', ids.adaUser, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
+      /need_share is the need owner's/,
+    );
+    // Neither the AI nor the worker holds it.
+    await expect(run.as('mwf_ai', null, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
       /permission denied for function need_share/,
     );
   });
 
-  it('app.need_share (as mwf_job) refuses a need without its owner’s GRANTED consent', async () => {
+  it('app.need_share (as the owner) refuses a need without its owner’s GRANTED consent', async () => {
     const [need] = await needsOf(ids.ada);
-    await expect(run.as('mwf_job', null, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
+    await expect(run.as('mwf_app', ids.adaUser, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
       /need has no GRANTED consent by its owner/,
     );
     expect(await run.sql(`SELECT * FROM need_share WHERE need_id = $1`, [need.id])).toEqual([]);

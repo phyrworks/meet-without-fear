@@ -57,7 +57,7 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
       sessionId,
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
+    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId], sessionId);
     const [me] = await run.sql<{ session_id: string; user_id: string }>(
       `SELECT session_id, user_id FROM participant WHERE session_id = $1`,
       [sessionId],

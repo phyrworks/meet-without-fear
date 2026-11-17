@@ -27,7 +27,6 @@
 import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
 import { appUrlFor, adaAndInvitee, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
-import { jobUrlFor } from '../../testing/golden/driver';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -72,10 +71,9 @@ describeTarget('live_session_pair under concurrency and on every release path (w
     if (status === 'INVITED') await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1`, [s.id]);
     return s.id;
   };
-  /** A connection as mwf_app (or mwf_job) with the identity bound, in an open transaction. */
-  const conn = async (userId: string | null, role: 'mwf_app' | 'mwf_job' = 'mwf_app'): Promise<Client> => {
-    const url =
-      role === 'mwf_app' ? appUrlFor(run.fx.target, run.fx.database) : jobUrlFor(run.fx.target, run.fx.database);
+  /** A connection as mwf_app with the identity bound, in an open transaction. */
+  const conn = async (userId: string | null): Promise<Client> => {
+    const url = appUrlFor(run.fx.target, run.fx.database);
     const c = new Client({ connectionString: url });
     await c.connect();
     open.push(c);
@@ -199,7 +197,7 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       const ken = await human('Ken');
       const s = await session(ada);
       await join(s, ken, ada);
-      await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [s]);
+      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [s], s);
       expect(await pairs(s)).toEqual([]);
       const s2 = await session(ada);
       await join(s2, ken, ada);
@@ -210,8 +208,8 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       const ken = await human('Ken');
       const s = await session(ada);
       await join(s, ken, ada);
-      await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s]);
-      await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [s]);
+      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s], s);
+      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [s], s);
       expect(await pairs(s)).toEqual([]);
     });
 
@@ -221,7 +219,7 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       const s = await session(lea);
       await join(s, ken, lea);
       expect(await pairs(s)).toEqual([pair(lea, ken)]);
-      await run.as('mwf_job', null, `SELECT app.anonymize_user_account($1::uuid)`, [lea]);
+      await run.as('mwf_app', lea, `SELECT app.anonymize_user_account($1::uuid)`, [lea]);
       expect(await pairs(s)).toEqual([]);
       // Ken's pairs elsewhere are untouched, and he can start again with someone else.
       const s2 = await session(ada);
@@ -241,8 +239,8 @@ describeTarget('live_session_pair under concurrency and on every release path (w
         `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $3)`,
         [s, aiUser, ada],
       );
-      await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s]);
-      await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [s]);
+      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s], s);
+      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [s], s);
       await run.sql(JOIN, [s, ken, ada]);
       expect(await pairs(s)).toEqual([]);
     });

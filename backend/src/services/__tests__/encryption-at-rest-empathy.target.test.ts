@@ -3,7 +3,7 @@
  * RECONCILER_SHOWN_B target fixture (Ada's round 1 about Bob is
  * AWAITING_SHARING with an offer to Bob; Bob's round 1 about Ada is HELD): the
  * session / chat / empathy / reconciler columns, each written by its real
- * writer (mwf_app with identity binding on; mwf_job for the job's writers),
+ * writer (mwf_app with identity binding on; mwf_ai for the AI's writers),
  * are ciphertext at rest and read back as plaintext.
  *
  *   - message.content (the participant's turn, a facilitator row, a delivered
@@ -45,6 +45,8 @@ describeTarget(
     const proven = new Set<string>();
     const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
       ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
+    /** The AI's writes, scoped to the run's session (app.session_scope; work-k5fk.10.5). */
+    const asAi = <T>(fn: () => Promise<T>): Promise<T> => ctx.withSessionScope(ids.session, async () => await fn());
     const momentsCalled = (moment: string) =>
       hook.mock.calls
         .filter(([e]) => (e as { moment: string }).moment === moment)
@@ -111,7 +113,7 @@ describeTarget(
       if (run) await run.drop();
     });
 
-    it('message.content (participant turn as mwf_app, facilitator row as mwf_job): sealed, nothing content-derived beside it, read back', async () => {
+    it('message.content (participant turn as mwf_app, facilitator row as mwf_ai): sealed, nothing content-derived beside it, read back', async () => {
       const own = await asUser(ids.adaUser, () =>
         messages.createParticipantMessage({
           conversationId: conv.ada,
@@ -119,7 +121,7 @@ describeTarget(
           content: 'PROBE_TS13_TURN',
         }),
       );
-      const ai = await messages.createFacilitatorMessage({ conversationId: conv.ada, content: 'PROBE_TS13_AI_REPLY' });
+      const ai = await asAi(() => messages.createFacilitatorMessage({ conversationId: conv.ada, content: 'PROBE_TS13_AI_REPLY' }));
       await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = ANY($1::text[])`, [[own.id, ai.id]]);
       await expectNoContentDerivedValue(own.id, 'PROBE_TS13_TURN');
       await expectNoContentDerivedValue(ai.id, 'PROBE_TS13_AI_REPLY');
@@ -185,7 +187,7 @@ describeTarget(
       proven.add('draft.content');
     });
 
-    it('reconciler_result (persistAnalysis, raw INSERT as mwf_job): text and text[] sealed, read back', async () => {
+    it('reconciler_result (persistAnalysis, raw INSERT as mwf_ai): text and text[] sealed, read back', async () => {
       const analysis = await import('../reconciler/analysis');
       const result = analysis.getDefaultReconcilerResult();
       result.alignment.summary = 'PROBE_TS13_ALIGNMENT';
@@ -197,7 +199,7 @@ describeTarget(
       result.gaps.mostImportantGap = 'PROBE_TS13_MOST_IMPORTANT';
       result.recommendation.rationale = 'PROBE_TS13_RATIONALE';
       result.recommendation.suggestedShareFocus = 'PROBE_TS13_FOCUS';
-      const id = await analysis.persistAnalysis({
+      const id = await asAi(() => analysis.persistAnalysis({
         attemptId: bobRound1,
         sessionId: ids.session,
         authorUserId: ids.bobUser,
@@ -205,7 +207,7 @@ describeTarget(
         result,
         guidance: { areaHint: 'PROBE_TS13_AREA', guidanceType: 'challenge_assumptions', promptSeed: 'PROBE_TS13_SEED' },
         suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
-      });
+      }));
       expect(id).toEqual(expect.any(String));
       for (const column of [
         'most_important_gap',
@@ -246,7 +248,7 @@ describeTarget(
       });
     });
 
-    it('context_share_offer offer_message / suggested_* (generateShareOffer, raw INSERT as mwf_job): sealed, read back', async () => {
+    it('context_share_offer offer_message / suggested_* (generateShareOffer, raw INSERT as mwf_ai): sealed, read back', async () => {
       const analysis = await import('../reconciler/analysis');
       const sonnet = jest
         .spyOn(analysis, 'getSonnetJson')
@@ -255,7 +257,7 @@ describeTarget(
             ? { message: 'PROBE_TS13_OFFER_MESSAGE' }
             : { suggestedContent: 'PROBE_TS13_SUGGESTED', reason: 'PROBE_TS13_REASON' }) as never);
       const sharing = await import('../reconciler/sharing');
-      const offer = await sharing.generateShareOffer(ids.session, ids.adaUser);
+      const offer = await asAi(() => sharing.generateShareOffer(ids.session, ids.adaUser));
       sonnet.mockRestore();
       expect(offer).toMatchObject({
         offerMessage: 'PROBE_TS13_OFFER_MESSAGE',
@@ -330,13 +332,13 @@ describeTarget(
       proven.add('empathy_attempt.content');
     });
 
-    it('the reveal (checkAndRevealBothIfReady as mwf_job): the EMPATHY_STATEMENT copies are ciphertext, the subject reads plaintext, the hook runs', async () => {
+    it('the reveal (checkAndRevealBothIfReady as mwf_ai): the EMPATHY_STATEMENT copies are ciphertext, the subject reads plaintext, the hook runs', async () => {
       await asUser(ids.bobUser, () => store.setAttemptStatus(bobRound1, 'READY', { actor: 'participant' }));
       const round2 = (await store.currentAttempt(ids.session, ids.adaUser, ids.bobUser))!;
-      await store.setAttemptStatus(round2.id, 'READY', { actor: 'job' });
+      await asAi(() => store.setAttemptStatus(round2.id, 'READY', { actor: 'job' }));
       hook.mockClear();
       const state = await import('../reconciler/state');
-      expect(await state.checkAndRevealBothIfReady(ids.session)).toBe(true);
+      expect(await asAi(() => state.checkAndRevealBothIfReady(ids.session))).toBe(true);
       await expectSealed(
         run,
         'message',

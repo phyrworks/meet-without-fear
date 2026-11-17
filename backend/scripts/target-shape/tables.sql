@@ -696,9 +696,9 @@ GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO app_access;
 GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_definer;
 GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_definer;
 GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer;
--- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id: Prisma's
--- relation join key)
-GRANT SELECT (id, first_name, name) ON "user" TO ai_access;
+-- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
+-- Prisma's relation join key, participant (user_id, kind) -> user (id, kind) — measured: denied without kind)
+GRANT SELECT (id, kind, first_name, name) ON "user" TO ai_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON "user" TO ops_access;
 

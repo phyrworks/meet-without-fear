@@ -169,8 +169,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   });
 
   it('inside an interactive transaction a duplicate returns null and the transaction goes on', async () => {
-    const { getJobPrisma } = await import('../../lib/prisma');
-    const out = await getJobPrisma().$transaction(async tx => {
+    const { getAiPrisma } = await import('../../lib/prisma');
+    const { withSessionScope } = await import('../../lib/request-context');
+    const out = await withSessionScope(ids.session, () => getAiPrisma().$transaction(async tx => {
       const dup = await store.createFacilitatorMessageOnce({
         conversationId: conv.bob,
         dedupeKey: 'STAGE2_VALIDATED_WAIT',
@@ -185,16 +186,16 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
         client: tx,
       });
       return { dup, fresh };
-    });
+    }));
     expect(out.dup).toBeNull();
     expect(out.fresh).toMatchObject({ content: 'PROBE_FDC1_TX_FRESH' });
     expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);
     expect(await keyed(conv.bob, 'STAGE2_VALIDATED_WAIT')).toBe(1);
   });
 
-  it('the job connection may write a dedupe key but not read it', async () => {
+  it('the AI connection may write a dedupe key but not read it', async () => {
     await expect(
-      run.as('mwf_job', null, `SELECT dedupe_key FROM message WHERE conversation_id = $1`, [conv.ada]),
+      run.as('mwf_ai', null, `SELECT dedupe_key FROM message WHERE conversation_id = $1`, [conv.ada]),
     ).rejects.toThrow(/permission denied/);
   });
 

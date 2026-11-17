@@ -237,7 +237,7 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
     await run.sql(`INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts12Leaver', $1)`, [
       u.id,
     ]);
-    await run.as('mwf_job', null, `SELECT app.anonymize_user_account($1::uuid)`, [u.id]);
+    await run.as('mwf_app', u.id, `SELECT app.anonymize_user_account($1::uuid)`, [u.id]);
     expect(await identityOf('user_ts12Leaver')).toEqual([]);
     mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Leaver' });
     mockGetUser.mockResolvedValue(

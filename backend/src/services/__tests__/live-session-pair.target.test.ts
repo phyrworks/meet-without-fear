@@ -70,7 +70,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       sessionId,
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
+    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId], sessionId);
     return { sessionId, invitationId: created.body.data.invitationId as string };
   };
   const pairsOf = (sessionId: string) =>
@@ -127,7 +127,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     ).toEqual([{ status: 'INVITED', invitation: 'PENDING', participants: 1 }]);
 
     // Once the first session is no longer live the pair is released and the join succeeds.
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [first.sessionId]);
+    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [first.sessionId], first.sessionId);
     expect(await pairsOf(first.sessionId)).toEqual([]);
     expect((await http(ken, 'post', `/invitations/${second.invitationId}/accept`)).status).toBe(200);
     expect(await pairsOf(second.sessionId)).toEqual([sorted(ada.id, ken.id)]);

@@ -40,7 +40,7 @@ describe('no-prisma-any: rejects the alias, every any-cast rooted at a client, a
         { code: 'await (prisma as any).innerWorkSession.findFirst();', errors: [{ messageId: 'anyCast' }] },
         { code: 'await (prisma.innerWorkSession.findMany as any)({});', errors: [{ messageId: 'anyCast' }] },
         { code: 'await (prisma.recurringTheme as any).upsert({});', errors: [{ messageId: 'anyCast' }] },
-        { code: 'await (getJobPrisma().brainActivity as any).create({});', errors: [{ messageId: 'anyCast' }] },
+        { code: 'await (getAiPrisma().brainActivity as any).create({});', errors: [{ messageId: 'anyCast' }] },
         { code: 'await (tx as any).message.create({});', errors: [{ messageId: 'anyCast' }] },
         { code: 'const c = tx as unknown as PrismaClient;', errors: [{ messageId: 'forged' }] },
         { code: 'const c = x as unknown as Prisma.TransactionClient;', errors: [{ messageId: 'forged' }] },

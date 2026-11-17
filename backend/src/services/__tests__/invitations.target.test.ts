@@ -53,7 +53,7 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
       sessionId,
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
-    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
+    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId], sessionId);
   };
 
   it('create, read, accept: participants and the status writer, never a write of session.status by the app', async () => {

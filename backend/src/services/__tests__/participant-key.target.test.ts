@@ -522,7 +522,7 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
     // work-k5fk.10.4: need_share's only writer is app.need_share (owned by mwf_definer), so no runtime login holds
     // INSERT on it any more; the key is shown with the superuser's write (keys bind every writer), and the job's
     // direct INSERT is refused outright.
-    it('a share of someone else’s need, or into another session, is a key violation (t_need_share_owner); mwf_job cannot insert one', async () => {
+    it('a share of someone else’s need, or into another session, is a key violation (t_need_share_owner); mwf_ai cannot insert one', async () => {
       const [need] = await run.sql<{ id: string }>(
         `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1, $2, 'rest', 'CONNECTION', 0.5) RETURNING id`,
         [ids.session, ids.adaUser],
@@ -540,15 +540,16 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         );
         expect(f.code).toBe('23503');
       }
-      const asJob = await failure(
+      const asAi = await failure(
         run.as(
-          'mwf_job',
+          'mwf_ai',
           null,
           `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'CONNECTION', 'x')`,
           [need.id, ids.session, ids.adaUser],
+          ids.session,
         ),
       );
-      expect(asJob.code).toBe('42501');
+      expect(asAi.code).toBe('42501');
     });
 
     it('a reconciler result about another subject is a key violation; a SUPERSEDED round is still the trigger’s', async () => {
@@ -558,12 +559,13 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       );
       const insertResult = (subjectUser: string) =>
         run.as(
-          'mwf_job',
+          'mwf_ai',
           null,
           `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
                                           gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
            VALUES ($1, $2, $3, 99, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false)`,
           [att.id, ids.session, subjectUser],
+          ids.session,
         );
       // The author as the subject: the attempt's subject is Bob.
       expect((await failure(insertResult(ids.adaUser))).code).toBe('23503');

@@ -106,7 +106,7 @@ describeTarget('memory and preferences on the target, as mwf_app (and the job as
     await settings.clearPushTokenAsJob(ada.id, TOKEN_B);
     expect(await settings.pushTokensAsJob(ada.id)).toEqual([]);
     // …and the job still holds no read of anything else on user_device
-    await expect(run.as('mwf_job', null, `SELECT biometric_enabled FROM user_device`)).rejects.toThrow(
+    await expect(run.as('mwf_worker', null, `SELECT biometric_enabled FROM user_device`)).rejects.toThrow(
       /permission denied/,
     );
   });

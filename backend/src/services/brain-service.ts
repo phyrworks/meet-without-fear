@@ -1,5 +1,6 @@
 import { logger } from '../lib/logger';
 import { getAiPrisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { getRequestContext } from '../lib/request-context';
 import { getAbly } from '../services/realtime';
 import { ActivityType, ActivityStatus, BrainActivity, BrainCallType, Prisma } from '../generated/prisma/client';
@@ -52,6 +53,18 @@ export class BrainService {
   private readonly CHANNEL_NAME = 'ai-audit-stream';
 
   private constructor() {}
+
+  /**
+   * The session each open activity row belongs to (work-k5fk.10.5): the AI writes a telemetry row
+   * only within that session's app.session_scope (t_session_scope), and completeActivity /
+   * failActivity name only the row's id. Entries go when the row is completed or failed.
+   */
+  private readonly activitySessions = new Map<string, string | null>();
+
+  /** Run `fn` scoped to the activity's session (none for a sessionless — inner-work — row). */
+  private inScope<T>(sessionId: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+    return sessionId ? withSessionScope(sessionId, fn) : fn();
+  }
 
   public static getInstance(): BrainService {
     if (!BrainService.instance) {
@@ -106,14 +119,21 @@ export class BrainService {
     };
     try {
       record.participantUserId = params.attributeToCaller ? await this.participantUserFor(sessionId) : null;
-      const rows = await getAiPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
+      // The telemetry row of an AI call on `sessionId` is written in that session's scope.
+      const rows = await this.inScope(sessionId, async () => await getAiPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
           (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
            status)
         VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.turnId},
                 ${params.activityType}::activity_type, ${record.callType}::brain_call_type, ${params.model},
                 ${json(record.input)}::jsonb, ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
-        RETURNING id, created_at`;
+        RETURNING id, created_at`);
       record.id = rows[0].id;
+      this.activitySessions.set(record.id, sessionId);
+      // An activity never completed or failed (a crashed call) must not grow the map without bound.
+      if (this.activitySessions.size > 5000) {
+        const oldest = this.activitySessions.keys().next().value;
+        if (oldest !== undefined) this.activitySessions.delete(oldest);
+      }
       record.createdAt = rows[0].created_at;
       this.broadcastUpdate(record);
     } catch (error) {
@@ -141,7 +161,9 @@ export class BrainService {
     if (!activityId) return null;
     try {
       const completedAt = new Date();
-      await getAiPrisma().$executeRaw`UPDATE brain_activity
+      const sessionId = this.activitySessions.get(activityId);
+      this.activitySessions.delete(activityId);
+      await this.inScope(sessionId, async () => await getAiPrisma().$executeRaw`UPDATE brain_activity
         SET output = ${json(result.output ?? {})}::jsonb,
             token_count_input = ${result.tokenCountInput ?? 0},
             token_count_output = ${result.tokenCountOutput ?? 0},
@@ -151,7 +173,7 @@ export class BrainService {
             completed_at = ${completedAt},
             structured_output = ${json(result.structuredOutput)}::jsonb
             ${result.metadata ? Prisma.sql`, metadata = ${json(result.metadata)}::jsonb` : Prisma.empty}
-        WHERE id = ${activityId}::uuid`;
+        WHERE id = ${activityId}::uuid`);
       const activity = {
         id: activityId,
         status: ActivityStatus.COMPLETED,
@@ -177,12 +199,12 @@ export class BrainService {
    */
   public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: unknown): Promise<void> {
     try {
-      await getAiPrisma().$executeRaw`UPDATE brain_activity
+      await this.inScope(sessionId, async () => await getAiPrisma().$executeRaw`UPDATE brain_activity
         SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(turnTrace)}::jsonb)
         WHERE id = (SELECT b.id FROM brain_activity b
                     WHERE b.session_id = ${sessionId}::uuid AND b.turn_id = ${turnId}
                       AND b.call_type = 'ORCHESTRATED_RESPONSE'::brain_call_type
-                    ORDER BY b.created_at DESC LIMIT 1)`;
+                    ORDER BY b.created_at DESC LIMIT 1)`);
     } catch (error) {
       logger.warn('[BrainService] Failed to store turn trace:', error);
     }
@@ -196,9 +218,11 @@ export class BrainService {
     try {
       const completedAt = new Date();
       const metadata = { error: typeof error === 'object' ? JSON.stringify(error) : String(error) };
-      await getAiPrisma().$executeRaw`UPDATE brain_activity
+      const sessionId = this.activitySessions.get(activityId);
+      this.activitySessions.delete(activityId);
+      await this.inScope(sessionId, async () => await getAiPrisma().$executeRaw`UPDATE brain_activity
         SET status = 'FAILED'::activity_status, completed_at = ${completedAt}, metadata = ${JSON.stringify(metadata)}::jsonb
-        WHERE id = ${activityId}::uuid`;
+        WHERE id = ${activityId}::uuid`);
       const activity = {
         id: activityId,
         status: ActivityStatus.FAILED,
