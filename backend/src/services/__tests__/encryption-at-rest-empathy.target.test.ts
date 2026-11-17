@@ -138,16 +138,28 @@ describeTarget(
 
     it('fix round 1 (I1): text the author types in the ciphertext format is stored encrypted and the partner still reads their conversation', async () => {
       const typed = 'enc:v1:a:b:c';
-      // The author's own delivery (app.deliver_message's app arm: identity-bound; work-k5fk.10.5).
+      // The request path's one delivery (app.deliver_message's app arm, work-k5fk.10.5 review F1): Ada, the subject
+      // of Bob's revealed round, sends feedback on it into his conversation. The reveal is set up directly.
+      const [before] = await run.sql<{ status: string; revealed_at: Date | null }>(
+        `SELECT status::text AS status, revealed_at FROM empathy_attempt WHERE id = $1`,
+        [bobRound1],
+      );
+      await run.sql(`UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = now() WHERE id = $1`, [bobRound1]);
       const delivered = await asUser(ids.adaUser, () =>
         messages.deliverMessage({
           toConversationId: conv.bob,
           sessionId: ids.session,
           fromUserId: ids.adaUser,
-          kind: 'SHARED_CONTEXT',
+          kind: 'VALIDATION_FEEDBACK',
           content: typed,
+          sourceAttemptId: bobRound1,
         }),
       );
+      await run.sql(`UPDATE empathy_attempt SET status = $2::empathy_status, revealed_at = $3 WHERE id = $1`, [
+        bobRound1,
+        before.status,
+        before.revealed_at,
+      ]);
       const [stored] = (await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = $1`, [
         delivered.id,
       ])) as string[];

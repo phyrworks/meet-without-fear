@@ -20,7 +20,7 @@ column public.consent SELECT: session_id, user_id, need_id, decision (mwf_define
 column public.consent UPDATE: decision, revoked_at (mwf_definer)
 column public.context_share_offer INSERT: attempt_id, result_id, session_id, subject_user_id, iteration, status, offer_message, suggested_content, suggested_reason, offered_at (ai_access)
 column public.context_share_offer SELECT: id, attempt_id, result_id, session_id, subject_user_id, iteration, status, suggested_content, delivery_status (ai_access)
-column public.context_share_offer SELECT: id, session_id, subject_user_id, status (mwf_definer)
+column public.context_share_offer SELECT: id, attempt_id, session_id, subject_user_id, status, delivery_status (mwf_definer)
 column public.context_share_offer UPDATE: delivery_status, delivered_at (ai_access)
 column public.context_share_offer UPDATE: status, delivery_notified_at, seen_notified_at (mwf_definer)
 column public.conversation SELECT: id, session_id, user_id, kind (ai_access)
@@ -169,6 +169,7 @@ routine app.t_participant_added_by(): EXECUTE (mwf_definer)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
 routine app.t_result_live_attempt(): EXECUTE (mwf_migrator)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
+routine app.t_session_purge(): EXECUTE (mwf_migrator)
 routine app.t_session_scope(): EXECUTE (mwf_migrator)
 routine app.touch_updated_at(): EXECUTE (mwf_migrator)
 schema app: CREATE (mwf_migrator)
@@ -330,6 +331,7 @@ routine owner app.t_participant_added_by(): mwf_definer
 routine owner app.t_participant_cardinality(): mwf_migrator
 routine owner app.t_result_live_attempt(): mwf_migrator
 routine owner app.t_session_cardinality(): mwf_migrator
+routine owner app.t_session_purge(): mwf_migrator
 routine owner app.t_session_scope(): mwf_migrator
 routine owner app.touch_updated_at(): mwf_migrator"
 `;

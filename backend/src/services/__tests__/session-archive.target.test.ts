@@ -91,7 +91,7 @@ describeTarget('session archive on the target, as mwf_app', () => {
         `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Other')`,
         [session, other, ada.id],
       );
-      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [session], session);
+      await run.sql(`UPDATE session SET status = 'ACTIVE' WHERE id = $1::uuid`, [session]);
     }
     await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [left], left);
     await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [both], both);

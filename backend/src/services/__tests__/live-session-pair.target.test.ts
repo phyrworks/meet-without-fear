@@ -70,7 +70,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       sessionId,
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
-    await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId], sessionId);
+    await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1::uuid`, [sessionId]);
     return { sessionId, invitationId: created.body.data.invitationId as string };
   };
   const pairsOf = (sessionId: string) =>

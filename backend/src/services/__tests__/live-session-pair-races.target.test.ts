@@ -208,7 +208,7 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       const ken = await human('Ken');
       const s = await session(ada);
       await join(s, ken, ada);
-      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s], s);
+      await run.sql(`UPDATE session SET status = 'ACTIVE' WHERE id = $1::uuid`, [s]);
       await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [s], s);
       expect(await pairs(s)).toEqual([]);
     });
@@ -239,7 +239,7 @@ describeTarget('live_session_pair under concurrency and on every release path (w
         `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $3)`,
         [s, aiUser, ada],
       );
-      await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s], s);
+      await run.sql(`UPDATE session SET status = 'ACTIVE' WHERE id = $1::uuid`, [s]);
       await run.as('mwf_worker', null, `SELECT app.session_set_status($1::uuid, 'RESOLVED')`, [s], s);
       await run.sql(JOIN, [s, ken, ada]);
       expect(await pairs(s)).toEqual([]);
