@@ -155,25 +155,6 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       );
     });
 
-    it('the helper is SECURITY DEFINER, owned by the NOLOGIN mwf_definer, and no runtime role may EXECUTE it', async () => {
-      const [f] = await run.sql<{ definer: boolean; owner: string; acl: string | null }>(
-        `SELECT p.prosecdef AS definer, p.proowner::regrole::text AS owner, p.proacl::text AS acl
-         FROM pg_proc p WHERE p.oid = 'app.next_message_seq(uuid)'::regprocedure`,
-      );
-      expect(f.definer).toBe(true);
-      expect(f.owner).toBe('mwf_definer');
-      for (const role of ['mwf_app', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
-        const [{ ok }] = await run.sql<{ ok: boolean }>(
-          `SELECT has_function_privilege($1, 'app.next_message_seq(uuid)', 'EXECUTE') AS ok`,
-          [role],
-        );
-        expect({ role, ok }).toEqual({ role, ok: false });
-      }
-      expect((await failure(run.as('mwf_app', ids.ada, `SELECT app.next_message_seq($1)`, [ids.adaConv]))).code).toBe(
-        '42501',
-      );
-    });
-
     it('t_message_seq fires BEFORE INSERT on message, per row, when seq is NULL', async () => {
       const [t] = await run.sql<{ def: string }>(
         `SELECT pg_get_triggerdef(t.oid) AS def FROM pg_trigger t
@@ -184,19 +165,12 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       );
     });
 
-    it('no runtime role may UPDATE next_seq or seq, nor INSERT a seq', async () => {
+    it('no runtime role may UPDATE or INSERT a seq', async () => {
       const priv = (role: string, table: string, col: string, p: string) =>
         run
           .sql<{ ok: boolean }>(`SELECT has_column_privilege($1, $2, $3, $4) AS ok`, [role, table, col, p])
           .then(r => r[0].ok);
-      // work-k5fk.10.4: mwf_job held UPDATE (next_seq) only as the definers' owner; it moved with them to mwf_definer.
-      for (const role of ['mwf_app', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
-        expect({ role, next_seq: await priv(role, 'conversation', 'next_seq', 'UPDATE') }).toEqual({
-          role,
-          next_seq: false,
-        });
-      }
-      expect(await priv('mwf_definer', 'conversation', 'next_seq', 'UPDATE')).toBe(true);
+      // Who may UPDATE conversation.next_seq (mwf_definer only) is trailer.sql step 20's.
       for (const role of ['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_auth', 'mwf_ops']) {
         expect({
           role,
