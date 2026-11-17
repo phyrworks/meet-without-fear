@@ -17,7 +17,7 @@
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { successResponse, errorResponse } from '../utils/response';
 import { loadCurrentStages } from '../services/stage-shim';
 import { partyOf, sessionParties } from '../services/empathy-store';
@@ -173,14 +173,12 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
     if (unnotified.length > 0) {
       const delivered = unnotified.filter(o => o.deliveryStatus === 'DELIVERED').map(o => o.id);
       const seen = unnotified.filter(o => o.deliveryStatus === 'SEEN').map(o => o.id);
-      const job = getJobPrisma();
+      // The caller's own offers' notification stamps (app.share_offers_mark_notified; work-k5fk.10.5: was the job's).
       if (delivered.length) {
-        await job.$executeRaw`UPDATE context_share_offer SET delivery_notified_at = now()
-                              WHERE id = ANY(${delivered}::uuid[])`;
+        await prisma.$executeRaw`SELECT app.share_offers_mark_notified(${delivered}::uuid[], false)`;
       }
       if (seen.length) {
-        await job.$executeRaw`UPDATE context_share_offer SET seen_notified_at = now()
-                              WHERE id = ANY(${seen}::uuid[])`;
+        await prisma.$executeRaw`SELECT app.share_offers_mark_notified(${seen}::uuid[], true)`;
       }
     }
 

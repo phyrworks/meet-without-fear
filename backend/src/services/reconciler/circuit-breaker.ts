@@ -7,7 +7,7 @@
  * §1.2): the number of resubmissions of a direction IS its round count − 1.
  */
 
-import { getJobPrisma } from '../../lib/prisma';
+import { getAiPrisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 
 /**
@@ -19,8 +19,8 @@ export async function checkAttempts(
   authorUserId: string,
   subjectUserId: string,
 ): Promise<{ shouldSkipReconciler: boolean; attempts: number }> {
-  // Analysis path: the job reads (Ruling R35).
-  const rounds = await getJobPrisma().empathyAttempt.count({ where: { sessionId, authorUserId, subjectUserId } });
+  // Analysis path: the AI reads (Ruling R35).
+  const rounds = await getAiPrisma().empathyAttempt.count({ where: { sessionId, authorUserId, subjectUserId } });
   const attempts = Math.max(0, rounds - 1);
   const shouldSkipReconciler = attempts > 3;
   logger.debug('Circuit breaker check', { sessionId, authorUserId, subjectUserId, attempts, shouldSkipReconciler });
@@ -37,7 +37,7 @@ export async function hasContextAlreadyBeenShared(
   authorUserId: string,
   subjectUserId: string,
 ): Promise<boolean> {
-  const shared = await getJobPrisma().contextShareOffer.findFirst({
+  const shared = await getAiPrisma().contextShareOffer.findFirst({
     where: {
       sessionId,
       subjectUserId,

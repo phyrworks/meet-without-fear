@@ -54,7 +54,6 @@ import { canTransition, transition } from '../services/empathy-state-machine';
 import { cleanVisibleAIText } from '../utils/visible-text';
 import { reachMilestone } from '../services/milestone-writer';
 import { loadCurrentStages } from '../services/stage-shim';
-import { getJobPrisma } from '../lib/prisma';
 import { aiNote, deliver, messageDTO, ownStatementCopy, validatedWaitNote } from '../services/empathy-messages';
 import {
   currentAttempt,
@@ -1183,11 +1182,10 @@ Respond in JSON format:
       }
     }
 
-    // Stage 2 sharing window closed: open offers expire (job).
+    // Stage 2 sharing window closed: open offers expire (app.share_offers_expire, a current
+    // participant's definer call; work-k5fk.10.5: was the job's UPDATE).
     const uids = parties.map(p => p.userId);
-    await getJobPrisma().$executeRaw`UPDATE context_share_offer SET status = 'EXPIRED'
-      WHERE session_id = ${sessionId}::uuid AND subject_user_id = ANY(${uids}::uuid[])
-        AND status IN ('PENDING', 'OFFERED')`;
+    await prisma.$executeRaw`SELECT app.share_offers_expire(${sessionId}::uuid, ${uids}::uuid[])`;
 
     if (parties.length > 1) {
       for (const m of messages) {

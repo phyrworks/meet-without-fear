@@ -27,7 +27,8 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client';
 
 /** A transaction on the JOB connection. */
 export type JobTx = Prisma.TransactionClient;
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getWorkerPrisma, prisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../lib/share-moments';
 import {
@@ -430,12 +431,12 @@ export async function shareChoices(seat: Seat): Promise<boolean> {
   });
 }
 
-/** Withdraw the share so the participant can revise: un-reaching a milestone is the job's DELETE. */
+/**
+ * Withdraw the share so the participant can revise: their own `choices_shared` goes
+ * (app.choices_unshare, identity-bound — the seat is the caller's; work-k5fk.10.5: was the job's DELETE).
+ */
 export async function unshareChoices(seat: Seat): Promise<void> {
-  await getJobPrisma().$executeRaw`
-    DELETE FROM participant_milestone
-    WHERE session_id = ${seat.sessionId}::uuid AND user_id = ${seat.userId}::uuid
-      AND milestone_key = 'choices_shared'`;
+  await prisma.$executeRaw`SELECT app.choices_unshare(${seat.sessionId}::uuid)`;
 }
 
 /**
@@ -545,10 +546,11 @@ export interface CreateAgreementsArgs {
 }
 
 export async function createAgreementsAsJob(args: CreateAgreementsArgs): Promise<string[]> {
-  return getJobPrisma().$transaction(tx => insertAgreementsTx(tx, args));
+  // The worker, scoped to the session (work-k5fk.10.5: t_session_scope binds its agreement writes to it).
+  return withSessionScope(args.sessionId, async () => await getWorkerPrisma().$transaction(tx => insertAgreementsTx(tx, args)));
 }
 
-/** The writes of `createAgreementsAsJob`, inside a caller's JOB transaction. */
+/** The writes of `createAgreementsAsJob`, inside a caller's worker transaction scoped to the session. */
 export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs): Promise<string[]> {
   const at = args.at ?? new Date();
   {
@@ -596,11 +598,11 @@ export interface CloseSessionArgs {
 }
 
 export async function closeSessionAsJob(args: CloseSessionArgs): Promise<void> {
-  await getJobPrisma().$transaction(tx => insertClosureTx(tx, args));
+  await withSessionScope(args.sessionId, async () => await getWorkerPrisma().$transaction(tx => insertClosureTx(tx, args)));
   await reachClosedForAll(args.sessionId, args.at ?? new Date());
 }
 
-/** The closure row and the session RESOLVED, inside a caller's JOB transaction. */
+/** The closure row and the session RESOLVED, inside a caller's worker transaction scoped to the session. */
 export async function insertClosureTx(tx: JobTx, args: CloseSessionArgs): Promise<void> {
   const at = args.at ?? new Date();
   await tx.$executeRaw`

@@ -9,7 +9,8 @@
  *   - any identifier named `prismaAny` (the alias pattern);
  *   - `prisma as any`, and an `as any` cast of anything reached from `prisma`
  *     (`prisma.foo as any`, `(prisma.foo.findMany as any)(…)`), also through the
- *     job client (`getJobPrisma()`, `jobPrisma`) and a transaction client `tx`;
+ *     role clients (`getAiPrisma()`, `getWorkerPrisma()`, `getOpsPrisma()`, `aiPrisma`, …) and a transaction
+ *     client `tx`;
  *   - `as unknown as PrismaClient` (and `as unknown as Prisma.TransactionClient`):
  *     the double cast that forges a client type.
  *
@@ -18,9 +19,9 @@
 
 'use strict';
 
-const CLIENT_NAMES = new Set(['prisma', 'jobPrisma', 'opsPrisma', 'tx']);
+const CLIENT_NAMES = new Set(['prisma', 'aiPrisma', 'workerPrisma', 'opsPrisma', 'authPrisma', 'tx']);
 
-/** Does this expression start at a Prisma client (identifier or getJobPrisma() call)? */
+/** Does this expression start at a Prisma client (identifier or a getAiPrisma()-style call)? */
 function rootedAtClient(node) {
   let n = node;
   for (;;) {
@@ -32,7 +33,7 @@ function rootedAtClient(node) {
         n = n.object;
         break;
       case 'CallExpression':
-        if (n.callee.type === 'Identifier' && /^get(Job|Ops)Prisma$/.test(n.callee.name)) return true;
+        if (n.callee.type === 'Identifier' && /^get(Ai|Worker|Ops|Auth)Prisma$/.test(n.callee.name)) return true;
         n = n.callee;
         break;
       case 'TSNonNullExpression':

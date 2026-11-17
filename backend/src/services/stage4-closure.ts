@@ -13,7 +13,8 @@
  */
 
 import { AgreementType, MAX_AGREEMENTS, Stage4ClosureKind, Stage4ClosureReason } from '@meet-without-fear/shared';
-import { getJobPrisma } from '../lib/prisma';
+import { getWorkerPrisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import {
   insertAgreementsTx,
@@ -81,7 +82,7 @@ async function closureInputsAsJob(sessionId: string): Promise<{
   proposals: ClosureProposal[];
   choices: ClosureChoice[];
 }> {
-  const job = getJobPrisma();
+  const job = getWorkerPrisma();
   const [humans, shared, proposals, choices] = await Promise.all([
     job.$queryRaw<Array<{ user_id: string }>>`
       SELECT user_id FROM participant
@@ -120,7 +121,18 @@ function willingIndividualCommitments(proposals: ClosureProposal[], choices: Clo
 const visibleToCloser = (closer: Seat) => (p: ClosureProposal) =>
   p.createdByUserId === closer.userId || p.sharedAt !== null;
 
-export async function closeStage4(req: CloseStage4Request): Promise<{
+export function closeStage4(req: CloseStage4Request): Promise<{
+  kind: Stage4ClosureKind;
+  reason: Stage4ClosureReason;
+  agreementIds: string[];
+  closedAt: Date;
+}> {
+  // The closure is the system's decision across every participant: mwf_worker, scoped to the session
+  // (work-k5fk.10.5; t_session_scope binds its agreement / closure writes to it).
+  return withSessionScope(req.sessionId, () => closeStage4InScope(req));
+}
+
+async function closeStage4InScope(req: CloseStage4Request): Promise<{
   kind: Stage4ClosureKind;
   reason: Stage4ClosureReason;
   agreementIds: string[];
@@ -196,7 +208,7 @@ export async function closeStage4(req: CloseStage4Request): Promise<{
   );
   const checkInAt = req.checkInDate ? new Date(req.checkInDate) : new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
 
-  const agreementIds = await getJobPrisma().$transaction(async tx => {
+  const agreementIds = await getWorkerPrisma().$transaction(async tx => {
     const ids =
       kind === Stage4ClosureKind.SHARED_AGREEMENT
         ? await insertAgreementsTx(tx, {
@@ -280,7 +292,7 @@ export async function closeStage4WithoutAgreement(args: {
   ]);
   const individual = willingIndividualCommitments(proposals, choices).filter(visibleToCloser(args.seat));
   const now = new Date();
-  await getJobPrisma().$transaction(tx =>
+  await withSessionScope(args.sessionId, async () => await getWorkerPrisma().$transaction(tx =>
     insertClosureTx(tx, {
       sessionId: args.sessionId,
       kind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
@@ -297,7 +309,7 @@ export async function closeStage4WithoutAgreement(args: {
       checkInAt: null,
       at: now,
     }),
-  );
+  ));
   await reachClosedForAll(args.sessionId, now);
   return { individualCount: individual.length, openNeedCount: items.openNeedIds.length };
 }

@@ -12,7 +12,7 @@
  *
  * Everything here reads and writes the caller's own rows on the app
  * connection (RLS shape: user_id = me). Sending a push to ANOTHER user reads
- * that user's devices, which is the job's (see `pushTokensAsJob`).
+ * that user's devices, which is the worker's (see `pushTokensAsWorker`).
  */
 
 import {
@@ -23,7 +23,7 @@ import {
   type NotificationPreferencesDTO,
   type PrivacyPreferencesDTO,
 } from '@meet-without-fear/shared';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getWorkerPrisma, prisma } from '../lib/prisma';
 import type { Prisma } from '../generated/prisma/client';
 
 // ============================================================================
@@ -145,19 +145,19 @@ export async function setBiometric(userId: string, enabled: boolean): Promise<De
 }
 
 /**
- * THE JOB reads another user's push tokens to deliver a notification the
- * caller's action triggered (R35: the job is the principal for work that
- * crosses users; user_device is `user_id = me` for the request role).
+ * THE WORKER reads another user's push tokens to deliver a notification the
+ * caller's action triggered (R35: notification delivery is mwf_worker's since
+ * work-k5fk.10.5 — user_device is `user_id = me` for the request role).
  */
-export async function pushTokensAsJob(userId: string): Promise<string[]> {
-  const rows = await getJobPrisma().$queryRaw<Array<{ push_token: string }>>`SELECT push_token FROM user_device
+export async function pushTokensAsWorker(userId: string): Promise<string[]> {
+  const rows = await getWorkerPrisma().$queryRaw<Array<{ push_token: string }>>`SELECT push_token FROM user_device
     WHERE user_id = ${userId}::uuid AND push_token IS NOT NULL ORDER BY last_seen_at DESC NULLS LAST, push_token`;
   return rows.map(r => r.push_token);
 }
 
-/** THE JOB clears a token Expo reports as unregistered. */
-export async function clearPushTokenAsJob(userId: string, pushToken: string): Promise<void> {
-  await getJobPrisma()
+/** THE WORKER clears a token Expo reports as unregistered. */
+export async function clearPushTokenAsWorker(userId: string, pushToken: string): Promise<void> {
+  await getWorkerPrisma()
     .$executeRaw`UPDATE user_device SET push_token = NULL WHERE user_id = ${userId}::uuid AND push_token = ${pushToken}`;
 }
 

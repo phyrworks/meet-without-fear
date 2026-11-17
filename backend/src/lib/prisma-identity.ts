@@ -34,7 +34,13 @@ import type {
   Transaction,
 } from '@prisma/driver-adapter-utils';
 import type { PgAdapterFactory } from './prisma-pg';
-import { getCurrentUserId, getRequestContext, runInCapturedContext, type RequestContext } from './request-context';
+import {
+  getCurrentUserId,
+  getRequestContext,
+  runInCapturedContext,
+  sessionScopeOf,
+  type RequestContext,
+} from './request-context';
 
 /** `DB_IDENTITY_BINDING`: `on` | `off` (default). Anything else is a configuration error. */
 export function identityBindingEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -46,14 +52,40 @@ export function identityBindingEnabled(env: Record<string, string | undefined> =
 
 export const SET_IDENTITY_SQL = "SELECT set_config('app.current_user_id', $1, true)";
 
-function setIdentity(userId: string): SqlQuery {
-  return { sql: SET_IDENTITY_SQL, args: [userId], argTypes: [{ scalarType: 'string', arity: 'scalar' }] };
+/**
+ * The transaction-local settings a client binds (design note §6 "Session variables", Q20; work-k5fk.10.5):
+ *   app.current_user_id  the human the request acts for (DB_IDENTITY_BINDING=on);
+ *   app.session_scope    the one session an AI / worker transaction acts on (lib/request-context
+ *                        getSessionScope) — required by t_session_scope and the definers' AI / worker
+ *                        arms, which refuse a NULL one;
+ *   app.request_id       the request's correlation id, for audit only (pgaudit ↔ API logs).
+ * Names are this fixed set — never caller input — and every value is a bind parameter.
+ */
+export const BOUND_SETTINGS = ['app.current_user_id', 'app.session_scope', 'app.request_id'] as const;
+export type BoundSetting = (typeof BOUND_SETTINGS)[number];
+export type SettingsSource = () => ReadonlyArray<readonly [BoundSetting, string]>;
+
+/** One statement that sets every bound setting, transaction-locally (`set_config(…, true)`). */
+export function setSettingsQuery(settings: ReadonlyArray<readonly [BoundSetting, string]>): SqlQuery {
+  for (const [name] of settings) {
+    if (!(BOUND_SETTINGS as readonly string[]).includes(name)) throw new Error(`not a bound setting: ${name}`);
+  }
+  const sql =
+    settings.length === 1 && settings[0][0] === 'app.current_user_id'
+      ? SET_IDENTITY_SQL
+      : `SELECT ${settings.map(([name], i) => `set_config('${name}', $${i + 1}, true)`).join(', ')}`;
+  return {
+    sql,
+    args: settings.map(([, value]) => value),
+    argTypes: settings.map(() => ({ scalarType: 'string' as const, arity: 'scalar' as const })),
+  };
 }
 
 const COMMIT: SqlQuery = { sql: 'COMMIT', args: [], argTypes: [] };
 const ROLLBACK: SqlQuery = { sql: 'ROLLBACK', args: [], argTypes: [] };
 
 type UserIdSource = () => string | undefined;
+type Settings = ReadonlyArray<readonly [BoundSetting, string]>;
 
 async function abandon(tx: Transaction): Promise<void> {
   try {
@@ -70,30 +102,30 @@ class IdentityBoundAdapter implements SqlDriverAdapter {
 
   constructor(
     private readonly inner: SqlDriverAdapter,
-    private readonly userId: UserIdSource,
+    private readonly settings: SettingsSource,
   ) {
     this.provider = inner.provider;
     this.adapterName = inner.adapterName;
   }
 
   queryRaw(query: SqlQuery): Promise<SqlResultSet> {
-    const userId = this.userId();
-    if (!userId) return this.inner.queryRaw(query);
-    return this.inIdentityTransaction(userId, tx => tx.queryRaw(query));
+    const settings = this.settings();
+    if (settings.length === 0) return this.inner.queryRaw(query);
+    return this.inIdentityTransaction(settings, tx => tx.queryRaw(query));
   }
 
   executeRaw(query: SqlQuery): Promise<number> {
-    const userId = this.userId();
-    if (!userId) return this.inner.executeRaw(query);
-    return this.inIdentityTransaction(userId, tx => tx.executeRaw(query));
+    const settings = this.settings();
+    if (settings.length === 0) return this.inner.executeRaw(query);
+    return this.inIdentityTransaction(settings, tx => tx.executeRaw(query));
   }
 
   async startTransaction(isolationLevel?: IsolationLevel): Promise<Transaction> {
-    const userId = this.userId();
+    const settings = this.settings();
     const tx = await this.inner.startTransaction(isolationLevel);
-    if (!userId) return tx;
+    if (settings.length === 0) return tx;
     try {
-      await tx.executeRaw(setIdentity(userId));
+      await tx.executeRaw(setSettingsQuery(settings));
     } catch (error) {
       await abandon(tx);
       throw error;
@@ -113,11 +145,11 @@ class IdentityBoundAdapter implements SqlDriverAdapter {
     return this.inner.dispose();
   }
 
-  private async inIdentityTransaction<T>(userId: string, run: (tx: Transaction) => Promise<T>): Promise<T> {
+  private async inIdentityTransaction<T>(settings: Settings, run: (tx: Transaction) => Promise<T>): Promise<T> {
     const tx = await this.inner.startTransaction();
     let result: T;
     try {
-      await tx.executeRaw(setIdentity(userId));
+      await tx.executeRaw(setSettingsQuery(settings));
       result = await run(tx);
       await tx.executeRaw(COMMIT);
     } catch (error) {
@@ -137,10 +169,25 @@ export function bindIdentity(
   factory: PgAdapterFactory,
   userId: UserIdSource = getCurrentUserId,
 ): SqlMigrationAwareDriverAdapterFactory {
+  return bindTransactionSettings(factory, () => {
+    const id = userId();
+    return id ? [['app.current_user_id', id]] : [];
+  });
+}
+
+/**
+ * Wrap an adapter factory so every statement — and every transaction — carries the bound settings
+ * `settings` returns at that moment (work-k5fk.10.5): one `set_config(…, true)` statement after BEGIN,
+ * nothing at all when there is nothing to set.
+ */
+export function bindTransactionSettings(
+  factory: PgAdapterFactory,
+  settings: SettingsSource,
+): SqlMigrationAwareDriverAdapterFactory {
   return {
     provider: factory.provider,
     adapterName: factory.adapterName,
-    connect: async () => new IdentityBoundAdapter(await factory.connect(), userId),
+    connect: async () => new IdentityBoundAdapter(await factory.connect(), settings),
     // Migrations and the shadow database never run with a request identity.
     connectToShadowDb: () => factory.connectToShadowDb(),
   };
@@ -195,7 +242,10 @@ export function keepRequestContextAcrossBatching(client: object): void {
     const context = getRequestContext();
     request[CAPTURED] = context;
     const key = batchBy(request);
-    return key === undefined ? undefined : `${key}|identity:${context?.userId ?? ''}`;
+    // The scope too (work-k5fk.10.5): two scopes merged into one statement would run under one of them.
+    return key === undefined
+      ? undefined
+      : `${key}|identity:${context?.userId ?? ''}|scope:${sessionScopeOf(context) ?? ''}`;
   };
   options.singleLoader = request => runInCapturedContext(request[CAPTURED], () => singleLoader(request));
   options.batchLoader = requests => runInCapturedContext(requests[0]?.[CAPTURED], () => batchLoader(requests));

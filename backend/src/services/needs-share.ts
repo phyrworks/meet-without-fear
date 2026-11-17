@@ -29,7 +29,7 @@
 import { NeedCategory } from '@meet-without-fear/shared';
 import { getModelCompletion } from '../lib/bedrock';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../lib/share-moments';
 import { cleanVisibleAIText } from '../utils/visible-text';
@@ -196,14 +196,13 @@ export async function shareNeeds(args: {
     }
   });
 
-  // 2. The job's transformed copy, through the only writer.
-  const job = getJobPrisma();
+  // 2. The transformed copy, through the only writer: app.need_share, the owner's own definer call
+  // (work-k5fk.10.5: was the job's).
   for (const need of args.needs) {
     const text = await transformNeedForSharing({ ...need, sessionId: args.sessionId });
-    // need_share.shared_text is written under the session key by the job
-    // (ciphertext in; TS-13). Share moment (writer-principal rule): the hook
-    // runs in the share's own job transaction; W13 re-encrypts here.
-    await job.$transaction(async tx => {
+    // need_share.shared_text is written under the session key (ciphertext in; TS-13). Share moment
+    // (writer-principal rule): the hook runs in the share's own transaction; W13 re-encrypts here.
+    await prisma.$transaction(async tx => {
       await tx.$executeRaw`SELECT app.need_share(${need.id}::uuid, ${encryptColumnValue('need_share', 'shared_text', text)})`;
       await reencryptForSession(
         { moment: 'need-share', sessionId: args.sessionId, rows: [{ table: 'need_share', id: need.id }] },

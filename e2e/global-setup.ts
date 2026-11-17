@@ -49,7 +49,14 @@ async function globalSetup(_config: FullConfig) {
         '(use mwf_target_e2e; see docs/development/local-setup.md). Check DATABASE_URL in your shell and e2e/.env.test.',
     );
   }
-  for (const v of ['APP_DATABASE_URL', 'JOB_DATABASE_URL', 'AUTH_DATABASE_URL', 'OPS_DATABASE_URL', 'MIGRATOR_DATABASE_URL']) {
+  for (const v of [
+    'APP_DATABASE_URL',
+    'AI_DATABASE_URL',
+    'WORKER_DATABASE_URL',
+    'AUTH_DATABASE_URL',
+    'OPS_DATABASE_URL',
+    'MIGRATOR_DATABASE_URL',
+  ]) {
     const val = process.env[v];
     if (val && dbName(val) !== targetDb) {
       throw new Error(

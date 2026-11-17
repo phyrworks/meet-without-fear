@@ -26,7 +26,7 @@
  *     every reminder of the user; leaving one session deletes that session's.)
  */
 
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { resolveParticipant } from './participant-resolver';
 
 export interface SessionDeletionSummary {
@@ -64,8 +64,10 @@ export async function deleteSessionForUser(
     prisma.moodReading.count({ where: { sessionId, userId } }),
   ]);
 
-  // The walk and the explicit deletes: one job transaction
-  const extra = await getJobPrisma().$transaction(async tx => {
+  // The walk and the explicit deletes: one transaction on the caller's own connection — the walk is
+  // app.anonymize_user_in_session's self arm, the deletes are the caller's own rows (work-k5fk.10.5:
+  // was the job's)
+  const extra = await prisma.$transaction(async tx => {
     await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${userId}::uuid)`;
     const memories =
       await tx.$executeRaw`DELETE FROM user_memory WHERE user_id = ${userId}::uuid AND session_id = ${sessionId}::uuid`;

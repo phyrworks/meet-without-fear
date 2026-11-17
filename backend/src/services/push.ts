@@ -2,7 +2,7 @@ import { getNickname } from './contacts';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { clearPushTokenAsJob, pushTokensAsJob } from './user-settings';
+import { clearPushTokenAsWorker, pushTokensAsWorker } from './user-settings';
 import { currentRow, loadStageStates } from './stage-shim';
 import type { SessionEvent } from './realtime';
 import { Stage, STAGE_FRIENDLY_NAMES } from '@meet-without-fear/shared';
@@ -447,7 +447,7 @@ export async function sendPushNotification(
   try {
     // The recipient's devices (user_device), read by the job: the push is
     // delivered to another user than the caller (services/user-settings.ts)
-    const tokens = (await pushTokensAsJob(userId)).filter(token => {
+    const tokens = (await pushTokensAsWorker(userId)).filter(token => {
       if (Expo.isExpoPushToken(token)) return true;
       logger.warn(`[Push] Invalid push token format for user ${userId}: ${token}`);
       return false;
@@ -494,7 +494,7 @@ export async function sendPushNotification(
       // An unregistered device's token is cleared
       if (ticket.details?.error === 'DeviceNotRegistered' || ticket.details?.error === 'InvalidCredentials') {
         logger.info(`[Push] Clearing invalid token for user ${userId}`);
-        await clearPushTokenAsJob(userId, tokens[i]);
+        await clearPushTokenAsWorker(userId, tokens[i]);
       }
     }
     if (sent) logger.info(`[Push] Sent ${event} notification to user ${userId}`);
@@ -535,7 +535,7 @@ export interface TestPushNotificationResult {
 export async function sendTestPushNotification(userId: string): Promise<TestPushNotificationResult> {
   try {
     // The caller's own most recently seen device (the test is sent to oneself)
-    const [pushToken] = await pushTokensAsJob(userId);
+    const [pushToken] = await pushTokensAsWorker(userId);
 
     if (!pushToken) {
       logger.info(`[Push] No push token for test notification user ${userId}`);
@@ -569,7 +569,7 @@ export async function sendTestPushNotification(userId: string): Promise<TestPush
 
     logger.error(`[Push] Failed to send test notification to user ${userId}:`, ticket.message);
     if (ticket.details?.error === 'DeviceNotRegistered' || ticket.details?.error === 'InvalidCredentials') {
-      await clearPushTokenAsJob(userId, pushToken);
+      await clearPushTokenAsWorker(userId, pushToken);
     }
     return { sent: false, reason: ticket.message };
   } catch (error) {

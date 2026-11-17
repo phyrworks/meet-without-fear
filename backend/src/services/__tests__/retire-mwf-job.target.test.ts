@@ -47,7 +47,7 @@ const AI_GRANTS = [
   'reconciler_guidance:INSERT(area_hint,author_user_id,guidance_type,prompt_seed,result_id,session_id,subject_user_id)',
   'reconciler_guidance:SELECT(area_hint,guidance_type,prompt_seed,result_id)',
   'reconciler_result:INSERT(alignment_score,alignment_summary,attempt_id,circuit_breaker_tripped,correctly_identified,gap_severity,gap_summary,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason)',
-  'reconciler_result:SELECT(alignment_score,alignment_summary,attempt_id,correctly_identified,created_at,gap_severity,gap_summary,id,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,superseded_at,suggested_share_content,suggested_share_focus,suggested_share_reason)',
+  'reconciler_result:SELECT(alignment_score,alignment_summary,attempt_id,correctly_identified,created_at,gap_severity,gap_summary,id,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason,superseded_at)',
   'reconciler_result:UPDATE(superseded_at)',
   'session:SELECT(id)',
   'session:UPDATE(updated_at)',
@@ -196,7 +196,7 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
     const rows = await run.sql<{ fn: string; owner: string; definer: boolean; grantees: string[] | null }>(
       `SELECT replace(p.oid::regprocedure::text, ', ', ',') AS fn, pg_get_userbyid(p.proowner)::text AS owner,
               p.prosecdef AS definer,
-              (SELECT array_agg(pg_get_userbyid(a.grantee)::text ORDER BY 1) FROM aclexplode(p.proacl) a
+              (SELECT array_agg(pg_get_userbyid(a.grantee)::text ORDER BY pg_get_userbyid(a.grantee)::text) FROM aclexplode(p.proacl) a
                WHERE a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner) AS grantees
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'app'`,
     );

@@ -186,9 +186,9 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   afterAll(async () => {
-    const { prisma, disconnectJobPrisma } = await import('../../lib/prisma');
+    const { prisma, disconnectRolePrismas } = await import('../../lib/prisma');
     await prisma.$disconnect().catch(() => undefined);
-    await disconnectJobPrisma().catch(() => undefined);
+    await disconnectRolePrismas().catch(() => undefined);
     if (fx) await fx.drop();
   });
 

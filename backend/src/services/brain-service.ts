@@ -1,5 +1,5 @@
 import { logger } from '../lib/logger';
-import { getJobPrisma } from '../lib/prisma';
+import { getAiPrisma } from '../lib/prisma';
 import { getRequestContext } from '../lib/request-context';
 import { getAbly } from '../services/realtime';
 import { ActivityType, ActivityStatus, BrainActivity, BrainCallType, Prisma } from '../generated/prisma/client';
@@ -70,7 +70,7 @@ export class BrainService {
     const ctx = getRequestContext();
     if (ctx?.seated && ctx.sessionId === sessionId && ctx.userId) return ctx.userId;
     if (!ctx?.userId || !UUID.test(ctx.userId)) return null;
-    const rows = await getJobPrisma().$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
+    const rows = await getAiPrisma().$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
       WHERE session_id = ${sessionId}::uuid AND user_id = ${ctx.userId}::uuid`;
     return rows[0]?.user_id ?? null;
   }
@@ -106,7 +106,7 @@ export class BrainService {
     };
     try {
       record.participantUserId = params.attributeToCaller ? await this.participantUserFor(sessionId) : null;
-      const rows = await getJobPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
+      const rows = await getAiPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
           (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
            status)
         VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.turnId},
@@ -141,7 +141,7 @@ export class BrainService {
     if (!activityId) return null;
     try {
       const completedAt = new Date();
-      await getJobPrisma().$executeRaw`UPDATE brain_activity
+      await getAiPrisma().$executeRaw`UPDATE brain_activity
         SET output = ${json(result.output ?? {})}::jsonb,
             token_count_input = ${result.tokenCountInput ?? 0},
             token_count_output = ${result.tokenCountOutput ?? 0},
@@ -177,7 +177,7 @@ export class BrainService {
    */
   public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: unknown): Promise<void> {
     try {
-      await getJobPrisma().$executeRaw`UPDATE brain_activity
+      await getAiPrisma().$executeRaw`UPDATE brain_activity
         SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(turnTrace)}::jsonb)
         WHERE id = (SELECT b.id FROM brain_activity b
                     WHERE b.session_id = ${sessionId}::uuid AND b.turn_id = ${turnId}
@@ -196,7 +196,7 @@ export class BrainService {
     try {
       const completedAt = new Date();
       const metadata = { error: typeof error === 'object' ? JSON.stringify(error) : String(error) };
-      await getJobPrisma().$executeRaw`UPDATE brain_activity
+      await getAiPrisma().$executeRaw`UPDATE brain_activity
         SET status = 'FAILED'::activity_status, completed_at = ${completedAt}, metadata = ${JSON.stringify(metadata)}::jsonb
         WHERE id = ${activityId}::uuid`;
       const activity = {

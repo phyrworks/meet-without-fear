@@ -11,8 +11,5 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'S
 ALTER DATABASE mwf OWNER TO mwf_migrator;
 ALTER SCHEMA public OWNER TO mwf_migrator;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
--- init-db.sh's interim GRANT mwf_job TO mwf_app (production until row 9c): no runtime login is a
--- member of any role but its one capability (work-k5fk.10.4; lib/prisma-role-guard.ts refuses one).
-REVOKE mwf_job FROM mwf_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE mwf_migrator IN SCHEMA public GRANT SELECT ON TABLES TO slam_bot_readonly;
 SQL

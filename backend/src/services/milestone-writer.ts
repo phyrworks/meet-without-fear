@@ -11,14 +11,16 @@
  *     the APP connection;
  *   - every key that records a fact the system establishes (`invitation_sent`,
  *     `empathy_submitted`, `empathy_ready`, `empathy_validated`,
- *     `needs_shared`, `closed`, `paused`, …): the JOB connection.
+ *     `needs_shared`, `closed`, `paused`, …): app.reach_milestone, a definer the
+ *     APP connection calls as a current participant of the session — the
+ *     participant reached may be the partner (work-k5fk.10.5: was the job's INSERT).
  *
  * Reaching a milestone twice is a no-op (the PK is (participant, key)); the
  * first instant stands.
  */
 
 import type { Seat } from './participant-resolver';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import type { Prisma } from '../generated/prisma/client';
 
@@ -42,11 +44,17 @@ export async function reachMilestone(
   seat: Seat,
   key: string,
   at: Date = new Date(),
-  /** A transaction of the role that may write `key` (the caller's own for a self-assertable key). */
-  tx?: Pick<Prisma.TransactionClient, '$executeRaw'>,
+  /** A transaction of the caller's own (app) connection, to write inside it. */
+  tx?: Pick<Prisma.TransactionClient, '$executeRaw' | '$queryRaw'>,
 ): Promise<boolean> {
-  const client = tx ?? (isSelfAssertable(key) ? prisma : getJobPrisma());
-  // Exactly the columns the job may INSERT (the participant's key — session_id, user_id,
+  const client = tx ?? prisma;
+  if (!isSelfAssertable(key)) {
+    // A system milestone: app.reach_milestone checks the caller is a current participant of the
+    // session and refuses a self-assertable key (work-k5fk.10.5).
+    const [row] = await client.$queryRaw<Array<{ reached: boolean }>>`SELECT app.reach_milestone(${seat.sessionId}::uuid, ${seat.userId}::uuid, ${key}, ${at}::timestamptz) AS reached`;
+    return row?.reached === true;
+  }
+  // Exactly the columns mwf_app may INSERT (the participant's key — session_id, user_id,
   // work-k5fk.3 — milestone_key, reached_at); created_at is the column default. Prisma's
   // createMany would also send its client-side `@default(now())` created_at.
   const count = await client.$executeRaw`
@@ -62,7 +70,8 @@ export async function reachMilestone(
  * from the share modal, which mobile stops showing once the partner accepted —
  * so a partner who accepts before that call would otherwise leave the inviter
  * in stage 0 for good (the stage shim holds an inviter with an unsent
- * invitation there). Job connection, like every system milestone; idempotent
+ * invitation there). app.reach_milestone, like every system milestone (the acceptor is
+ * now a current participant); idempotent
  * (a confirmed inviter already has it, and the first instant stands). A later
  * confirm then takes its short-circuit (message confirmed + invitation_sent)
  * and is a no-op — without the stage-transition AI message, which this path

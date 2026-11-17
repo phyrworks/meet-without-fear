@@ -16,7 +16,8 @@ import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { uuidv7 } from '@meet-without-fear/shared';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
-import { getJobPrisma } from '../lib/prisma';
+import { getAiPrisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { embedSessionContent } from './embedding';
 
@@ -589,11 +590,12 @@ Output only valid JSON.`;
     }
 
     // Save notable facts as the participant's NOTABLE_FACTS document
-    // (ai_memory; spec §1.1 "in practice written by mwf_job" — the job's
-    // INSERT … ON CONFLICT DO UPDATE, as the SUMMARY writer does; TS-12)
+    // (ai_memory; the AI's INSERT … ON CONFLICT DO UPDATE, as the SUMMARY writer does; TS-12;
+    // work-k5fk.10.5: mwf_ai, scoped to the session)
     if (factsToSave && factsToSave.length > 0) {
       try {
-        const job = getJobPrisma();
+        const job = getAiPrisma();
+        await withSessionScope(input.sessionId, async () => {
         const [participant] = await job.$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
           WHERE session_id = ${input.sessionId}::uuid AND user_id = ${input.userId}::uuid`;
         if (participant) {
@@ -617,6 +619,7 @@ Output only valid JSON.`;
             `${logPrefix} No participant found for session=${input.sessionId}, user=${input.userId}. Facts not saved.`,
           );
         }
+        });
       } catch (err) {
         logger.error(`${logPrefix} Failed to save notable facts:`, err);
       }

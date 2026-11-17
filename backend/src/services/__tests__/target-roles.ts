@@ -1,7 +1,8 @@
 /**
  * TS-11 real-role test support: a clone of a target fixture where the APP
- * connection logs in as `mwf_app` and the JOB connection as `mwf_job`, with
- * identity binding on — the roles and the identity production runs with.
+ * connection logs in as `mwf_app`, the AI connection as `mwf_ai` and the WORKER
+ * connection as `mwf_worker` (work-k5fk.10.5: mwf_job retired), with identity
+ * binding on — the roles and the identity production runs with.
  * Services must be imported AFTER `openTargetRun` (lib/prisma reads the URLs
  * when it is first loaded).
  */
@@ -9,7 +10,7 @@
 import { Client } from 'pg';
 import { uuidv7 } from '@meet-without-fear/shared';
 import { withClient } from '../../testing/golden/db';
-import { aiUrlFor, jobUrlFor, workerUrlFor } from '../../testing/golden/driver';
+import { aiUrlFor, workerUrlFor } from '../../testing/golden/driver';
 import { restoreFixture, type RestoredFixture } from '../../testing/golden/fixtures';
 
 export const BASE_URL =
@@ -38,7 +39,7 @@ export function authUrlFor(t: { host: string; port: number }, database: string):
 }
 
 /** The logins a target test connects as. */
-export type RunRole = 'mwf_app' | 'mwf_job' | 'mwf_auth' | 'mwf_ai' | 'mwf_worker';
+export type RunRole = 'mwf_app' | 'mwf_auth' | 'mwf_ai' | 'mwf_worker';
 
 export interface TargetRun {
   fx: RestoredFixture;
@@ -62,14 +63,15 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
   const fx = await restoreFixture({ baseUrl: BASE_URL, stage, runId });
   process.env.DATABASE_URL = fx.url;
   process.env.APP_DATABASE_URL = appUrlFor(fx.target, fx.database);
-  process.env.JOB_DATABASE_URL = jobUrlFor(fx.target, fx.database);
+  process.env.AI_DATABASE_URL = aiUrlFor(fx.target, fx.database);
+  process.env.WORKER_DATABASE_URL = workerUrlFor(fx.target, fx.database);
   process.env.AUTH_DATABASE_URL = authUrlFor(fx.target, fx.database);
   process.env.DB_IDENTITY_BINDING = 'on';
   process.env.MOCK_LLM = 'true';
   const sql = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> =>
     withClient(fx.target, async c => (await c.query<T>(text, params)).rows, fx.database);
   // No stand-in grant (work-k5fk.10.1): the run database is mwf_migrator's, so
-  // mwf_app and mwf_job hold exactly the baseline's grants.
+  // mwf_app, mwf_ai and mwf_worker hold exactly the baseline's grants.
   const as = async <T extends Record<string, unknown>>(
     role: RunRole,
     userId: string | null,
@@ -84,9 +86,7 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
           ? authUrlFor(fx.target, fx.database)
           : role === 'mwf_ai'
             ? aiUrlFor(fx.target, fx.database)
-            : role === 'mwf_worker'
-              ? workerUrlFor(fx.target, fx.database)
-              : jobUrlFor(fx.target, fx.database);
+            : workerUrlFor(fx.target, fx.database);
     const c = new Client({ connectionString: url });
     await c.connect();
     try {
@@ -108,9 +108,9 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
     sql,
     as,
     drop: async () => {
-      const { prisma, disconnectJobPrisma } = await import('../../lib/prisma');
+      const { prisma, disconnectRolePrismas } = await import('../../lib/prisma');
       await prisma.$disconnect().catch(() => undefined);
-      await disconnectJobPrisma().catch(() => undefined);
+      await disconnectRolePrismas().catch(() => undefined);
       await fx.drop();
     },
   };

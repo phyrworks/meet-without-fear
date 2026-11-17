@@ -19,7 +19,8 @@
  * `scripts/sweep-session-retention.ts`).
  */
 
-import { getJobPrisma } from '../lib/prisma';
+import { getWorkerPrisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { logger } from '../lib/logger';
 
 // Policy constants — exported for tests and ops observability.
@@ -42,7 +43,7 @@ export interface SessionRetentionResult {
  * `now` is injectable for testing.
  */
 export async function enforceSessionRetention(now: Date = new Date()): Promise<SessionRetentionResult> {
-  const job = getJobPrisma();
+  const job = getWorkerPrisma();
   const archiveCutoff = new Date(now.getTime() - ACTIVE_SESSION_RETENTION_MS);
   const deleteCutoff = new Date(now.getTime() - ARCHIVED_SESSION_PURGE_MS);
 
@@ -58,9 +59,12 @@ export async function enforceSessionRetention(now: Date = new Date()): Promise<S
   let archived = 0;
   for (const candidate of staleCandidates) {
     if (new Date(candidate.last_activity) >= archiveCutoff) continue;
-    await job.$transaction(async tx => {
-      await tx.$executeRaw`SELECT app.session_set_status(${candidate.id}::uuid, 'ABANDONED'::session_status)`;
-      await tx.$executeRaw`SELECT app.session_set_status(${candidate.id}::uuid, 'ARCHIVED'::session_status)`;
+    // The worker's arm of session_set_status acts on one session: its app.session_scope (work-k5fk.10.5).
+    await withSessionScope(candidate.id, async () => {
+      await job.$transaction(async tx => {
+        await tx.$executeRaw`SELECT app.session_set_status(${candidate.id}::uuid, 'ABANDONED'::session_status)`;
+        await tx.$executeRaw`SELECT app.session_set_status(${candidate.id}::uuid, 'ARCHIVED'::session_status)`;
+      });
     });
     archived++;
   }

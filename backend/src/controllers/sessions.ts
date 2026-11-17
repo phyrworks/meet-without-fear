@@ -15,7 +15,7 @@
 import { loadSessionPartner, pendingInviteeNames } from '../services/contacts';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import {
   DEFAULT_PRIVACY_PREFERENCES,
   ErrorCode,
@@ -222,9 +222,8 @@ export async function resumeSession(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    await getJobPrisma().participantMilestone.deleteMany({
-      where: { milestoneKey: 'paused', sessionId },
-    });
+    // Un-reaching `paused` for everyone (app.session_resume, a current participant's definer call; work-k5fk.10.5).
+    await prisma.$executeRaw`SELECT app.session_resume(${sessionId}::uuid)`;
     const now = new Date();
 
     // Notify partner
@@ -344,9 +343,9 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
     const now = new Date();
 
     // RESOLVED through the sole status writer (it stamps resolved_at), then
-    // every present human reaches `closed` (a system milestone: the job's) —
-    // the old "mark all stage progress COMPLETED".
-    await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'RESOLVED'::session_status)`;
+    // every present human reaches `closed` (a system milestone: app.reach_milestone) —
+    // the old "mark all stage progress COMPLETED". The caller is a current participant.
+    await prisma.$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'RESOLVED'::session_status)`;
     const present = await prisma.participant.findMany({
       where: { sessionId, kind: 'human', leftAt: null },
       select: { sessionId: true, userId: true },
@@ -580,8 +579,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
 
     // Session → INVITED (ready for partner to accept), through its only writer.
     if (session.status === 'CREATED') {
-      await getJobPrisma()
-        .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::public.session_status)`;
+      await prisma.$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::public.session_status)`;
     }
 
     // Stage 0 complete: compact signed (if not yet) and invitation sent.

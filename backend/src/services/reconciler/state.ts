@@ -7,12 +7,12 @@
  * Target shape (TS-10): every status move is `app.empathy_set_status` on the
  * JOB connection, guarded by the `status_version` the analysis started from
  * (a late result never overwrites a newer decision — spec §7 service rule).
- * The reveal is the job's: one Serializable transaction calls the function for
+ * The reveal is the AI's: one Serializable transaction calls the function for
  * every READY current round; the function owns the reveal gate and writes the
- * subject's delivered EMPATHY_STATEMENT, and the job stamps the delivery.
+ * subject's delivered EMPATHY_STATEMENT, and the AI stamps the delivery.
  */
 
-import { getJobPrisma, prisma } from '../../lib/prisma';
+import { getAiPrisma, prisma } from '../../lib/prisma';
 import { reencryptForSession } from '../../lib/share-moments';
 import { logger } from '../../lib/logger';
 import { pingStage2Refresh } from '../empathy-realtime';
@@ -61,8 +61,8 @@ export async function directionParties(
   guesserUserId: string,
   subjectUserId: string,
 ): Promise<{ guesser: UserInfo; subject: UserInfo; guesserParty: SessionParty; subjectParty: SessionParty } | null> {
-  // Analysis path: the job reads (Ruling R35).
-  const parties = await sessionParties(sessionId, getJobPrisma());
+  // Analysis path: the AI reads (Ruling R35).
+  const parties = await sessionParties(sessionId, getAiPrisma());
   const g = partyOf(parties, { userId: guesserUserId });
   const s = partyOf(parties, { userId: subjectUserId });
   if (!g || !s) return null;
@@ -74,9 +74,9 @@ export async function directionParties(
 // ============================================================================
 
 /**
- * Move the guesser's current round to READY (job, guarded by the status
+ * Move the guesser's current round to READY (AI, guarded by the status
  * version the caller read), write the alignment message into the guesser's
- * own conversation in the same job transaction, and check the reveal.
+ * own conversation in the same AI transaction, and check the reveal.
  *
  * @param circuitBreakerTripped - If true, uses a natural transition message instead of accuracy feedback
  */
@@ -100,7 +100,7 @@ async function markEmpathyReady(
   // same text; do not re-post it.
   const conversationId = guesser.mainConversationId;
   const alreadyPosted = conversationId
-    ? (await lastAiNote(conversationId, getJobPrisma()))?.trim() === alignmentMessage.trim()
+    ? (await lastAiNote(conversationId, getAiPrisma()))?.trim() === alignmentMessage.trim()
     : true;
 
   let saved: Awaited<ReturnType<typeof createFacilitatorMessage>> | null = null;
@@ -206,7 +206,7 @@ export async function runReconcilerForDirection(
   }
 
   // Significant gaps: the share suggestion for the subject, persisted with the
-  // analysis (job), then the guesser's round → AWAITING_SHARING (guarded).
+  // analysis (AI), then the guesser's round → AWAITING_SHARING (guarded).
   const shareOffer = await generateShareSuggestion(sessionId, guesser, subject, result, witnessingContent, {
     attemptId: empathyData.attemptId,
     storedResultId: result.storedResultId,
@@ -274,14 +274,14 @@ interface CurrentRound {
  */
 export async function checkAndRevealBothIfReady(sessionId: string): Promise<boolean> {
   logger.debug('checkAndRevealBothIfReady called', { sessionId });
-  const parties = await sessionParties(sessionId, getJobPrisma());
+  const parties = await sessionParties(sessionId, getAiPrisma());
   if (parties.length !== 2) return false;
   const uids = parties.map(p => p.userId);
 
   // Retried when it loses a Serializable round (step 7 review F2): its delivered copies take each subject
   // conversation's next seq, so a line committed there after its snapshot makes it fail with 40001.
   const revealed = await withSerializableRetry(() =>
-    getJobPrisma().$transaction(
+    getAiPrisma().$transaction(
       async tx => {
         const rounds = await tx.$queryRaw<CurrentRound[]>`SELECT DISTINCT ON (a.author_user_id, a.subject_user_id)
                a.id, a.author_user_id, a.subject_user_id, a.status::text AS status
@@ -304,11 +304,11 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
           await markAttemptDelivery(r.id, 'DELIVERED', at, tx);
         }
         // Share moment (writer-principal rule; spec §1.2 empathy_attempt: "re-encrypted
-        // under the session key by the reveal job"; ruling R26): the revealed rounds'
+        // under the session key by the reveal (AI)"; ruling R26): the revealed rounds'
         // content, and the EMPATHY_STATEMENT copies app.empathy_set_status wrote with
         // that ciphertext verbatim, become the subject's to read. Under the single key
-        // there is nothing to re-encrypt; W13 re-encrypts here, in this job
-        // transaction, with the same plaintext (T-message-immutable exempts mwf_job).
+        // there is nothing to re-encrypt; W13 re-encrypts here, in this AI
+        // transaction, with the same plaintext (T-message-immutable names W13's writer when it lands).
         await reencryptForSession(
           {
             moment: 'empathy-reveal',

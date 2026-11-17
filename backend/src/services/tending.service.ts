@@ -66,7 +66,8 @@ import {
   type FollowUpCheckinPayload,
 } from '@meet-without-fear/shared';
 import type { Prisma } from '../generated/prisma/client';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getWorkerPrisma, prisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../lib/share-moments';
 import { logger } from '../lib/logger';
@@ -413,7 +414,7 @@ async function entryDTOs(viewer: Viewer, entries: FollowUpRow[]): Promise<Tendin
 }
 
 // ============================================================================
-// Scheduling (JOB connection)
+// Scheduling (the WORKER connection; work-k5fk.10.5)
 // ============================================================================
 
 async function insertFollowUpAsJob(
@@ -430,7 +431,7 @@ async function insertFollowUpAsJob(
     responseDeadlineAt?: Date | null;
     summary: string | null;
   },
-  db: JobDb = getJobPrisma(),
+  db: JobDb = getWorkerPrisma(),
 ): Promise<string> {
   const [r] = await db.$queryRaw<Array<{ id: string }>>`
     INSERT INTO follow_up (session_id, agreement_id, proposal_id, type, scope, owner_user_id,
@@ -445,7 +446,7 @@ async function insertFollowUpAsJob(
 }
 
 /**
- * A follow-up's status move (the job writes follow-up status). The SET names
+ * A follow-up's status move (the worker writes follow-up status). The SET names
  * only the columns it assigns: the job's grant on follow_up is UPDATE on
  * (status, opened_at, completed_at, response_deadline_at) and a SET that read
  * an unassigned column would need SELECT on it.
@@ -454,7 +455,7 @@ async function setFollowUpStatusAsJob(
   id: string,
   status: FollowUpRow['status'],
   extra: { openedAt?: Date | null; completedAt?: Date | null; responseDeadlineAt?: Date | null } = {},
-  db: JobDb = getJobPrisma(),
+  db: JobDb = getWorkerPrisma(),
 ): Promise<number> {
   const params: unknown[] = [id, status];
   const sets = ['status = $2::follow_up_status'];
@@ -492,7 +493,7 @@ export async function scheduleSharedAgreementTendingEntries(
   sessionId: string,
   agreements: AgreementForScheduling[],
   now = new Date(),
-  db: JobDb = getJobPrisma(),
+  db: JobDb = getWorkerPrisma(),
 ): Promise<string[]> {
   const ids: string[] = [];
   for (const agreement of agreements) {
@@ -525,7 +526,7 @@ export async function scheduleIndividualCommitmentTendingEntries(
   commitments: IndividualCommitmentForScheduling[],
   scheduledFor: Date,
   now = new Date(),
-  db: JobDb = getJobPrisma(),
+  db: JobDb = getWorkerPrisma(),
 ): Promise<string[]> {
   const ids: string[] = [];
   const due = scheduledFor <= now;
@@ -1429,8 +1430,8 @@ export async function submitTendingCheckin(args: {
         throw new TendingInvalidStateError(`Unsupported continueChoice: ${choice as string}`);
     }
     if (choice === ContinueChoice.FULL_CLOSURE) {
-      await getJobPrisma()
-        .$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
+      // As the caller, a current participant (work-k5fk.10.5: was the job's).
+      await prisma.$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
     }
   }
 
@@ -1492,11 +1493,11 @@ export async function submitTendingCheckin(args: {
 /**
  * NEW_PROCESS: the current session RESOLVED, a new CREATED session linked
  * back to it (previous_session_id) with the caller as its first participant,
- * and the hand-off summary as a SYSTEM message in their MAIN conversation (job).
+ * and the hand-off summary as a SYSTEM message in their MAIN conversation (the AI's, scoped to the new session).
  */
 async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): Promise<string> {
-  await getJobPrisma()
-    .$executeRaw`SELECT app.session_set_status(${viewer.sessionId}::uuid, 'RESOLVED'::session_status)`;
+  // As the caller, a current participant of the session it resolves (work-k5fk.10.5: was the job's).
+  await prisma.$executeRaw`SELECT app.session_set_status(${viewer.sessionId}::uuid, 'RESOLVED'::session_status)`;
   const { sessionId, conversationId } = await prisma.$transaction(async tx => {
     const session = await tx.session.create({
       data: {
@@ -1518,21 +1519,24 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
     });
     return { sessionId: session.id, conversationId: conversation.id };
   });
-  await createFacilitatorMessage({ conversationId, role: 'SYSTEM', content: handoff, createdAt: now });
+  // The new session is not the one the request is seated in: the AI's line names its scope (work-k5fk.10.5).
+  await withSessionScope(sessionId, async () => {
+    await createFacilitatorMessage({ conversationId, role: 'SYSTEM', content: handoff, createdAt: now });
+  });
   return sessionId;
 }
 
 // ============================================================================
-// Jobs (JOB connection)
+// Jobs (the WORKER connection, mwf_worker; work-k5fk.10.5)
 // ============================================================================
 
 /**
  * Open every due scheduled follow-up (sql_follow_up_due: status SCHEDULED by
- * scheduled_for) — runs as the job. A SHARED follow-up gets its response
+ * scheduled_for) — runs as the worker. A SHARED follow-up gets its response
  * deadline (the coordination window) when it opens.
  */
 export async function openDueTendingEntries(now = new Date()): Promise<{ opened: number; entryIds: string[] }> {
-  const job = getJobPrisma();
+  const job = getWorkerPrisma();
   const due = await job.$queryRaw<
     Array<{ id: string; session_id: string; scope: 'SHARED' | 'INDIVIDUAL'; owner_user_id: string | null }>
   >`
@@ -1618,11 +1622,11 @@ function nextReminderDate(remindAt: Date, cadence: string | null): Date | null {
   }
 }
 
-/** Deliver due reminders (sql_reminder_due) — the job moves status / the next instant. */
+/** Deliver due reminders (sql_reminder_due) — the worker moves status / the next instant. */
 export async function processDueTendingReminders(
   now = new Date(),
 ): Promise<{ delivered: number; reminderIds: string[] }> {
-  const job = getJobPrisma();
+  const job = getWorkerPrisma();
   const due = await job.$queryRaw<
     Array<{
       id: string;
@@ -1758,8 +1762,11 @@ export async function resolveReadyTendingCoordinationCycles(
       resultSummary = `Both participants chose extension. Shared Tending continues until ${nextScheduledFor.toISOString()}.`;
     } else if (every(ContinueChoice.FULL_CLOSURE) && !stillOpen) {
       await setFollowUpStatusAsJob(id, 'COMPLETED', { completedAt: now });
-      await getJobPrisma()
-        .$executeRaw`SELECT app.session_set_status(${entry.sessionId}::uuid, 'RESOLVED'::session_status)`;
+      // The worker's arm of session_set_status acts on one session: its app.session_scope (work-k5fk.10.5).
+      await withSessionScope(entry.sessionId, async () => {
+        await getWorkerPrisma()
+          .$executeRaw`SELECT app.session_set_status(${entry.sessionId}::uuid, 'RESOLVED'::session_status)`;
+      });
       resultSummary =
         'Both participants chose full closure and no submitted need remains open. Shared Tending is complete.';
     } else if (
