@@ -7,17 +7,36 @@ x-common: &common
 services:
   db:
     <<: *common
-    image: ${DB_IMAGE:?Set a digest-pinned PostgreSQL 18 pgvector image}
+    # mwf-db:<hash>, built on the host by build-db-image.sh (Dockerfile.db: the pinned pgvector base
+    # + pgaudit + the TLS entrypoint; work-k5fk.10.6).
+    image: ${DB_IMAGE:?Run build-db-image.sh: it writes DB_IMAGE into release.env}
     env_file: [{path: /etc/mwf/database.env, format: raw}]
     volumes:
       - postgres:/var/lib/postgresql
       - ./init-db.sh:/docker-entrypoint-initdb.d/10-mwf.sh:ro
+      # Ownership, the database's ACL and pgaudit (work-k5fk.10.6): on a fresh volume after the roles;
+      # an existing cluster runs the same file at the cutover (README).
+      - ./ownership.sql:/docker-entrypoint-initdb.d/20-mwf-ownership.sql:ro
+      # Per-role, per-source client authentication, hostssl only (design note §6, Q17).
+      - ./pg_hba.conf:/etc/mwf-db/pg_hba.conf:ro
+      # The TLS pair from db-tls.sh; db-entrypoint.sh copies it to the postgres user, mode 0600.
+      - /etc/mwf/db-tls:/etc/mwf-db-tls:ro
     # Administrative access is available only through an SSH tunnel.
     ports: ['127.0.0.1:5432:5432']
-    networks: [database, admin]
+    networks:
+      database: {ipv4_address: 172.29.1.2}
+      admin: {}
     mem_limit: 650m
     shm_size: 128m
-    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=35, -c, work_mem=4MB, -c, maintenance_work_mem=64MB]
+    # pgaudit (Q17): loaded for every session, logging nothing by default; ownership.sql turns
+    # pgaudit.log = 'all' on for mwf_migrator, the admin and mwf_clinician only (ALTER ROLE … SET).
+    # The audit lines go to the container log with the role and application name in the prefix.
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=35, -c, work_mem=4MB, -c, maintenance_work_mem=64MB,
+              -c, hba_file=/etc/mwf-db/pg_hba.conf, -c, password_encryption=scram-sha-256,
+              -c, ssl=on, -c, ssl_cert_file=/var/run/postgresql/tls/server.crt,
+              -c, ssl_key_file=/var/run/postgresql/tls/server.key, -c, ssl_min_protocol_version=TLSv1.3,
+              -c, shared_preload_libraries=pgaudit, -c, pgaudit.log=none, -c, pgaudit.log_catalog=off,
+              -c, pgaudit.log_relation=on, -c, 'log_line_prefix=%m [%p] %q%u@%d %a ']
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 10s
@@ -26,11 +45,15 @@ services:
   api:
     <<: *common
     image: ${APP_IMAGE:?Set the selected immutable application image}
-    # application.env carries DATABASE_URL (migrations, and the fallback) and,
-    # when set, the per-role APP_/JOB_/OPS_/AUTH_DATABASE_URL; each role URL
-    # falls back to DATABASE_URL. Do not list them under `environment:` — an
-    # entry there overrides env_file even when it resolves to empty.
+    # application.env carries the runtime role URLs (APP_/AI_/WORKER_/OPS_/AUTH_DATABASE_URL;
+    # DATABASE_URL = the app's, its fallback) and never the migrator's: migrations run as
+    # mwf_migrator from /etc/mwf/migrator.env in deploy.sh's own container (work-k5fk.10.6). Do not
+    # list them under `environment:` — an entry there overrides env_file even when it resolves to empty.
     env_file: [{path: /etc/mwf/application.env, format: raw}]
+    # The database CA (db-tls.sh): every runtime URL verifies the server with it
+    # (sslmode=verify-full&sslrootcert=/etc/mwf-db-tls/ca.crt).
+    volumes:
+      - /etc/mwf/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro
     environment:
       NODE_ENV: production
       PORT: '3000'
@@ -40,7 +63,8 @@ services:
       NODE_OPTIONS: --max-old-space-size=640
     networks:
       edge: {ipv4_address: 172.29.0.3}
-      database: {}
+      # pg_hba.conf admits the runtime logins from this network only.
+      database: {ipv4_address: 172.29.1.3}
     mem_limit: 850m
     init: true
     stop_grace_period: 20s
@@ -69,9 +93,18 @@ networks:
   edge:
     ipam:
       config: [{subnet: 172.29.0.0/24}]
-  database: {internal: true}
-  # A regular bridge enables the loopback-only port mapping on Docker 29.
-  admin: {}
+  # pg_hba.conf names these addresses (work-k5fk.10.6): db .2, api .3, the deploy's migration
+  # container .4 (deploy.sh); anything started without an address (the preflight) gets one from
+  # the upper half, so no container can take a pinned one.
+  database:
+    internal: true
+    ipam:
+      config: [{subnet: 172.29.1.0/24, ip_range: 172.29.1.128/25}]
+  # A regular bridge enables the loopback-only port mapping on Docker 29. Its gateway, 172.29.2.1,
+  # is the source of every connection through the loopback port (the SSH tunnels; pg_hba.conf).
+  admin:
+    ipam:
+      config: [{subnet: 172.29.2.0/24, gateway: 172.29.2.1}]
 volumes:
   postgres:
     name: mwf_postgres

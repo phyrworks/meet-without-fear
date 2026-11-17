@@ -167,11 +167,12 @@ jobs:
       # Not a `services:` container: the scripts and the golden trace address
       # it by name (`podman exec mwf-postgres …`, `podman logs mwf-postgres`),
       # and a service container's name is generated. The image is production's
-      # pin (infra/aws/images.env.example). PostgreSQL 18 for uuidv7(),
+      # base pin (infra/aws/images.env.example DB_BASE_IMAGE; production adds pgaudit,
+      # Dockerfile.db, which no test needs). PostgreSQL 18 for uuidv7(),
       # pgvector for the vector columns.
       - name: Start PostgreSQL 18 (mwf-postgres)
         run: |
-          image="$(sed -n 's/^DB_IMAGE=//p' infra/aws/images.env.example)"
+          image="$(sed -n 's/^DB_BASE_IMAGE=//p' infra/aws/images.env.example)"
           docker run -d --name mwf-postgres \
             -e POSTGRES_USER=mwf_user -e POSTGRES_PASSWORD=mwf_password \
             -e POSTGRES_DB=meet_without_fear \

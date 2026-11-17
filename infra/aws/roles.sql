@@ -48,9 +48,11 @@
 -- job_access — once the AI's writer, the two-party writer and the definer owner
 -- at once. The end of this script drops them (see there for when it cannot).
 -- Not runtime roles:
---   mwf_migrator  owner of every table, view, type and invoker function; runs
---                 migrations (production reaches this at §7 row 9c: until
---                 then migrations run as the database owner, mwf_app)
+--   mwf_migrator  owner of the database, schema public and every table, view,
+--                 type and invoker function; runs migrations, nothing else
+--                 (ownership.sql hands it the database at the cutover, §7 row
+--                 9c / work-k5fk.10.6; deploy.sh migrates as it). Held to the
+--                 policies too (FORCE ROW LEVEL SECURITY): it reads no row.
 --   mwf_definer   NOLOGIN owner of every SECURITY DEFINER function; nobody
 --                 logs in as it. mwf_migrator may SET ROLE to it (no
 --                 inheritance) so a migration can hand a definer over.

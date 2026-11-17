@@ -8,12 +8,21 @@ manifest=${2:?Manifest file required}
 [[ "$image" =~ ^mwf-api:[a-zA-Z0-9_.-]+$ ]] || exit 2
 exec 9>/var/lib/mwf/deploy.lock
 flock -n 9 || { echo 'Deployment already running' >&2; exit 1; }
+# Migrations run as the owner, mwf_migrator (design note §6 layer 1, §7 row 9c; work-k5fk.10.6), from
+# their own root-only file: the API's application.env never holds the owner's password. pg_hba.conf
+# admits mwf_migrator only from the migration container's address (172.29.1.4, below), over TLS.
+# Checked before anything changes.
+migrator_url=$(sed -n 's/^MIGRATOR_DATABASE_URL=//p' /etc/mwf/migrator.env 2>/dev/null | tail -1)
+[[ "$migrator_url" =~ ^postgresql://mwf_migrator:[^@]+@db:5432/mwf\?.*sslmode= ]] || {
+  echo 'MIGRATOR_DATABASE_URL in /etc/mwf/migrator.env must be postgresql://mwf_migrator:…@db:5432/mwf?sslmode=… (README): not deploying, nothing changed.' >&2
+  exit 1
+}
 previous=$(jq -r ' .image // empty' /var/lib/mwf/current-release.json 2>/dev/null || true)
 # Role-guard preflight (work-k5fk.10.3), with the NEW image and before anything changes: every
 # runtime role URL in application.env must be a least-privilege login that owns nothing and is a
-# member of no role, or the new API would refuse to start after the migration. On the current
-# production database it FAILS until the design note §7 row 9c cutover (mwf_app owns the database,
-# which no runtime login may): the old release keeps running. There is no switch to skip it.
+# member of no role, or the new API would refuse to start after the migration. On a database still
+# owned by mwf_app (before the cutover, README "Cutover to the target shape") it FAILS: the old
+# release keeps running. There is no switch to skip it.
 # The image runs directly on the internal database network only (compose project "mwf" ->
 # network mwf_database; the db service answers as "db" there), NOT `compose run api`: the api
 # service pins 172.29.0.3 on the edge network, which the running API already holds.
@@ -34,7 +43,8 @@ image_has() {
   esac
 }
 if image_has "$preflight"; then
-  if ! docker run --rm --network mwf_database --env-file /etc/mwf/application.env "$image" node "$preflight"; then
+  if ! docker run --rm --network mwf_database --env-file /etc/mwf/application.env \
+      -v /etc/mwf/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro "$image" node "$preflight"; then
     echo 'Role-guard preflight REFUSED a runtime login: not migrating, previous release left running (see above).' >&2
     exit 1
   fi
@@ -60,7 +70,12 @@ compose stop api
 sed "s|^APP_IMAGE=.*|APP_IMAGE=$image|" /etc/mwf/release.env > /etc/mwf/release.env.next
 mv /etc/mwf/release.env.next /etc/mwf/release.env
 # Keep failed deployments stopped. Never automatically reverse migrations.
-compose run --rm --no-deps api node /app/node_modules/prisma/build/index.js migrate deploy --schema=/app/backend/prisma/schema.prisma
+# Not `compose run api`: that container would carry application.env and the API's addresses. This one
+# is on the internal database network only, at the one address pg_hba.conf admits mwf_migrator from,
+# with DATABASE_URL (prisma.config.ts) taken from the environment, not the command line.
+DATABASE_URL="$migrator_url" docker run --rm --network mwf_database --ip 172.29.1.4 -e DATABASE_URL \
+  -v /etc/mwf/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro \
+  "$image" node /app/node_modules/prisma/build/index.js migrate deploy --schema=/app/backend/prisma/schema.prisma
 compose up -d --no-deps api
 for _attempt in $(seq 1 40); do
   status=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q api)")

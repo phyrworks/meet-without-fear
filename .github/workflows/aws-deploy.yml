@@ -61,7 +61,7 @@ jobs:
           checksum=$(sha256sum /tmp/image.tar.gz | cut -d' ' -f1)
           key="releases/artifacts/$RELEASE_ID/image.tar.gz"
           aws s3 cp /tmp/image.tar.gz "s3://$BACKUP_BUCKET/$key" --only-show-errors
-          tar -czf /tmp/runtime.tar.gz -C infra/aws Caddyfile compose.yaml common.sh init-db.sh backup.sh restore.sh verify.sql fingerprint.sql deploy.sh release-poll.sh install-services.sh ops-health.sh
+          tar -czf /tmp/runtime.tar.gz -C infra/aws Caddyfile compose.yaml common.sh init-db.sh backup.sh restore.sh verify.sql fingerprint.sql deploy.sh release-poll.sh install-services.sh ops-health.sh ownership.sql pg_hba.conf db-tls.sh Dockerfile.db db-entrypoint.sh build-db-image.sh
           runtime_checksum=$(sha256sum /tmp/runtime.tar.gz | cut -d' ' -f1)
           aws s3 cp /tmp/runtime.tar.gz "s3://$BACKUP_BUCKET/releases/artifacts/$RELEASE_ID/runtime.tar.gz" --only-show-errors
           jq -n --arg runtimeSha256 "$runtime_checksum" --arg id "$RELEASE_ID" --arg image "$image" --arg key "$key" --arg sha256 "$checksum" --arg source "$SOURCE_SHA" --arg infrastructure "$GITHUB_SHA" '{id:$id,image:$image,key:$key,sha256:$sha256,runtimeSha256:$runtimeSha256,source:$source,infrastructure:$infrastructure}' > /tmp/desired.json
