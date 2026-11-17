@@ -466,9 +466,19 @@ export async function createHarness(opts: {
           });
       }
 
+      // A read (GET/HEAD) that declares no async boundary settles after one
+      // unchanged sample instead of four: its rows are not expected to move,
+      // and the four-sample floor (~0.5 s) on every read was most of a golden's
+      // wall time (test audit 2026-11-17). A write, or any step that declares
+      // an asyncBoundary, keeps the full wait. A read that does start
+      // background work must declare asyncBoundary; the trace's
+      // unwindowedStatements() check is what catches one that does not.
+      const method = String((test as unknown as { method?: string }).method ?? '').toUpperCase();
+      const readOnly = !asyncBoundary && (method === 'GET' || method === 'HEAD');
+
       const res = await test;
       const atResponse = await snapshot(tables);
-      const { snapshot: settledSnap, settled } = await settle(() => snapshot(tables));
+      const { snapshot: settledSnap, settled } = await settle(() => snapshot(tables), readOnly ? { stableFor: 1 } : {});
 
       // The end marker goes after `settle()`, not after the response. The whole
       // point of `empathy-reveal` is a reveal that `consentToShare` fires
