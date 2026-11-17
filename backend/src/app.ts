@@ -35,6 +35,11 @@ const corsOrigins: (string | RegExp)[] = [
 if (process.env.DASHBOARD_URL) {
   corsOrigins.push(process.env.DASHBOARD_URL);
 }
+// e2e harness on a non-default web port (E2E_WEB_PORT; see e2e/e2e-ports.ts).
+// Only honoured under the e2e bypass, so production origins never change.
+if (isE2EBypassEnabled() && /^\d{1,5}$/.test(process.env.E2E_WEB_PORT ?? '')) {
+  corsOrigins.push(`http://localhost:${process.env.E2E_WEB_PORT}`, `http://127.0.0.1:${process.env.E2E_WEB_PORT}`);
+}
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
 };

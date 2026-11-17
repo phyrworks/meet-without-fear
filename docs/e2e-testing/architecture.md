@@ -509,3 +509,23 @@ Two-browser tests simulate both users simultaneously in separate browser context
 
 **Fixture Operations Registry:**
 Each fixture can define `operations` for non-streaming AI responses (reconciler analysis, share suggestions). The registry maps operation names to fixture response objects.
+
+### Running several suites side by side (ports)
+
+The configs read `E2E_API_PORT` (default 3000) and `E2E_WEB_PORT` (default 8082) once, via `e2e/e2e-ports.ts`.
+They drive the backend `PORT`, the Expo `--port`, `EXPO_PUBLIC_API_URL`, every `baseURL`, the health URL,
+and the `API_BASE_URL` / `APP_BASE_URL` the specs read (overriding the defaults in `e2e/.env.test`).
+Under the e2e bypass the backend also adds `http://localhost:$E2E_WEB_PORT` to its CORS origins.
+
+```bash
+E2E_API_PORT=3100 E2E_WEB_PORT=8182 npx playwright test --config=playwright.config.ts
+```
+
+Each concurrent run also needs its own database (`DATABASE_URL` and the per-role `*_DATABASE_URL`s), because
+global setup truncates it. Wait for chosen ports to be free; never kill another agent's server. `reuseExistingServer`
+is `false`, so a busy port fails the run instead of attaching to someone else's server.
+Not parameterised: `mobile/package.json` `start:e2e`, the Python gold-loop scripts (`scripts/mwf_gold_loop.py`
+requires `:8082`; use `MWF_API_URL`/`MWF_APP_URL` plus `MWF_ALLOW_NON_E2E_WEB=1`), and the local-deploy config.
+
+The Expo command passes `--clear`: Metro's transform cache does not key on `EXPO_PUBLIC_API_URL`, so without it a
+bundle built for one API port is silently reused for another (the page then calls the old API port and fails CORS).
