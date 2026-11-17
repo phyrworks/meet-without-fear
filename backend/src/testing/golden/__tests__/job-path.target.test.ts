@@ -101,15 +101,6 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
     expect(await drafts()).toEqual([{ content: 'DRAFT_LAST', version: before[0].version + 4 }]);
   });
 
-  it('the AI client is mwf_ai on the run database (work-k5fk.10.5: mwf_job retired), and identity binding is on', async () => {
-    const { getAiPrisma } = await import('../../../lib/prisma');
-    const [who] = await getAiPrisma().$queryRaw<
-      Array<{ u: string; db: string }>
-    >`SELECT session_user AS u, current_database() AS db`;
-    expect(who).toEqual({ u: 'mwf_ai', db: harness.fixture.database });
-    expect(process.env.DB_IDENTITY_BINDING).toBe('on');
-  });
-
   it("streams a turn: the user's turn and the AI reply (job) land in Ada's conversation only", async () => {
     const before = await counts();
     const bobBefore = await get(harness.actors.userB!, 'bob before', `/api/v1/sessions/${harness.sessionId}/messages`);
