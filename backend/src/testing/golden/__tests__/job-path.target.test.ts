@@ -61,9 +61,28 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
       /permission denied/,
     );
     await expect(getAiPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    const ok = await getAiPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
+    const { withSessionScope } = await import('../../../lib/request-context');
+    const count = async () =>
+      await getAiPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
       WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_user_id IS NULL OR sender_user_id IS NOT NULL)`;
+    const [session] = await rows<{ id: string }>('SELECT session_id::text AS id FROM message LIMIT 1');
+    const ok = await withSessionScope(session.id, count);
     expect(ok[0].n).toBeGreaterThan(0);
+  });
+
+  // work-k5fk.10.6 (RLS, ai_session): the AI reads one session at a time — app.session_scope — and
+  // nothing at all without one, so a statement outside a scope cannot read every session's chat.
+  it('the AI reads the chat of its scoped session only, and none without a scope', async () => {
+    const { getAiPrisma } = await import('../../../lib/prisma');
+    const { withSessionScope } = await import('../../../lib/request-context');
+    // Awaited inside the scope: a PrismaPromise runs when awaited, in the caller's context.
+    const sessions = async () =>
+      await getAiPrisma().$queryRaw<Array<{ session_id: string }>>`SELECT DISTINCT session_id::text FROM message`;
+    expect(await sessions()).toEqual([]);
+    const [s] = await rows<{ id: string }>('SELECT session_id::text AS id FROM message LIMIT 1');
+    const other = '00000000-0000-7000-8000-000000000000';
+    expect(await withSessionScope(s.id, sessions)).toEqual([{ session_id: s.id }]);
+    expect(await withSessionScope(other, sessions)).toEqual([]);
   });
 
   it('the empathy-draft write is atomic: concurrent writes leave one row, the last write wins', async () => {

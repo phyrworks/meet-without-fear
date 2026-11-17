@@ -83,8 +83,14 @@ export class BrainService {
     const ctx = getRequestContext();
     if (ctx?.seated && ctx.sessionId === sessionId && ctx.userId) return ctx.userId;
     if (!ctx?.userId || !UUID.test(ctx.userId)) return null;
-    const rows = await getAiPrisma().$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
-      WHERE session_id = ${sessionId}::uuid AND user_id = ${ctx.userId}::uuid`;
+    // In the session's scope (work-k5fk.10.6): the AI reads participant rows of app.session_scope only (RLS).
+    const userId = ctx.userId;
+    const rows = await this.inScope(
+      sessionId,
+      async () =>
+        await getAiPrisma().$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
+          WHERE session_id = ${sessionId}::uuid AND user_id = ${userId}::uuid`,
+    );
     return rows[0]?.user_id ?? null;
   }
 

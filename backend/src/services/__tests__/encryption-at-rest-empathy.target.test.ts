@@ -251,7 +251,7 @@ describeTarget(
         await expectSealed(run, 'reconciler_result', column, `id = $1`, [id]);
         proven.add(`reconciler_result.${column}`);
       }
-      const stored = await analysis.currentResultFor(bobRound1);
+      const stored = await asAi(() => analysis.currentResultFor(bobRound1));
       expect(stored).toMatchObject({
         alignmentSummary: 'PROBE_TS13_ALIGNMENT',
         gapSummary: 'PROBE_TS13_GAP',
@@ -268,7 +268,7 @@ describeTarget(
         await expectSealed(run, 'reconciler_guidance', column, `result_id = $1`, [id]);
         proven.add(`reconciler_guidance.${column}`);
       }
-      expect(await analysis.guidanceFor(id!)).toEqual({
+      expect(await asAi(() => analysis.guidanceFor(id!))).toEqual({
         areaHint: 'PROBE_TS13_AREA',
         guidanceType: 'challenge_assumptions',
         promptSeed: 'PROBE_TS13_SEED',
