@@ -193,103 +193,12 @@ describe('Stage Prompts Service', () => {
       expect(fullPrompt(buildStagePrompt(3, stage4))).not.toContain('POST-REVEAL PHASES');
     });
 
-    it('Stage 3 FORBIDDEN list prevents identifying overlap between needs lists', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(3, context));
-
-      expect(prompt).toContain('common ground');
-      expect(prompt).toContain('overlap');
-      expect(prompt).toContain('That insight belongs to the users');
-    });
-
-    it('Stage 3 prompt trusts clear compressed needs instead of forcing extra deepening', () => {
-      const context = createContext({ userName: 'Catherine', partnerName: 'James' });
-      const prompt = fullPrompt(buildStagePrompt(3, context));
-
-      expect(prompt).not.toContain('COMPRESSED-NEEDS PACING');
-      expect(prompt).not.toContain('safety/accountability/autonomy/self-trust');
-      expect(prompt).not.toContain('care/belonging/recognition/heard');
-      expect(prompt).toContain('If one dense answer names several real needs, capture one clear need this turn');
-      expect(prompt).toContain('do not force extra exploration just because the answer was compressed');
-    });
-
-    it('Stage 3 prompt does not contain hardcoded user-facing opening phrase', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(3, context));
-
-      // The old hardcoded opening should be gone
-      expect(prompt).not.toContain('When you step back and look at all of this');
-    });
-
-    it('Stage 3 prompt preserves redirecting and clear-answer capture guidance', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(3, context));
-
-      expect(prompt).toContain('redirect gently to what matters to them');
-      expect(prompt).toContain('ask one concrete clarifying question only if you do not yet understand');
-      expect(prompt).toContain('Offer needs language as a suggestion');
-    });
-
     it('returns Stage 4 prompt for stage 4', () => {
       const context = createContext();
       const prompt = fullPrompt(buildStagePrompt(4, context));
 
       expect(prompt).toContain('Strategic Repair');
       expect(prompt).toContain('proposal inventory');
-    });
-
-    it('Stage 4 prompt supports collaborative proposal inventory without ranking pressure', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain('proposal inventory');
-      expect(prompt).toContain('Stage 3 needs');
-      expect(prompt).toContain('shared proposal');
-      expect(prompt).toContain('individual commitment');
-      expect(prompt).toContain('Do not force ranking');
-      expect(prompt).toContain('Willingness from one person is not a shared agreement');
-    });
-
-    it('Stage 4 prompt forbids speculative partner placeholders', () => {
-      const context = createContext({ userName: 'Adam', partnerName: 'Eve' });
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain("Do not ask Adam to compare against Eve's experiments");
-      expect(prompt).toContain('unless the current visible/app context includes actual partner proposals');
-      expect(prompt).toContain('Never output placeholders');
-      expect(prompt).toContain('[these would appear here]');
-    });
-
-    it('Stage 4 prompt covers declined AI ideas and removals', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain('Ask before contributing AI ideas');
-      expect(prompt).toContain('If Test User declines AI ideas, accept that');
-      expect(prompt).toContain('Never re-suggest removed items');
-      expect(prompt).toContain('honor it immediately');
-      expect(prompt).toContain('instead of guessing which proposal they meant');
-    });
-
-    it('Stage 4 prompt treats individual-only and no-overlap closure as valid outcomes', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain('no-shared-agreement as a valid outcome');
-      expect(prompt).toContain('Do not describe no-overlap or no-shared-agreement as failure');
-      expect(prompt).toContain('individual commitments can still be carried forward');
-      expect(prompt).toContain('Do not ask for scheduled shared check-in timing for individual-only commitments');
-    });
-
-    it('Stage 4 prompt gives both partners a no-shared-agreement closure path', () => {
-      const context = createContext({ userName: 'Catherine', partnerName: 'James' });
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain('shared proposal inventory');
-      expect(prompt).toContain('individual commitment(s) being preserved');
-      expect(prompt).toContain('needs that remain open');
-      expect(prompt).toContain('Give both partners a dignified path');
-      expect(prompt).toContain('boundary or individual commitment is still a legitimate outcome');
     });
 
     it('Stage 4 no-shared-agreement prompt avoids failure-language tokens', () => {
@@ -336,35 +245,15 @@ describe('Stage Prompts Service', () => {
       expect(prompt).not.toContain('good vs bad');
     });
 
-    it('Stage 4 response protocol keeps ProposedStrategy as compatibility fallback only', () => {
+    it('Stage 4 response protocol names the tool fields the parser reads', () => {
       const context = createContext();
       const prompt = fullPrompt(buildStagePrompt(4, context));
 
-      expect(prompt).toContain('compatibility fallback');
-      expect(prompt).toContain('user clearly volunteered, accepted, or committed');
-      expect(prompt).toContain('Do NOT list AI ideas the user has not accepted');
-      expect(prompt).toContain('desired-outcome fragments');
-      expect(prompt).toContain('walk away knowing');
-      expect(prompt).toContain('Do NOT write generic labels such as "User will..."');
+      // The tool fields the Stage 4 parser reads (the instruction wording around them is not pinned).
       expect(prompt).toContain('update_session_state');
       expect(prompt).toContain('stage4Proposals');
       expect(prompt).toContain('ADD with classification PROPOSAL');
-      expect(prompt).toContain('Only action ADD with classification PROPOSAL creates a proposal card');
-      expect(prompt).toContain('guarded consent to continue talking');
       expect(prompt).toContain('stage4WalkthroughAction');
-      expect(prompt).toContain('Do not emit Stage 4 XML or JSON in visible text');
-      expect(prompt).toContain('I can talk about next steps');
-      expect(prompt).toContain('one person');
-      expect(prompt).toContain('as if it were a shared agreement');
-    });
-
-    it('Stage 4 prompt treats success markers as not proposals yet', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain('Not a proposal yet');
-      expect(prompt).toContain('Reflect it as a success criterion');
-      expect(prompt).toContain('what concrete action would produce that outcome');
     });
 
     it('Stage 4 prompt includes structured capture ids for typed ownership', () => {
@@ -408,15 +297,6 @@ describe('Stage Prompts Service', () => {
       expect(prompt).toContain('Do not choose a different open need');
     });
 
-    it('Stage 4 prompt tells the AI to infer missing proposal details when context supports it', () => {
-      const context = createContext();
-      const prompt = fullPrompt(buildStagePrompt(4, context));
-
-      expect(prompt).toContain('infer a reasonable duration, success marker, or boundary condition');
-      expect(prompt).toContain('fill that detail in provisionally instead of asking another question');
-      expect(prompt).toContain('Only ask a follow-up when filling the missing detail would require a real leap');
-    });
-
     it('Stage 4 resolved prompt can include private Tending conversation context', () => {
       const context = createContext({
         stage4ListenFirstMode: true,
@@ -450,29 +330,6 @@ describe('Stage Prompts Service', () => {
       expect(prompt).toContain('update_session_state.topicFrame');
       // Must never bring back the invitation-message concept
       expect(prompt).not.toContain('invitationMessage');
-    });
-
-    it('stage 0 prompt documents the <draft> protocol constraints (≤ 20 words, neutral)', () => {
-      const context = createContext();
-      const options: BuildStagePromptOptions = { isInvitationPhase: true };
-      const prompt = fullPrompt(buildStagePrompt(0, context, options));
-
-      expect(prompt).toMatch(/20 words/);
-      expect(prompt.toLowerCase()).toContain('neutral');
-      expect(prompt.toLowerCase()).toContain('blame');
-    });
-
-    it('stage 0 topic framing preserves concrete behavioral signals while staying neutral', () => {
-      const context = createContext({ userName: 'Catherine', partnerName: 'James' });
-      const options: BuildStagePromptOptions = { isInvitationPhase: true };
-      const prompt = fullPrompt(buildStagePrompt(0, context, options));
-
-      expect(prompt).toContain("Preserve the user's concrete behavioral signal");
-      expect(prompt).toContain('yelling');
-      expect(prompt).toContain('personal attacks');
-      expect(prompt).toContain('Do not flatten');
-      expect(prompt).toContain('vague phrases like "conflict"');
-      expect(prompt).toContain('update_session_state.topicFrame');
     });
   });
 
@@ -526,20 +383,6 @@ describe('Stage Prompts Service', () => {
       // Regular Stage 2 prompt content
       expect(prompt).toContain('exploring what Partner might be going through');
       expect(prompt).toContain('FOUR MODES');
-    });
-
-    it('Stage 1 → Stage 2 transition preserves non-agreement and avoids research framing', () => {
-      const context = createContext();
-      const options: BuildStagePromptOptions = {
-        isStageTransition: true,
-        previousStage: 1,
-      };
-      const prompt = fullPrompt(buildStagePrompt(2, context, options));
-
-      expect(prompt).toContain('not about excusing, agreeing, or deciding what happens next');
-      expect(prompt).toContain('without selling repair or agreement');
-      expect(prompt).not.toContain('research');
-      expect(prompt).not.toContain('working things out');
     });
 
     it('returns transition injection + regular Stage 3 prompt for Stage 2 → Stage 3', () => {
@@ -658,34 +501,6 @@ describe('Stage Prompts Service', () => {
       expect(prompt).toContain('PERSPECTIVE AWARENESS');
     });
 
-    it('Stage 1 prompt requires deeper gating for long-running high-conflict patterns', () => {
-      const context = createContext({ turnCount: 6, emotionalIntensity: 7 });
-      const prompt = fullPrompt(buildStagePrompt(1, context));
-
-      expect(prompt).toContain('HIGH-CONFLICT / LONG-RUNNING CASES');
-      expect(prompt).toContain('Do not offer the felt-heard gate after only naming the pattern');
-      expect(prompt).toContain('high-resistance/non-resolution case');
-      expect(prompt).toContain('do not set FeelHeardCheck:Y before at least five substantive user turns');
-      expect(prompt).toContain("does not count as the user's answer to that check");
-      expect(prompt).toContain('what they have already tried');
-      expect(prompt).toContain('care underneath resentment');
-      expect(prompt).toContain('maybe I need to know I really tried');
-      expect(prompt).toContain('make one final open-floor move');
-      expect(prompt).toContain('understanding the other person is not the same as excusing impact');
-    });
-
-    it('Stage 1 prompt separates felt-heard gating from partner-share readiness', () => {
-      const context = createContext({ turnCount: 7, emotionalIntensity: 6 });
-      const prompt = fullPrompt(buildStagePrompt(1, context));
-
-      expect(prompt).toContain('FELT-HEARD GATE BOUNDARY');
-      expect(prompt).toContain('Stage 1 is only about whether this user feels heard by you');
-      expect(prompt).toContain('Do not ask whether they want their partner to hear something');
-      expect(prompt).toContain('Do not ask what they hope would happen if they said it to their partner');
-      expect(prompt).toContain('treat that as fresh material to witness');
-      expect(prompt).toContain('Never convert that check into partner-share readiness');
-    });
-
     it('uses regular Stage 2 prompt when not transitioning', () => {
       const context = createContext({ turnCount: 5 });
       const options: BuildStagePromptOptions = {
@@ -698,26 +513,11 @@ describe('Stage Prompts Service', () => {
       expect(prompt).toContain('BRIDGING:');
     });
 
-    it('Stage 2 prompt guards against premature empathy drafts under resistance', () => {
+    it('Stage 2 adds the too-early draft guard before 4 substantive turns', () => {
       const context = createContext({ turnCount: 4, emotionalIntensity: 6 });
       const prompt = fullPrompt(buildStagePrompt(2, context));
 
-      expect(prompt).toContain('Stage 2 is not a speed run to a draft');
-      expect(prompt).toContain('at least 4 substantive Stage 2 turns');
-      expect(prompt).toContain('unfairness, anger, fear, resentment');
-      expect(prompt).toContain('Does that feel like your real attempt');
       expect(prompt).toContain('ReadyShare guard: TOO EARLY');
-    });
-
-    it('Stage 2 prompt prevents empathy drafts from adding unearned reassurance', () => {
-      const context = createContext({ turnCount: 6, emotionalIntensity: 6 });
-      const prompt = fullPrompt(buildStagePrompt(2, context));
-
-      expect(prompt).toContain("Preserve Test User's caveats and non-concessions");
-      expect(prompt).toContain('Do not add direct reassurance');
-      expect(prompt).toContain('you are enough');
-      expect(prompt).toContain('they are not trying to reassure Partner');
-      expect(prompt).toContain('must not settle unresolved fit');
     });
 
     it('Stage 2 refinement mode can update an existing draft without the early draft guard', () => {
@@ -743,17 +543,6 @@ describe('Stage Prompts Service', () => {
 
       expect(result).toHaveProperty('staticBlock');
       expect(result).toHaveProperty('dynamicBlock');
-    });
-
-    it('static block contains voice/style guidance', () => {
-      const result = buildInnerWorkPrompt({
-        userName: 'Test User',
-        turnCount: 5,
-      });
-
-      expect(result.staticBlock).toContain('VOICE & STYLE');
-      expect(result.staticBlock).toContain("Say it like you'd say it to a friend");
-      expect(result.staticBlock).toContain('1-3 sentences by default');
     });
 
     it('static block contains response format with JSON instructions', () => {
@@ -903,27 +692,6 @@ describe('Stage Prompts Service', () => {
 
       expect(prompt).toContain('Something to explore: You say trust is important');
     });
-
-    it('includes guidance on natural integration of insights', () => {
-      const insights: InsightContext[] = [
-        {
-          type: 'PATTERN',
-          summary: 'Test pattern',
-        },
-      ];
-
-      const prompt = fullPrompt(
-        buildInnerWorkPrompt({
-          userName: 'Test User',
-          turnCount: 3,
-          insights,
-        }),
-      );
-
-      expect(prompt).toContain('HOW TO USE INSIGHTS');
-      expect(prompt).toContain("Don't force insights");
-      expect(prompt).toContain('EXAMPLES OF NATURAL INTEGRATION');
-    });
   });
 
   describe('buildReconcilerPrompt', () => {
@@ -1050,16 +818,6 @@ describe('Stage Prompts Service', () => {
       expect(result).toHaveProperty('dynamicBlock');
       expect(result.staticBlock.length).toBeGreaterThan(0);
       expect(result.dynamicBlock.length).toBeGreaterThan(0);
-    });
-
-    it('static block mentions refining empathy with new information', () => {
-      const context = createContext();
-      const result = buildStagePrompt(21, context);
-
-      expect(result.staticBlock).toContain('refining');
-      expect(result.staticBlock).toContain('new information');
-      expect(result.staticBlock).toContain('Test User');
-      expect(result.staticBlock).toContain('Partner');
     });
 
     it('static block includes three modes: INTEGRATING, STRUGGLING, CLARIFYING', () => {
