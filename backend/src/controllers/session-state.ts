@@ -27,7 +27,7 @@ import { logger } from '../lib/logger';
 import { prisma, getE2EToolingPrisma } from '../lib/prisma';
 import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
-import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
+import { lockInvitationForAccept, repointInvitationDraftsAsTooling } from '../services/empathy-store';
 import { ErrorCode } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import {
@@ -108,7 +108,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
       update: {},
     });
     // As acceptInvitation (work-99k2): pre-join empathy drafts follow the invitee.
-    await repointInvitationDrafts(tx, invitation.id, seat);
+    await repointInvitationDraftsAsTooling(tx, invitation.id, seat);
 
     await tx.invitation.update({
       where: { id: invitation.id },

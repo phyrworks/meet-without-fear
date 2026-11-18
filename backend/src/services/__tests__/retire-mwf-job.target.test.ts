@@ -95,8 +95,12 @@ const AI_ROUTINES = [
   'empathy_mark_delivery:EXECUTE',
   'empathy_set_status:EXECUTE',
   'jsonb_violation:EXECUTE',
+  // work-k5fk.10.7: the AI policies' predicates (the acting user is a member of the scope; an inner-work row is
+  // the acting user's reflection)
+  'owns_reflection:EXECUTE',
   'schema app:USAGE',
   'schema public:USAGE',
+  'scope_actor_is_member:EXECUTE',
   'session_scope:EXECUTE',
 ];
 const WORKER_ROUTINES = [
@@ -287,11 +291,17 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
     });
 
     it('the AI cannot read or lock a session other than its scope', async () => {
-      const { session } = await adaAndBob(run);
+      const { session, adaUser } = await adaAndBob(run);
       const read = `SELECT id::text FROM session WHERE id = $1`;
-      expect(await run.as('mwf_ai', null, read, [session], session)).toEqual([{ id: session }]);
-      expect(await run.as('mwf_ai', null, read, [session], OTHER)).toEqual([]);
-      expect(await run.as('mwf_ai', null, `SELECT count(*)::int AS n FROM participant`, [], OTHER)).toEqual([{ n: 0 }]);
+      // The AI acts for a participant of its scope (work-k5fk.10.7: app.scope_actor_is_member)…
+      expect(await run.as('mwf_ai', adaUser, read, [session], session)).toEqual([{ id: session }]);
+      expect(await run.as('mwf_ai', adaUser, read, [session], OTHER)).toEqual([]);
+      expect(await run.as('mwf_ai', adaUser, `SELECT count(*)::int AS n FROM participant`, [], OTHER)).toEqual([
+        { n: 0 },
+      ]);
+      // …and with no acting user, or one who is not a participant, it reads nothing even in its scope.
+      expect(await run.as('mwf_ai', null, read, [session], session)).toEqual([]);
+      expect(await run.as('mwf_ai', OTHER, read, [session], session)).toEqual([]);
     });
 
     it('the owner mwf_migrator reads and writes no row by default (FORCE; pgaudit, not RLS, is what holds it)', async () => {

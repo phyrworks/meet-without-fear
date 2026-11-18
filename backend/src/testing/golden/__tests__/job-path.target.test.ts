@@ -21,6 +21,7 @@
 import { createHarness, type Harness } from '../driver';
 import { withClient } from '../db';
 import { isTargetShape } from '../shape';
+import { actingAs } from '../../../services/__tests__/target-roles';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
@@ -88,22 +89,26 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
   it('the empathy-draft write is atomic: concurrent writes leave one row, the last write wins', async () => {
     const { persistTurnState } = await import('../../../services/stream-turn-actions');
     const { resolveParticipant } = await import('../../../services/participant-resolver');
-    const ada = await resolveParticipant(harness.sessionId, harness.actors.userA.id);
+    const ada = await actingAs(harness.actors.userA.id, () =>
+      resolveParticipant(harness.sessionId, harness.actors.userA.id),
+    );
     const write = (text: string) =>
-      persistTurnState({
-        requestId: 'draft-test',
-        sessionId: harness.sessionId,
-        userId: harness.actors.userA.id,
-        currentStage: 2,
-        effectiveStage: 2,
-        isInvitationPhase: false,
-        session: { topicFrame: null, topicFrameConfirmedAt: null },
-        participant: ada!,
-        userMessageId: 'none',
-        userContent: 'x',
-        aiMessageContent: 'y',
-        metadata: { offerReadyToShare: true, proposedEmpathyStatement: text },
-      });
+      actingAs(harness.actors.userA.id, () =>
+        persistTurnState({
+          requestId: 'draft-test',
+          sessionId: harness.sessionId,
+          userId: harness.actors.userA.id,
+          currentStage: 2,
+          effectiveStage: 2,
+          isInvitationPhase: false,
+          session: { topicFrame: null, topicFrameConfirmedAt: null },
+          participant: ada!,
+          userMessageId: 'none',
+          userContent: 'x',
+          aiMessageContent: 'y',
+          metadata: { offerReadyToShare: true, proposedEmpathyStatement: text },
+        }),
+      );
     const drafts = () =>
       rows<{ content: string; version: number }>(
         `SELECT d.content, d.version FROM draft d

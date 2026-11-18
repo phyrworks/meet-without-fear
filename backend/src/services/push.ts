@@ -1,4 +1,5 @@
-import { getNickname } from './contacts';
+import { decryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { getCurrentUserId } from '../lib/request-context';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
@@ -387,6 +388,23 @@ async function getPushMessageTemplate(
   );
 }
 
+/**
+ * The recipient's own name for the actor (their user_contact nickname, else the invite name of their invitation
+ * the actor accepted — contacts.ts namesIGave's order). Both are the recipient's private rows, so the request of the
+ * actor reads them through app.actor_name_for (work-k5fk.10.7); a push whose actor is not the caller (a job) gets
+ * no nickname and names the actor by their display name.
+ */
+async function recipientNameForActor(recipientUserId: string, actorUserId: string): Promise<string | null> {
+  if (getCurrentUserId() !== actorUserId) return null;
+  const [row] = await prisma.$queryRaw<
+    Array<{ has_entry: boolean; nickname: string | null; invite_name: string | null }>
+  >`
+    SELECT has_entry, nickname, invite_name FROM app.actor_name_for(${recipientUserId}::uuid)`;
+  if (!row) return null;
+  if (row.has_entry) return row.nickname;
+  return row.invite_name === null ? null : decryptColumnValue('invitation', 'invitee_name', row.invite_name);
+}
+
 async function getNotificationActorName(
   recipientUserId: string,
   sessionId: string,
@@ -401,7 +419,7 @@ async function getNotificationActorName(
     // The recipient's own name for the actor, then the actor's display name
     // (participant.display_name — never the actor's user row, spec §7).
     const [nickname, actor] = await Promise.all([
-      getNickname(recipientUserId, actorUserId),
+      recipientNameForActor(recipientUserId, actorUserId),
       prisma.participant.findUnique({
         where: { sessionId_userId: { sessionId, userId: actorUserId } },
         select: { displayName: true },

@@ -803,6 +803,8 @@ GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON use
 GRANT UPDATE (nickname, updated_at) ON user_contact TO app_access;
 -- mwf_definer: anonymize_user_account deletes the leaver's own entries (U-class: their words about others).
 GRANT SELECT (user_id) ON user_contact TO mwf_definer;
+-- mwf_definer: actor_name_for (a push names its actor by the recipient's own nickname for them)
+GRANT SELECT (contact_user_id, nickname) ON user_contact TO mwf_definer;
 GRANT DELETE ON user_contact TO mwf_definer;
 -- mwf_ops: nothing — a nickname is its owner's alone (no dashboard reads one).
 
@@ -851,6 +853,8 @@ GRANT UPDATE (updated_at) ON session TO ai_access;
 -- mwf_definer: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
 GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_definer;
 GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_definer;
+-- mwf_definer: invitation_peek (is the topic frame set and confirmed — never its text)
+GRANT SELECT (topic_frame, topic_frame_confirmed_at) ON session TO mwf_definer;
 -- mwf_worker: session-retention: the ACTIVE candidates, staleness of an ACTIVE session and the purge window of an
 -- ARCHIVED one (status moves through app.session_set_status)
 GRANT SELECT (id, status, updated_at) ON session TO worker_access;
@@ -906,6 +910,8 @@ GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_
 GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_definer;
 -- mwf_definer: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
 GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
+-- mwf_definer: invitation_peek (the inviter's display name, as the invitee sees it)
+GRANT SELECT (display_name) ON participant TO mwf_definer;
 -- mwf_definer: anonymize_user_in_session step 2
 GRANT UPDATE (display_name, left_at) ON participant TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts), brain-service
@@ -1276,6 +1282,9 @@ GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_se
   ON conversation_read_state TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: a co-participant's read state and last activity)
+GRANT SELECT (last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at)
+  ON conversation_read_state TO mwf_definer;
 GRANT DELETE ON conversation_read_state TO mwf_definer;
 
 CREATE TABLE reconciler_result (
@@ -1563,6 +1572,8 @@ GRANT SELECT ON mood_reading TO app_access;
 GRANT INSERT (session_id, user_id, intensity, context, recorded_at, created_at) ON mood_reading TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: a co-participant's latest mood)
+GRANT SELECT (id, intensity, recorded_at) ON mood_reading TO mwf_definer;
 GRANT DELETE ON mood_reading TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON mood_reading TO ops_access;
@@ -1623,16 +1634,18 @@ COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set 
 COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
 COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
 COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
--- mwf_app: the inviter creates it and confirms its message; the INVITEE accepts / declines / expires it and locks it
--- (FOR UPDATE / FOR SHARE need UPDATE) — FINDING: a write of the inviter's row, a definer function's job later.
+-- mwf_app: the inviter creates it and confirms its message (and locks it FOR SHARE for a pre-join draft save, which
+-- needs an UPDATE grant). The INVITEE's accept / decline / expire is app.invitation_answer, its pre-membership read
+-- app.invitation_peek (work-k5fk.10.7: the inviter's row, written by the invitee, is a definer's job).
 GRANT SELECT ON invitation TO app_access;
 GRANT INSERT (session_id, invited_by_user_id, invitee_name, status, expires_at, created_at, updated_at)
   ON invitation TO app_access;
-GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, message_confirmed_at, updated_at)
-  ON invitation TO app_access;
+GRANT UPDATE (message_confirmed_at, updated_at) ON invitation TO app_access;
 -- mwf_definer: session_abandon_declined (invitations.ts declineInvitation: the decliner is no participant, so the
--- declined invitation is what lets the session end)
-GRANT SELECT (id, session_id, invited_by_user_id, status) ON invitation TO mwf_definer;
+-- declined invitation is what lets the session end); invitation_peek, invitation_answer, session_invitee_access
+GRANT SELECT (id, session_id, invited_by_user_id, status, accepted_by_user_id, invitee_name, message_confirmed_at,
+              expires_at, created_at) ON invitation TO mwf_definer;
+GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason) ON invitation TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT (session_id, invited_by_user_id) ON invitation TO ops_access;
 
@@ -1687,18 +1700,21 @@ COMMENT ON COLUMN draft.invitation_id IS 'EMPATHY before the subject has joined:
 COMMENT ON COLUMN draft.reopened_at IS 'Set when the author chose Edit first on a pre-join draft after the join; cleared by the next draft write (work-9309).';
 COMMENT ON COLUMN draft.content IS 'encrypted (participant): the draft text, AI-proposed or written by the participant.';
 -- mwf_app: the caller's drafts (empathy-store upsertDraft, reconciler/sharing.ts, empathy-draft-save reopen, delete).
--- id and created_at: ONLY repointInvitationDrafts — FINDING: at accept the INVITEE's request deletes and re-inserts the
--- INVITER's pre-join drafts (same id, timestamps) to re-point them at the new participant.
+-- No id, created_at or updated_at: the accept's move of the INVITER's pre-join drafts to the invitee (same id,
+-- timestamps) is app.invitation_repoint_drafts (work-k5fk.10.7; was the invitee's request writing the inviter's rows).
 GRANT SELECT ON draft TO app_access;
-GRANT INSERT (id, session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
-              ready_to_share, version, reopened_at, created_at, updated_at) ON draft TO app_access;
+GRANT INSERT (session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
+              ready_to_share, version, reopened_at) ON draft TO app_access;
 GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO app_access;
 -- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
 -- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
 GRANT DELETE ON draft TO app_access;
--- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON draft TO mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads;
+-- invitation_repoint_drafts: the whole row, moved with its id and timestamps (work-k5fk.10.7)
+GRANT SELECT ON draft TO mwf_definer;
 GRANT DELETE ON draft TO mwf_definer;
+GRANT INSERT (id, session_id, user_id, kind, about_user_id, content, ready_to_share, version, created_at, updated_at,
+              reopened_at) ON draft TO mwf_definer;
 
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2407,6 +2423,8 @@ GRANT INSERT (user_id, doc) ON user_preferences TO app_access;
 GRANT UPDATE (doc, updated_at) ON user_preferences TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON user_preferences TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: whether a co-participant shows their activity status)
+GRANT SELECT (doc) ON user_preferences TO mwf_definer;
 GRANT DELETE ON user_preferences TO mwf_definer;
 
 CREATE TABLE user_memory (

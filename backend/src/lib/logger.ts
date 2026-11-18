@@ -68,7 +68,7 @@ if (process.env.SENTRY_DSN) {
 
 export const logger = winston.createLogger({
   level: isDev ? 'debug' : 'info',
-  silent: isTest,
+  silent: isTest && !process.env.MWF_TEST_LOGS,
   format: winston.format.combine(
     contextFormat(),
     winston.format.timestamp(),

@@ -46,7 +46,9 @@ export function opsUrlFor(t: { host: string; port: number }, database: string): 
 
 /** The owner (migrations only) on a run database (dev password, as target-baseline.ts migratorTarget). */
 export function migratorUrlFor(t: { host: string; port: number }, database: string): string {
-  const pw = encodeURIComponent(process.env.GOLDEN_MIGRATOR_PASSWORD ?? process.env.MIGRATOR_PASSWORD ?? 'mwf_migrator_dev');
+  const pw = encodeURIComponent(
+    process.env.GOLDEN_MIGRATOR_PASSWORD ?? process.env.MIGRATOR_PASSWORD ?? 'mwf_migrator_dev',
+  );
   return `postgresql://mwf_migrator:${pw}@${t.host}:${t.port}/${database}`;
 }
 
@@ -205,4 +207,14 @@ export async function adaAndBob(run: TargetRun): Promise<{
     adaUser: p.ada_user,
     bobUser: p.bob_user,
   };
+}
+
+/**
+ * Run `fn` as a request acting for `userId` would (work-k5fk.10.7): inside a request context whose identity
+ * lib/prisma-identity binds to every statement — the only way a service reads anything under the app's
+ * row-level security (no identity: no row). For the service calls a test makes directly, outside HTTP.
+ */
+export async function actingAs<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const { runWithContext } = await import('../../lib/request-context');
+  return runWithContext({ turnId: `t-${userId}`, requestId: `r-${userId}`, startTime: Date.now(), userId }, fn);
 }

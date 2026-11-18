@@ -645,13 +645,24 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         refused[who] = (await failure(seatAs(userId, kind))).code;
       }
       expect(refused).toEqual({
-        'ai as human': '23503',
+        // work-k5fk.10.7: the app seats no other human at all (participant app_insert: only the caller, as an
+        // initiator or an accepted invitee) — refused before the FK is reached; the FK refuses it below.
+        'ai as human': '42501',
         'ai as persona': '23503',
-        'persona as human': '23503',
+        'persona as human': '42501',
         'persona as ai': '23503',
         'human as ai': '23503',
         'human as persona': '23503',
       });
+      for (const userId of [ai, persona]) {
+        const f = await failure(
+          run.sql(
+            `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`,
+            [ids.session, userId, ids.adaUser],
+          ),
+        );
+        expect(f.code).toBe('23503');
+      }
       // As themselves they sit (rolled back: the fixture's session is not this test's to change).
       await inRolledBackTx(async c => {
         await c.query(

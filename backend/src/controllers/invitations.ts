@@ -13,7 +13,8 @@ import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
 import { createInvitationUrl } from '../utils/urls';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
-import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
+import { repointInvitationDrafts } from '../services/empathy-store';
+import { answerInvitation, peekInvitation } from '../services/invitation-peek';
 import { lastSeenMessageIdOf } from '../services/message-store';
 import {
   LIVE_SESSION_EXISTS_MESSAGE,
@@ -462,19 +463,9 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
   try {
     const { id } = req.params;
 
-    const invitation = await prisma.invitation.findUnique({
-      where: { id },
-      include: {
-        // The inviter as the invitee sees them: their participant's display name
-        invitedByParticipant: { select: { userId: true, displayName: true } },
-        session: {
-          select: {
-            id: true,
-            status: true,
-          },
-        },
-      },
-    });
+    // The invitee is no participant yet: app.invitation_peek (work-k5fk.10.7). The inviter as the
+    // invitee sees them: their participant's display name.
+    const invitation = await peekInvitation(id);
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
@@ -489,15 +480,15 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
       invitation: {
         id: invitation.id,
         invitedBy: {
-          name: invitation.invitedByParticipant.displayName,
+          name: invitation.inviterDisplayName,
         },
         name: invitation.inviteeName,
         status,
         createdAt: invitation.createdAt,
         expiresAt: invitation.expiresAt,
         session: {
-          id: invitation.session.id,
-          status: invitation.session.status,
+          id: invitation.sessionId,
+          status: invitation.sessionStatus,
         },
       },
     });
@@ -521,12 +512,8 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
 
     const { id } = req.params;
 
-    const invitation = await prisma.invitation.findUnique({
-      where: { id },
-      include: {
-        session: true,
-      },
-    });
+    // Before accepting, the invitee is no participant: app.invitation_peek (work-k5fk.10.7).
+    const invitation = await peekInvitation(id);
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
@@ -547,21 +534,15 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
     }
 
     // Check if expired
-    if (new Date() > invitation.expiresAt) {
-      await prisma.invitation.update({
-        where: { id },
-        data: { status: 'EXPIRED' },
-      });
+    const now = new Date();
+    if (now > invitation.expiresAt) {
+      // The inviter's row, written for the invitee: app.invitation_answer (work-k5fk.10.7).
+      await answerInvitation(prisma, id, 'EXPIRED', now);
       errorResponse(res, 'EXPIRED', 'Invitation has expired', 410);
       return;
     }
 
-    if (
-      invitation.session.status !== 'INVITED' ||
-      !invitation.messageConfirmedAt ||
-      !invitation.session.topicFrame ||
-      !invitation.session.topicFrameConfirmedAt
-    ) {
+    if (invitation.sessionStatus !== 'INVITED' || !invitation.messageConfirmedAt || !invitation.topicFrameConfirmed) {
       errorResponse(res, 'VALIDATION_ERROR', 'Invitation is not ready to accept', 400);
       return;
     }
@@ -584,20 +565,13 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       // work-99k2: first, the invitation FOR UPDATE — a concurrent pre-join
       // empathy draft save (FOR SHARE) commits before the move below reads the
       // drafts, or runs after this commits and writes against the participant.
-      await lockInvitationForAccept(tx, id);
+      // app.invitation_answer takes that lock and records the accept (the
+      // inviter's row, written for the invitee: a definer, work-k5fk.10.7).
       // work-k5fk.2 (review Q1): nothing is written for the inviter here. What
       // they call the invitee is resolved when they read it: their own
       // user_contact nickname, else this invitation's invitee_name once it is
       // accepted_by the invitee (services/contacts.ts namesIGave).
-
-      await tx.invitation.update({
-        where: { id },
-        data: {
-          status: 'ACCEPTED',
-          acceptedByUserId: user.id,
-          acceptedAt,
-        },
-      });
+      await answerInvitation(tx, id, 'ACCEPTED', acceptedAt);
 
       // The inviter added the invitee (work-k5fk.2). The join is where the
       // database applies the pair rule: a second live session of these two
@@ -699,10 +673,8 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
 
     const { reason } = parseResult.data;
 
-    const invitation = await prisma.invitation.findUnique({
-      where: { id },
-      include: { invitedByParticipant: { select: { userId: true } } },
-    });
+    // Before answering, the invitee is no participant: app.invitation_peek (work-k5fk.10.7).
+    const invitation = await peekInvitation(id);
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
@@ -722,15 +694,8 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Update invitation status
-    await prisma.invitation.update({
-      where: { id },
-      data: {
-        status: 'DECLINED',
-        declinedAt: new Date(),
-        declineReason: reason,
-      },
-    });
+    // Update invitation status: the inviter's row, written for the invitee (app.invitation_answer, work-k5fk.10.7)
+    await answerInvitation(prisma, id, 'DECLINED', new Date(), reason ?? null);
 
     // The session ends (INVITED/CREATED → ABANDONED). The decliner is no participant, so
     // app.session_abandon_declined moves it on the strength of the DECLINED invitation just
@@ -978,19 +943,8 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
 
     const { id } = req.params;
 
-    // Get invitation details
-    const invitation = await prisma.invitation.findUnique({
-      where: { id },
-      include: {
-        invitedByParticipant: { select: { userId: true, displayName: true } },
-        session: {
-          select: {
-            id: true,
-            status: true,
-          },
-        },
-      },
-    });
+    // Get invitation details (the viewer is no participant yet: app.invitation_peek, work-k5fk.10.7)
+    const invitation = await peekInvitation(id);
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
@@ -998,8 +952,8 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
     }
     // The inviter as the invitee sees them (participant display name, spec §7)
     const invitedBy = {
-      id: invitation.invitedByParticipant.userId ?? '',
-      name: invitation.invitedByParticipant.displayName,
+      id: invitation.invitedByUserId,
+      name: invitation.inviterDisplayName,
     };
 
     // Can't acknowledge your own invitation
@@ -1031,8 +985,8 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
         status: invitation.status,
         invitedBy,
         session: {
-          id: invitation.session.id,
-          status: invitation.session.status,
+          id: invitation.sessionId,
+          status: invitation.sessionStatus,
         },
         expiresAt: invitation.expiresAt.toISOString(),
       },

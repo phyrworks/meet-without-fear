@@ -370,6 +370,9 @@ async function handleClerkAuth(req: Request, res: Response, next: NextFunction, 
       }
     }
 
+    // The user row is the caller's own under RLS (work-k5fk.10.7: "user" app_select): bind the
+    // identity mwf_auth just resolved before reading it, as bindRequestIdentity does for the route.
+    if (identityBindingEnabled()) updateContext({ userId });
     const user = await loadUser(userId);
     if (!user) throw new UnauthorizedError('Authentication required');
     req.user = user;
@@ -462,11 +465,11 @@ export async function requireSessionAccess(req: Request, res: Response, next: Ne
 
     // Distinguish "session does not exist" from "exists but you can't access it".
     // Without this, deleted/stale sessionIds polled by clients flood Sentry as 403s.
-    const exists = await prisma.session.findUnique({
-      where: { id: sessionId },
-      select: { id: true },
-    });
-    if (!exists) {
+    // A non-participant sees neither the session nor its invitation under RLS, so one definer answers
+    // both questions (app.session_invitee_access, work-k5fk.10.7).
+    const [{ access }] = await prisma.$queryRaw<Array<{ access: string }>>`
+      SELECT app.session_invitee_access(${sessionId}::uuid) AS access`;
+    if (access === 'missing') {
       throw new NotFoundError('Session');
     }
 
@@ -478,19 +481,7 @@ export async function requireSessionAccess(req: Request, res: Response, next: Ne
     // invitation for this session that the caller did not send, or an ACCEPTED
     // one the caller accepted (`accepted_by_user_id`, new in the target — the
     // old rule admitted ANY non-inviter once the invitation was accepted).
-    const invitedSession = await prisma.invitation.findFirst({
-      where: {
-        sessionId,
-        invitedByParticipant: { userId: { not: user.id } },
-        OR: [
-          { status: 'PENDING', expiresAt: { gt: new Date() } },
-          { status: 'ACCEPTED', acceptedByUserId: user.id },
-        ],
-      },
-      select: { id: true },
-    });
-
-    if (!invitedSession) {
+    if (access !== 'invited') {
       throw new ForbiddenError('Access to this session denied');
     }
 

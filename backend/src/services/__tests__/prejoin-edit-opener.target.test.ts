@@ -22,7 +22,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { actingAs, adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -209,7 +209,9 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     // The next draft write — the chat turn's autosave of the AI's proposal (the
     // original as is, here) — clears the marker; a later Edit first finds nothing.
     const { saveEmpathyDraft } = await import('../empathy-draft-save');
-    expect((await saveEmpathyDraft({ seat: adaParticipant, content: draft })).status).toBe('saved');
+    expect(
+      (await actingAs(adaParticipant.userId, () => saveEmpathyDraft({ seat: adaParticipant, content: draft }))).status,
+    ).toBe('saved');
     expect(await reopenedAtOf(sessionId, adaParticipant)).toBeNull();
     expect((await draftOf(sessionId)).awaitingRevision).toBe(false);
     const late = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, {});
@@ -222,7 +224,9 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     expect((await http(ola, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     // After the join, no Edit first: the chat turn's autosave of the AI's proposal…
     const { saveEmpathyDraft } = await import('../empathy-draft-save');
-    const saved = await saveEmpathyDraft({ seat: s.adaParticipant, content: 'Ola may be worn out.' });
+    const saved = await actingAs(s.adaParticipant.userId, () =>
+      saveEmpathyDraft({ seat: s.adaParticipant, content: 'Ola may be worn out.' }),
+    );
     expect(saved.status).toBe('saved');
     if (saved.status !== 'saved') return;
     // …and that turn's AI row in the same millisecond (as a local DB often does).

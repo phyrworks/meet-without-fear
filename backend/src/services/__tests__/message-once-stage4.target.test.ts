@@ -21,7 +21,6 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { MESSAGE_DEDUPE_KEYS } from '../message-store';
 import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
@@ -86,7 +85,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const labels = await run.sql<{ l: string }>(
       `SELECT enumlabel AS l FROM pg_enum WHERE enumtypid = 'message_dedupe_key'::regtype ORDER BY enumsortorder`,
     );
-    expect(labels.map(l => l.l)).toEqual([...MESSAGE_DEDUPE_KEYS]);
+    expect(labels.map(l => l.l)).toEqual([...store.MESSAGE_DEDUPE_KEYS]);
     const [idx] = await run.sql<{ def: string; uniq: boolean }>(
       `SELECT pg_get_indexdef(i.indexrelid) AS def, i.indisunique AS uniq FROM pg_index i
         WHERE i.indexrelid = 'public.sql_message_once'::regclass`,

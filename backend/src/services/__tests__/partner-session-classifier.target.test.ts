@@ -37,7 +37,7 @@ jest.mock('../../lib/bedrock', () => ({
 }));
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
+import { actingAs, adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 import { getHaikuJson } from '../../lib/bedrock';
 import type { CategorizedFactWithId } from '../partner-session-classifier';
 
@@ -77,13 +77,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
   });
 
   it('writes nothing for another session’s participant (the job resolves the caller’s own participant)', async () => {
-    await runPartnerSessionClassifier({
-      userMessage: 'x',
-      conversationHistory: [],
-      sessionId: SESSION,
-      userId: '019a0000-0000-7000-8000-0000000000dd',
-      turnId: 't',
-    });
+    await actingAs('019a0000-0000-7000-8000-0000000000dd', () =>
+      runPartnerSessionClassifier({
+        userMessage: 'x',
+        conversationHistory: [],
+        sessionId: SESSION,
+        userId: '019a0000-0000-7000-8000-0000000000dd',
+        turnId: 't',
+      }),
+    );
     expect(await run.sql(`SELECT count(*)::int AS n FROM ai_memory WHERE kind = 'NOTABLE_FACTS'`)).toEqual([{ n: 0 }]);
   });
 
@@ -98,14 +100,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
 
     describe('Notable Facts Extraction', () => {
       it('extracts categorized notable facts from Haiku response', async () => {
-        const result = await runPartnerSessionClassifier({
-          userMessage: 'My daughter Emma is struggling with school',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-          partnerName: 'Alex',
-        });
+        const result = await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'My daughter Emma is struggling with school',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+            partnerName: 'Alex',
+          }),
+        );
 
         expect(result).not.toBeNull();
         expect(result?.notableFacts).toEqual([
@@ -115,13 +119,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
       });
 
       it('saves categorized notable facts with IDs to UserVessel', async () => {
-        await runPartnerSessionClassifier({
-          userMessage: 'We have been married for 10 years',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'We have been married for 10 years',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         const savedFacts = await savedNotableFacts();
 
@@ -137,14 +143,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
       it('passes existing facts to Haiku for consolidation', async () => {
         const existingFacts = ['User lives in NYC', 'Has two children'];
 
-        await runPartnerSessionClassifier({
-          userMessage: 'I feel overwhelmed',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-          existingFacts,
-        });
+        await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'I feel overwhelmed',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+            existingFacts,
+          }),
+        );
 
         // Verify getHaikuJson was called with a prompt containing existing facts
         expect(getHaikuJson).toHaveBeenCalled();
@@ -157,15 +165,17 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         const sonnetAnalysis = 'The user is expressing frustration about work-life balance';
         const sonnetResponse = "I hear that you're feeling overwhelmed by competing priorities...";
 
-        await runPartnerSessionClassifier({
-          userMessage: 'I just cant seem to balance everything',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-          sonnetAnalysis,
-          sonnetResponse,
-        });
+        await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'I just cant seem to balance everything',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+            sonnetAnalysis,
+            sonnetResponse,
+          }),
+        );
 
         // Verify getHaikuJson was called with a prompt containing Sonnet's analysis
         expect(getHaikuJson).toHaveBeenCalled();
@@ -177,13 +187,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
       });
 
       it('does not include Sonnet section when analysis is not provided', async () => {
-        await runPartnerSessionClassifier({
-          userMessage: 'Just a regular message',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Just a regular message',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         expect(getHaikuJson).toHaveBeenCalled();
         const call = (getHaikuJson as jest.Mock).mock.calls[0][0];
@@ -199,13 +211,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
           notableFacts: manyFacts,
         });
 
-        const result = await runPartnerSessionClassifier({
-          userMessage: 'Test message',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        const result = await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Test message',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         expect(result?.notableFacts).toHaveLength(20);
       });
@@ -224,13 +238,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
           ],
         });
 
-        const result = await runPartnerSessionClassifier({
-          userMessage: 'Test message',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        const result = await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Test message',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         expect(result?.notableFacts).toEqual([
           { category: 'People', fact: 'Valid fact' },
@@ -244,27 +260,31 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         // Simulate Haiku returning null (timeout)
         (getHaikuJson as jest.Mock).mockResolvedValueOnce(null);
 
-        const result = await runPartnerSessionClassifier({
-          userMessage: 'Test message',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-          existingFacts,
-        });
+        const result = await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Test message',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+            existingFacts,
+          }),
+        );
 
         // On failure, notableFacts should be undefined (don't overwrite existing)
         expect(result?.notableFacts).toBeUndefined();
       });
 
       it('does not include memory detection tasks in prompt', async () => {
-        await runPartnerSessionClassifier({
-          userMessage: 'Remember that I prefer short responses',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Remember that I prefer short responses',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         expect(getHaikuJson).toHaveBeenCalled();
         const call = (getHaikuJson as jest.Mock).mock.calls[0][0];
@@ -280,13 +300,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
       it('returns null on complete failure', async () => {
         (getHaikuJson as jest.Mock).mockRejectedValueOnce(new Error('API error'));
 
-        const result = await runPartnerSessionClassifier({
-          userMessage: 'Test message',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        const result = await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Test message',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         expect(result).toBeNull();
       });
@@ -296,13 +318,15 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
           topicContext: 'some context',
         });
 
-        const result = await runPartnerSessionClassifier({
-          userMessage: 'Test message',
-          conversationHistory: [],
-          sessionId: SESSION,
-          userId: USER,
-          turnId: 'turn-1',
-        });
+        const result = await actingAs(USER, () =>
+          runPartnerSessionClassifier({
+            userMessage: 'Test message',
+            conversationHistory: [],
+            sessionId: SESSION,
+            userId: USER,
+            turnId: 'turn-1',
+          }),
+        );
 
         expect(result).not.toBeNull();
         expect(result?.topicContext).toBe('some context');
@@ -333,14 +357,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         delete: [],
       });
 
-      await runPartnerSessionClassifier({
-        userMessage: 'Her name is Emma',
-        conversationHistory: [],
-        sessionId: SESSION,
-        userId: USER,
-        turnId: 'turn-1',
-        existingFactsWithIds,
-      });
+      await actingAs(USER, () =>
+        runPartnerSessionClassifier({
+          userMessage: 'Her name is Emma',
+          conversationHistory: [],
+          sessionId: SESSION,
+          userId: USER,
+          turnId: 'turn-1',
+          existingFactsWithIds,
+        }),
+      );
 
       // Verify the prompt uses short IDs (not full UUIDs) for token efficiency
       const call = (getHaikuJson as jest.Mock).mock.calls[0][0];
@@ -401,14 +427,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         });
       });
 
-      await runPartnerSessionClassifier({
-        userMessage: 'Actually feeling better now',
-        conversationHistory: [],
-        sessionId: SESSION,
-        userId: USER,
-        turnId: 'turn-1',
-        existingFactsWithIds,
-      });
+      await actingAs(USER, () =>
+        runPartnerSessionClassifier({
+          userMessage: 'Actually feeling better now',
+          conversationHistory: [],
+          sessionId: SESSION,
+          userId: USER,
+          turnId: 'turn-1',
+          existingFactsWithIds,
+        }),
+      );
 
       // Verify the saved facts are correctly reconciled with full UUIDs preserved
       const savedFacts = await savedNotableFacts();
@@ -436,14 +464,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         delete: [],
       });
 
-      await runPartnerSessionClassifier({
-        userMessage: 'Just saying hi',
-        conversationHistory: [],
-        sessionId: SESSION,
-        userId: USER,
-        turnId: 'turn-1',
-        existingFactsWithIds,
-      });
+      await actingAs(USER, () =>
+        runPartnerSessionClassifier({
+          userMessage: 'Just saying hi',
+          conversationHistory: [],
+          sessionId: SESSION,
+          userId: USER,
+          turnId: 'turn-1',
+          existingFactsWithIds,
+        }),
+      );
 
       const savedFacts = await savedNotableFacts();
 
@@ -465,14 +495,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         ],
       });
 
-      const result = await runPartnerSessionClassifier({
-        userMessage: 'Testing backward compat',
-        conversationHistory: [],
-        sessionId: SESSION,
-        userId: USER,
-        turnId: 'turn-1',
-        existingFactsWithIds,
-      });
+      const result = await actingAs(USER, () =>
+        runPartnerSessionClassifier({
+          userMessage: 'Testing backward compat',
+          conversationHistory: [],
+          sessionId: SESSION,
+          userId: USER,
+          turnId: 'turn-1',
+          existingFactsWithIds,
+        }),
+      );
 
       // When old format is detected, we should still save the facts
       // (fallback behavior - full replacement as before)
@@ -490,14 +522,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_a
         delete: [],
       });
 
-      await runPartnerSessionClassifier({
-        userMessage: 'Test message',
-        conversationHistory: [],
-        sessionId: SESSION,
-        userId: USER,
-        turnId: 'turn-1',
-        existingFacts: legacyFacts.map(f => `[${f.category}] ${f.fact}`),
-      });
+      await actingAs(USER, () =>
+        runPartnerSessionClassifier({
+          userMessage: 'Test message',
+          conversationHistory: [],
+          sessionId: SESSION,
+          userId: USER,
+          turnId: 'turn-1',
+          existingFacts: legacyFacts.map(f => `[${f.category}] ${f.fact}`),
+        }),
+      );
 
       // The prompt should contain the legacy fact (as string for backward compat)
       const call = (getHaikuJson as jest.Mock).mock.calls[0][0];

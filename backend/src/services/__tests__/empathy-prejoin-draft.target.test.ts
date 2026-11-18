@@ -23,7 +23,7 @@
 // First: sets FIELD_ENCRYPTION_KEY before lib/prisma loads, so the move is proven on ciphertext.
 import { expectSealed } from './encryption-at-rest';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { actingAs, adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -205,9 +205,13 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     expect(auto.status).toBe(200);
     expect(auto.body.data.preJoinReviewPending).toBe(true);
     const { saveEmpathyDraft } = await import('../empathy-draft-save');
-    expect((await saveEmpathyDraft({ seat: adaParticipant, content: 'From the chat turn.' })).status).toBe(
-      'review_pending',
-    );
+    expect(
+      (
+        await actingAs(adaParticipant.userId, () =>
+          saveEmpathyDraft({ seat: adaParticipant, content: 'From the chat turn.' }),
+        )
+      ).status,
+    ).toBe('review_pending');
     expect(await draftsOf(adaParticipant)).toEqual([kept]);
     expect(await draftOf(sessionId)).toMatchObject({
       draft: { content: 'Dan is tired.' },

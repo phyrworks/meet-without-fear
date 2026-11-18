@@ -64,9 +64,12 @@ WHERE session_id IN ('00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00
 DO $$ BEGIN
   IF NOT (SELECT all_reached FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND milestone_key = 'compact_signed')
      OR (SELECT all_reached FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND milestone_key = 'empathy_validated')
-     OR (SELECT cardinality(waiting_on) FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND milestone_key = 'empathy_validated') <> 2
-     OR NOT (SELECT all_reached FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND milestone_key = 'closed') THEN
+     OR (SELECT cardinality(waiting_on) FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND milestone_key = 'empathy_validated') <> 2 THEN
     RAISE EXCEPTION 'smoke v_session_readiness: unexpected readiness';
+  END IF;
+  -- RLS (work-k5fk.10.7): A is no participant of X, so X is not there for A at all.
+  IF EXISTS (SELECT 1 FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e1') THEN
+    RAISE EXCEPTION 'smoke v_session_readiness: A sees session X, which A is not in';
   END IF;
   RAISE NOTICE 'smoke ok: v_session_readiness';
 END $$;
@@ -79,10 +82,12 @@ DO $$ BEGIN
   IF (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000a1')
        IS DISTINCT FROM ('empathy_submitted'::milestone_key, 2, 2)
      OR (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000b1')
-       IS DISTINCT FROM ('feel_heard'::milestone_key, 1, 2)
-     OR (SELECT (milestone_key, next_milestone_key, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000c1')
-       IS DISTINCT FROM ('closed'::milestone_key, NULL::milestone_key, 4) THEN
+       IS DISTINCT FROM ('feel_heard'::milestone_key, 1, 2) THEN
     RAISE EXCEPTION 'smoke v_current_stage: unexpected stage';
+  END IF;
+  -- RLS (work-k5fk.10.7): only the participants of A's sessions.
+  IF EXISTS (SELECT 1 FROM v_current_stage WHERE session_id = '00000000-0000-7e00-8000-0000000005e1') THEN
+    RAISE EXCEPTION 'smoke v_current_stage: A sees the participants of session X, which A is not in';
   END IF;
   RAISE NOTICE 'smoke ok: v_current_stage';
 END $$;
@@ -127,6 +132,19 @@ END $$;
 
 -- ---- as C (…c1), a participant of X -------------------------------------------
 SELECT set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true) \g /dev/null
+\echo '-- v_session_readiness and v_current_stage (X)'
+SELECT session_id, milestone_key, all_reached FROM v_session_readiness WHERE milestone_key = 'closed';
+DO $$ BEGIN
+  IF NOT (SELECT all_reached FROM v_session_readiness WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND milestone_key = 'closed')
+     OR (SELECT (milestone_key, next_milestone_key, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000c1')
+       IS DISTINCT FROM ('closed'::milestone_key, NULL::milestone_key, 4) THEN
+    RAISE EXCEPTION 'smoke v_session_readiness / v_current_stage: X closed for both, C at closed';
+  END IF;
+  IF EXISTS (SELECT 1 FROM v_current_stage WHERE session_id = '00000000-0000-7e00-8000-0000000005e6') THEN
+    RAISE EXCEPTION 'smoke v_current_stage: C sees session S, which C is not in';
+  END IF;
+  RAISE NOTICE 'smoke ok: v_session_readiness, v_current_stage (X)';
+END $$;
 \echo '-- v_need_shared (X)'
 SELECT need_id, user_id, category, shared_text FROM v_need_shared ORDER BY need_id;
 \echo '-- v_need_coverage (X)'

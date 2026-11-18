@@ -614,16 +614,31 @@ export async function lockInvitationForAccept(tx: DbClient, invitationId: string
  * re-point every draft about the invitation to that participant
  * (about_user_id = the invitee, invitation_id = NULL). Returns the count.
  *
- * A move (delete, then insert the same row with the new arc), not an UPDATE:
- * the row's touch_updated_at trigger would stamp updated_at with the join
- * instant, and updated_at IS the draft's written-at — the review prompt after
- * the join shows it, and it tells a pre-join draft from one written since
- * (`preJoinReview`, getDraft). id, created_at, updated_at and version carry
- * over. Through the Prisma client, so the content goes out decrypted and back
- * in sealed by the encryption extension (a raw INSERT … SELECT would copy the
- * ciphertext, which raw-sql-encryption-guard refuses on principle).
+ * The drafts are the INVITER's rows, so the move is app.invitation_repoint_drafts
+ * (work-k5fk.10.7): a definer that checks the caller accepted the invitation and is
+ * seated, then deletes and re-inserts each row with the new arc — not an UPDATE, which
+ * would stamp updated_at (the draft's written-at, `preJoinReview`); id, created_at,
+ * updated_at, version and reopened_at carry over. It locks the rows FOR UPDATE (the
+ * invitation lock is the protocol; this keeps the move safe from any writer that skips it).
  */
 export async function repointInvitationDrafts(
+  tx: DbClient,
+  invitationId: string,
+  /** The invitee's new participant (of the invitation's session): the caller. */
+  about: Seat,
+): Promise<number> {
+  void about;
+  const [row] = await tx.$queryRaw<Array<{ moved: number }>>`
+    SELECT app.invitation_repoint_drafts(${invitationId}::uuid) AS moved`;
+  return Number(row?.moved ?? 0);
+}
+
+/**
+ * The E2E tooling's copy of the move (controllers/session-state.ts acceptPendingInvitationForE2ESession, on the
+ * superuser tooling connection, which no definer arm admits): the same delete and re-insert through the
+ * Prisma client. Tooling only, never a request path.
+ */
+export async function repointInvitationDraftsAsTooling(
   tx: DbClient,
   invitationId: string,
   /** The invitee's new participant (of the invitation's session). */
