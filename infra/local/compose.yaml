@@ -66,6 +66,9 @@ services:
       database: {ipv4_address: '${MWF_LOCAL_NET:-172.30}.78.3'}
     mem_limit: 850m
     init: true
+    # No capabilities and no privilege gain (work-k5fk.10.6 review F7): node needs neither.
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
     stop_grace_period: 20s
     depends_on:
       db: {condition: service_healthy}
@@ -88,6 +91,10 @@ services:
     networks:
       edge: {ipv4_address: '${MWF_LOCAL_NET:-172.30}.77.2'}
     mem_limit: 128m
+    # Only the low-port bind (80/443, :8080 here) (work-k5fk.10.6 review F7).
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ['no-new-privileges:true']
     depends_on:
       api: {condition: service_healthy}
 networks:

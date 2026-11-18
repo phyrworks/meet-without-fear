@@ -13,10 +13,20 @@ flock -n 9 || { echo 'Deployment already running' >&2; exit 1; }
 # admits mwf_migrator only from the migration container's address (172.29.1.4, below), over TLS.
 # Checked before anything changes.
 migrator_url=$(sed -n 's/^MIGRATOR_DATABASE_URL=//p' /etc/mwf/migrator.env 2>/dev/null | tail -1)
-[[ "$migrator_url" =~ ^postgresql://mwf_migrator:[^@]+@db:5432/mwf\?.*sslmode= ]] || {
-  echo 'MIGRATOR_DATABASE_URL in /etc/mwf/migrator.env must be postgresql://mwf_migrator:…@db:5432/mwf?sslmode=… (README): not deploying, nothing changed.' >&2
+# The migrator's URL must verify the server: TLS (sslmode=require), the chain and host name checked
+# against the database CA (sslaccept=strict with sslcert), as README "migrator.env" gives it.
+url_has() { [[ "$migrator_url" =~ [?\&]$1(\&|$) ]]; }
+if ! [[ "$migrator_url" =~ ^postgresql://mwf_migrator:[^@]+@db:5432/mwf\? ]] || ! url_has 'sslmode=require' \
+   || ! url_has 'sslaccept=strict' || ! url_has 'sslcert=/etc/mwf-db-tls/ca\.crt'; then
+  echo 'MIGRATOR_DATABASE_URL in /etc/mwf/migrator.env must be postgresql://mwf_migrator:…@db:5432/mwf?sslmode=require&sslcert=/etc/mwf-db-tls/ca.crt&sslaccept=strict (README): not deploying, nothing changed.' >&2
   exit 1
-}
+fi
+# The API's environment never carries the owner's or the admin's credentials (work-k5fk.10.6 review F7):
+# any URL in application.env that logs in as mwf_migrator or postgres refuses the deploy.
+if grep -Eq '^[A-Z_]*DATABASE_URL=postgres(ql)?://(mwf_migrator|postgres)[:@]' /etc/mwf/application.env; then
+  echo 'application.env holds a mwf_migrator or postgres database URL; the API may hold runtime logins only: not deploying, nothing changed.' >&2
+  exit 1
+fi
 previous=$(jq -r ' .image // empty' /var/lib/mwf/current-release.json 2>/dev/null || true)
 # Role-guard preflight (work-k5fk.10.3), with the NEW image and before anything changes: every
 # runtime role URL in application.env must be a least-privilege login that owns nothing and is a
@@ -43,7 +53,8 @@ image_has() {
   esac
 }
 if image_has "$preflight"; then
-  if ! docker run --rm --network mwf_database --env-file /etc/mwf/application.env \
+  if ! docker run --rm --network mwf_database --cap-drop ALL --security-opt no-new-privileges:true \
+      --env-file /etc/mwf/application.env \
       -v /etc/mwf/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro "$image" node "$preflight"; then
     echo 'Role-guard preflight REFUSED a runtime login: not migrating, previous release left running (see above).' >&2
     exit 1
@@ -74,6 +85,7 @@ mv /etc/mwf/release.env.next /etc/mwf/release.env
 # is on the internal database network only, at the one address pg_hba.conf admits mwf_migrator from,
 # with DATABASE_URL (prisma.config.ts) taken from the environment, not the command line.
 DATABASE_URL="$migrator_url" docker run --rm --network mwf_database --ip 172.29.1.4 -e DATABASE_URL \
+  --cap-drop ALL --security-opt no-new-privileges:true \
   -v /etc/mwf/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro \
   "$image" node /app/node_modules/prisma/build/index.js migrate deploy --schema=/app/backend/prisma/schema.prisma
 compose up -d --no-deps api

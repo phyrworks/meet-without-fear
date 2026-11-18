@@ -222,7 +222,8 @@ image_has() {
   esac
 }
 if image_has "$PREFLIGHT"; then
-  if ! podman run --rm --network "${PROJECT}_database" --env-file "$LOCAL/application.env" \
+  if ! podman run --rm --network "${PROJECT}_database" --cap-drop ALL --security-opt no-new-privileges:true \
+      --env-file "$LOCAL/application.env" \
       -v "$LOCAL/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro" "$APP_IMAGE" \
       node "$PREFLIGHT" >"$LOCAL/preflight.log" 2>&1; then
     sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight REFUSED a runtime login: not migrating"
@@ -253,6 +254,7 @@ else
   [ -z "$api_id" ] || compose stop api
   MIGRATOR_URL="$(sed -n 's/^MIGRATOR_DATABASE_URL=//p' "$LOCAL/migrator.env")"
   if ! DATABASE_URL="$MIGRATOR_URL" podman run --rm --network "${PROJECT}_database" --ip "$NET.78.4" -e DATABASE_URL \
+      --cap-drop ALL --security-opt no-new-privileges:true \
       -v "$LOCAL/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro" "$APP_IMAGE" \
       node /app/node_modules/prisma/build/index.js migrate deploy \
       --schema=/app/backend/prisma/schema.prisma >"$LOCAL/migrate.log" 2>&1; then
