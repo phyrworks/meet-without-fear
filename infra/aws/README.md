@@ -89,9 +89,11 @@ runs automatically; rehearse it on the local replica first (`docs/deployment/loc
    the tunnel: `no pg_hba.conf entry … no encryption`); `compose logs db | grep AUDIT` shows the
    migration's statements as `mwf_migrator` and none of `mwf_app`'s.
 
-What the bot sees afterwards: `slam_bot_readonly` keeps CONNECT and SELECT on every table, but it has
-no row-level policy, so under `FORCE ROW LEVEL SECURITY` it reads **no rows** (open question for the
-owner; a diagnostics policy would be its own decision).
+What the bot sees afterwards (owner decision 2026-11-17, work-k5fk.10.30): `slam_bot_readonly` is a
+member of the capability `diag_access` only (`roles.sql`); `ownership.sql` withdraws its old direct
+CONNECT, USAGE, table SELECTs and default ACLs. It reads every row, but only the id, status, kind,
+stage, count, flag and timestamp columns (trailer T7c), and `_prisma_migrations`' bookkeeping columns:
+no content, names, emails, keys or push tokens (`bot-workspaces/shared/diagnostics/check-db.md`).
 
 ## Back up and restore
 
@@ -101,7 +103,7 @@ sudo /opt/mwf/backup.sh preserved  # before migration or maintenance
 sudo systemctl list-timers mwf-backup.timer
 ```
 
-Backups are custom-format `pg_dump` files, checked for readability, SHA-256 checksummed, and uploaded with timestamp, source release and migration metadata. Successful upload of every file precedes the last-success record. Nightly retention is 7 days; preserved/final Render backups 30 days; old object versions also expire. The timer runs around 10:00 UTC, catches missed runs and uses a lock. `ops-health.sh` fails at 26 hours without success. Temporary files are cleaned on exit. Check backup-service failures in the journal.
+Backups are custom-format `pg_dump` files with owners and ACLs (work-k5fk.10.6: the target shape's grants, definer ownership and row-level policies are schema; `restore.sh` replays them as the superuser into a database owned by `mwf_migrator`, data loaded with triggers off, then runs `ownership.sql`; it refuses a target-shape archive without ACLs and needs every role of `roles.sql` on the cluster first; an old-shape archive restores as before, owned by `mwf_app`), checked for readability, SHA-256 checksummed, and uploaded with timestamp, source release and migration metadata. Successful upload of every file precedes the last-success record. Nightly retention is 7 days; preserved/final Render backups 30 days; old object versions also expire. The timer runs around 10:00 UTC, catches missed runs and uses a lock. `ops-health.sh` fails at 26 hours without success. Temporary files are cleaned on exit. Check backup-service failures in the journal.
 
 Use operator AWS credentials to download `database.dump`, `SHA256SUMS`, and `metadata.json` from one prefix, then securely copy them to the host. The host's backup credential intentionally cannot download backups.
 

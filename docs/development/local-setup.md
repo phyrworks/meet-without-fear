@@ -94,7 +94,7 @@ The roles are cluster-level, so they are created outside Prisma by `infra/aws/ro
 logins `mwf_migrator`, `mwf_app`, `mwf_ops`, `mwf_auth`, `mwf_ai`, `mwf_worker` and
 `mwf_clinician`, and (work-k5fk.10.4, design note §6) the NOLOGIN capability roles every grant
 targets — `app_access`, `ai_access`, `worker_access`, `ops_access`, `auth_access`,
-and `clinician_access` (`mwf_job` and its `job_access` are retired, work-k5fk.10.5) — plus the NOLOGIN `mwf_definer`
+`clinician_access` and `diag_access` (the operations bot `slam_bot_readonly`'s, created NOLOGIN without `-v readonly_password`; work-k5fk.10.30) (`mwf_job` and its `job_access` are retired, work-k5fk.10.5) — plus the NOLOGIN `mwf_definer`
 that owns the `SECURITY DEFINER` helpers in schema `app`. Each login is a member of exactly one
 capability, WITH INHERIT and without SET or ADMIN (`roles.sql` lists them). The migration `target_shape_baseline` refuses to run without
 them, and its step 20 refuses a cluster where a login reaches any other role. Apply the file once
