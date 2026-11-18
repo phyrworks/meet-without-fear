@@ -2041,8 +2041,11 @@ CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
   $$;
 -- No caller needs EXECUTE on the predicate of T-agreement-parties.
 REVOKE EXECUTE ON FUNCTION app.agreement_parties_ok(uuid) FROM PUBLIC;
+-- SECURITY DEFINER (owned by mwf_definer; work-k5fk.10.33): its EXCEPT and NOT EXISTS terms ask what rows exist,
+-- and under the writer's RLS a party, a participant or a choice the writer may not see would read as absent — and
+-- the check pass vacuously. The answer must be the tables', not the writer's view of them.
 CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
-  LANGUAGE plpgsql
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
@@ -2279,6 +2282,7 @@ CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_agreement_parties() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
@@ -2649,8 +2653,9 @@ $$;
 --                 app_delete where the commands differ (membership through app.is_member, the partner's rows only
 --                 as §6 lets a member see them), app_read / app_reference on reference data. Every predicate is
 --                 written (SELECT app.fn()) — an initplan — or as a definer helper of the row (T4), never an inline
---                 read of participant (spec P1-1). The goldens are the assertion that no request moved.
---                 app_interim (USING (true)): what is left of the 9c interim, each with its COMMENT.
+--                 read of participant (spec P1-1). The goldens are the assertion that no request moved. A fact of
+--                 a row the caller may not see (the invitee's invitation, an unrevealed attempt's author, a
+--                 co-participant's presence …) is a content-free definer's answer (T4). No 9c interim is left.
 --   ai_access     ai_session: the row's session is app.session_scope() — the one session the AI's transaction acts
 --                 on (Q20) — and its acting user (app.current_user_id(), which the AI connection binds too) is a
 --                 participant of it (app.scope_actor_is_member(), rows 9d–9g). Required: unset is NULL, which
@@ -2671,16 +2676,18 @@ $$;
 --   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
 --   auth_access, clinician_access: no table grant, so no policy.
 -- Each table below says which capabilities hold which commands (S I U D) on it.
--- agreement: app_access S, worker_access SIU
+-- agreement: app_access S, mwf_definer S, worker_access SIU
 ALTER TABLE agreement ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON agreement TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON agreement IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON agreement TO mwf_definer USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON agreement FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON agreement IS 'The agreements of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON agreement TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
--- agreement_party: app_access S, worker_access SI
+-- agreement_party: app_access S, mwf_definer S, worker_access SI
 ALTER TABLE agreement_party ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON agreement_party TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON agreement_party IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON agreement_party TO mwf_definer USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON agreement_party FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON agreement_party IS 'The parties of the agreements of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON agreement_party TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD, ops_access S
@@ -2782,8 +2789,13 @@ CREATE POLICY definer_all ON feature_state TO mwf_definer USING (true) WITH CHEC
 
 -- follow_up: app_access SIU, mwf_definer S, worker_access SIU
 ALTER TABLE follow_up ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON follow_up TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON follow_up IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON follow_up FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON follow_up IS 'The follow-ups of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON follow_up FOR INSERT TO app_access
+  WITH CHECK (app.is_member(session_id) AND (owner_user_id IS NULL OR owner_user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_insert ON follow_up IS 'A follow-up of a session of the caller''s, the caller''s own when it has an owner (work-k5fk.10.7).';
+CREATE POLICY app_update ON follow_up FOR UPDATE TO app_access USING (owner_user_id = (SELECT app.current_user_id())) WITH CHECK (owner_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON follow_up IS 'The owner of an individual entry shares it or not (opted_in_shared; tending setIndividualEntryShare; work-k5fk.10.7).';
 CREATE POLICY worker_read ON follow_up FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_update ON follow_up FOR UPDATE TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY worker_session ON follow_up FOR INSERT TO worker_access WITH CHECK (session_id = (SELECT app.session_scope()));
@@ -2791,14 +2803,17 @@ CREATE POLICY definer_all ON follow_up TO mwf_definer USING (true) WITH CHECK (t
 
 -- follow_up_checkin: app_access SI, mwf_definer SD
 ALTER TABLE follow_up_checkin ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON follow_up_checkin TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON follow_up_checkin IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON follow_up_checkin FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM follow_up f WHERE f.id = follow_up_checkin.follow_up_id AND f.scope = 'SHARED' AND f.status IN ('COMPLETED', 'PARTIAL'))));
+COMMENT ON POLICY app_select ON follow_up_checkin IS 'The caller''s own check-ins; a co-participant''s on a SHARED follow-up once it is COMPLETED or PARTIAL (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON follow_up_checkin FOR INSERT TO app_access WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_insert ON follow_up_checkin IS 'The caller''s own check-in (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON follow_up_checkin TO mwf_definer USING (true) WITH CHECK (true);
 
 -- follow_up_note: app_access SIU, mwf_definer SD
 ALTER TABLE follow_up_note ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON follow_up_note TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON follow_up_note IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON follow_up_note TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON follow_up_note IS 'The caller''s own rows: their between-period notes (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON follow_up_note TO mwf_definer USING (true) WITH CHECK (true);
 
 -- invitation: app_access SIU, mwf_definer S, ops_access S
@@ -2914,27 +2929,48 @@ CREATE POLICY definer_all ON persona TO mwf_definer USING (true) WITH CHECK (tru
 
 -- proposal: app_access SIU, mwf_definer S, worker_access SU
 ALTER TABLE proposal ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON proposal IS 'The proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal FOR INSERT TO app_access WITH CHECK (created_by_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id));
+COMMENT ON POLICY app_insert ON proposal IS 'A proposal the caller makes, in a session of theirs (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_update ON proposal FOR UPDATE TO app_access
+  USING (app.is_member(session_id) AND status <> 'CONVERTED_TO_AGREEMENT'
+         AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'))
+  WITH CHECK (app.is_member(session_id) AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'));
+COMMENT ON POLICY app_update ON proposal IS 'A shared proposal is the pair''s (either edits, refines or removes it: Stage 4 capture, the sub-chat); an individual commitment only its creator''s. Never one converted to an agreement (the worker''s; closes work-k5fk.10.9''s revival). Design note §6 says created_by = me; a shared proposal''s co-editing is the app''s behaviour (stage4-capture / stage4-subchat target tests). work-k5fk.10.7.';
 CREATE POLICY worker_session ON proposal TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 CREATE POLICY definer_all ON proposal TO mwf_definer USING (true) WITH CHECK (true);
 
 -- proposal_choice: app_access SIU, mwf_definer SD, worker_access S
 ALTER TABLE proposal_choice ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal_choice TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal_choice IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal_choice FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM participant_milestone m WHERE m.session_id = proposal_choice.session_id AND m.user_id = proposal_choice.user_id AND m.milestone_key = 'choices_shared')));
+COMMENT ON POLICY app_select ON proposal_choice IS 'The caller''s own choices; a co-participant''s once they shared them (choices_shared) (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal_choice FOR INSERT TO app_access WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_insert ON proposal_choice IS 'The caller''s own choice (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_update ON proposal_choice FOR UPDATE TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON proposal_choice IS 'The caller revises their own choice (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON proposal_choice TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 CREATE POLICY definer_all ON proposal_choice TO mwf_definer USING (true) WITH CHECK (true);
 
 -- proposal_need: app_access SID
 ALTER TABLE proposal_need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal_need TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal_need IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal_need FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON proposal_need IS 'The need links of the proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal_need FOR INSERT TO app_access WITH CHECK (app.is_member(session_id));
+COMMENT ON POLICY app_insert ON proposal_need IS 'A need link in a session of the caller''s (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_delete ON proposal_need FOR DELETE TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_delete ON proposal_need IS 'A need link in a session of the caller''s (work-k5fk.10.7).';
 
 -- proposal_revision: app_access SI, worker_access I
 ALTER TABLE proposal_revision ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal_revision TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal_revision IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal_revision FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON proposal_revision IS 'The revision history of the proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal_revision FOR INSERT TO app_access
+  WITH CHECK (actor_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
+              AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id
+                            AND (p.created_by_user_id = (SELECT app.current_user_id()) OR p.kind = 'SHARED_PROPOSAL')));
+COMMENT ON POLICY app_insert ON proposal_revision IS 'A revision the caller made, in a session of theirs (design note §6: member + actor = me), of a proposal they may edit (their own, or a shared one) — never of the partner''s individual commitment (work-k5fk.10.11, in part; work-k5fk.10.7).';
 CREATE POLICY worker_session ON proposal_revision TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- reconciler_guidance: ai_access SI, app_access S
@@ -2973,8 +3009,8 @@ CREATE POLICY definer_all ON regulation_event TO mwf_definer USING (true) WITH C
 
 -- reminder: app_access SID, mwf_definer SD, worker_access SU
 ALTER TABLE reminder ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reminder TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reminder IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON reminder TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON reminder IS 'The caller''s own rows: their reminders (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_all ON reminder TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY definer_all ON reminder TO mwf_definer USING (true) WITH CHECK (true);
 
@@ -2999,8 +3035,8 @@ CREATE POLICY definer_all ON session TO mwf_definer USING (true) WITH CHECK (tru
 
 -- session_closure: app_access S, worker_access I
 ALTER TABLE session_closure ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON session_closure TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON session_closure IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON session_closure FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON session_closure IS 'The closure of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON session_closure TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- session_key: no grant, so no policy: no runtime role reads or writes a row

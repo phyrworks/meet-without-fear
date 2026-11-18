@@ -11,11 +11,13 @@ exports[`mwf_app grants (target) every row-level policy, and every table’s RLS
 "user" diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 "user" ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 agreement [rls true, force true]
-agreement app_interim FOR ALL TO app_access USING (true) CHECK (true)
+agreement app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+agreement definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 agreement diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 agreement worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 agreement_party [rls true, force true]
-agreement_party app_interim FOR ALL TO app_access USING (true) CHECK (true)
+agreement_party app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+agreement_party definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 agreement_party diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 agreement_party worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 ai_memory [rls true, force true]
@@ -83,18 +85,23 @@ feature_state app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT a
 feature_state definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 feature_state diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 follow_up [rls true, force true]
-follow_up app_interim FOR ALL TO app_access USING (true) CHECK (true)
+follow_up app_insert FOR INSERT TO app_access USING (-) CHECK ((app.is_member((session_id)::uuid) AND ((owner_user_id IS NULL) OR ((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))
+follow_up app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+follow_up app_update FOR UPDATE TO app_access USING (((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 follow_up definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 follow_up worker_read FOR SELECT TO worker_access USING (true) CHECK (-)
 follow_up worker_session FOR INSERT TO worker_access USING (-) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 follow_up worker_update FOR UPDATE TO worker_access USING (true) CHECK (true)
 follow_up_checkin [rls true, force true]
-follow_up_checkin app_interim FOR ALL TO app_access USING (true) CHECK (true)
+follow_up_checkin app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
+follow_up_checkin app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM follow_up f
+  WHERE (((f.id)::uuid = (follow_up_checkin.follow_up_id)::uuid) AND (f.scope = 'SHARED'::follow_up_scope) AND (f.status = ANY (ARRAY['COMPLETED'::follow_up_status, 'PARTIAL'::follow_up_status])))))))) CHECK (-)
 follow_up_checkin definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up_checkin diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 follow_up_note [rls true, force true]
-follow_up_note app_interim FOR ALL TO app_access USING (true) CHECK (true)
+follow_up_note app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 follow_up_note definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up_note diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 invitation [rls true, force true]
@@ -170,20 +177,31 @@ persona [rls true, force true]
 persona definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 persona diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal [rls true, force true]
-proposal app_interim FOR ALL TO app_access USING (true) CHECK (true)
+proposal app_insert FOR INSERT TO app_access USING (-) CHECK ((((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid)))
+proposal app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+proposal app_update FOR UPDATE TO app_access USING ((app.is_member((session_id)::uuid) AND (status <> 'CONVERTED_TO_AGREEMENT'::proposal_status) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind)))) CHECK ((app.is_member((session_id)::uuid) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind))))
 proposal definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 proposal diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 proposal_choice [rls true, force true]
-proposal_choice app_interim FOR ALL TO app_access USING (true) CHECK (true)
+proposal_choice app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
+proposal_choice app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM participant_milestone m
+  WHERE (((m.session_id)::uuid = (proposal_choice.session_id)::uuid) AND ((m.user_id)::uuid = (proposal_choice.user_id)::uuid) AND ((m.milestone_key)::text = 'choices_shared'::text))))))) CHECK (-)
+proposal_choice app_update FOR UPDATE TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 proposal_choice definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 proposal_choice diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_choice worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 proposal_need [rls true, force true]
-proposal_need app_interim FOR ALL TO app_access USING (true) CHECK (true)
+proposal_need app_delete FOR DELETE TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+proposal_need app_insert FOR INSERT TO app_access USING (-) CHECK (app.is_member((session_id)::uuid))
+proposal_need app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 proposal_need diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision [rls true, force true]
-proposal_revision app_interim FOR ALL TO app_access USING (true) CHECK (true)
+proposal_revision app_insert FOR INSERT TO app_access USING (-) CHECK ((((actor_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM proposal p
+  WHERE (((p.id)::uuid = (proposal_revision.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind)))))))
+proposal_revision app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 proposal_revision diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 reconciler_guidance [rls true, force true]
@@ -212,7 +230,7 @@ regulation_event [rls true, force true]
 regulation_event app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 regulation_event definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reminder [rls true, force true]
-reminder app_interim FOR ALL TO app_access USING (true) CHECK (true)
+reminder app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 reminder definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reminder diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reminder worker_all FOR ALL TO worker_access USING (true) CHECK (true)
@@ -227,7 +245,7 @@ session ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 session worker_purge FOR DELETE TO worker_access USING (((status = 'ARCHIVED'::session_status) AND ((updated_at)::timestamp with time zone < (CURRENT_TIMESTAMP - '90 days'::interval)))) CHECK (-)
 session worker_read FOR SELECT TO worker_access USING (true) CHECK (-)
 session_closure [rls true, force true]
-session_closure app_interim FOR ALL TO app_access USING (true) CHECK (true)
+session_closure app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 session_closure diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 session_closure worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 session_key [rls true, force true]
@@ -275,10 +293,12 @@ user_preferences diag_read FOR SELECT TO diag_access USING (true) CHECK (-)"
 
 exports[`mwf_app grants (target) the ai_access / worker_access / ops_access / auth_access / mwf_definer / mwf_migrator privilege matrix is exactly the recorded one 1`] = `
 "column public.agreement INSERT: session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at (worker_access)
+column public.agreement SELECT: id, session_id, proposal_id, created_at (mwf_definer)
 column public.agreement SELECT: id, session_id, proposal_id, status, created_at (worker_access)
 column public.agreement UPDATE: status, completed_at (worker_access)
 column public.agreement_party INSERT: agreement_id, session_id, user_id, agreed_at (worker_access)
 column public.agreement_party SELECT: agreement_id, session_id, user_id (worker_access)
+column public.agreement_party SELECT: agreement_id, user_id (mwf_definer)
 column public.ai_memory INSERT: session_id, user_id, kind, doc (ai_access)
 column public.ai_memory SELECT: id, session_id, user_id, kind, doc (ai_access)
 column public.ai_memory SELECT: session_id, user_id (mwf_definer)
@@ -341,8 +361,8 @@ column public.persona SELECT: user_id, owner_user_id (mwf_definer)
 column public.proposal SELECT: id, session_id, created_by_user_id (mwf_definer)
 column public.proposal SELECT: id, session_id, created_by_user_id, kind, status, description, duration, measure_of_success, shared_at (worker_access)
 column public.proposal UPDATE: status (worker_access)
+column public.proposal_choice SELECT: proposal_id, session_id, user_id, decision (mwf_definer)
 column public.proposal_choice SELECT: proposal_id, session_id, user_id, decision (worker_access)
-column public.proposal_choice SELECT: session_id, user_id (mwf_definer)
 column public.proposal_revision INSERT: proposal_id, session_id, actor_user_id, action, before, after, reason (worker_access)
 column public.reconciler_guidance INSERT: result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed (ai_access)
 column public.reconciler_guidance SELECT: result_id, area_hint, guidance_type, prompt_seed (ai_access)
@@ -445,7 +465,7 @@ routine app.share_offers_expire(uuid,uuid[]): EXECUTE (mwf_definer)
 routine app.share_offers_mark_notified(uuid[],boolean): EXECUTE (mwf_definer)
 routine app.shares_delivered_to_me(uuid): EXECUTE (mwf_definer)
 routine app.shares_session_with(uuid): EXECUTE (mwf_definer)
-routine app.t_agreement_parties(): EXECUTE (mwf_migrator)
+routine app.t_agreement_parties(): EXECUTE (mwf_definer)
 routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
 routine app.t_conversation_seq_start(): EXECUTE (mwf_migrator)
@@ -624,7 +644,7 @@ routine owner app.share_offers_expire(uuid,uuid[]): mwf_definer
 routine owner app.share_offers_mark_notified(uuid[],boolean): mwf_definer
 routine owner app.shares_delivered_to_me(uuid): mwf_definer
 routine owner app.shares_session_with(uuid): mwf_definer
-routine owner app.t_agreement_parties(): mwf_migrator
+routine owner app.t_agreement_parties(): mwf_definer
 routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
 routine owner app.t_conversation_seq_start(): mwf_migrator

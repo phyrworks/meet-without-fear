@@ -630,4 +630,173 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       }
     });
   });
+
+  describe('repair (9g)', () => {
+    /** Ada's proposal and Bob's choice on it, an agreement with its parties, a closure and follow-ups (superuser). */
+    let proposal: string;
+    let agreement: string;
+    let shared: string;
+    let individual: string;
+    beforeAll(async () => {
+      [{ id: proposal }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, description) VALUES ($1, $2, 'PROBE_PROPOSAL') RETURNING id::text`,
+        [session, ada],
+      );
+      await run.sql(
+        `INSERT INTO proposal_choice (proposal_id, session_id, user_id, decision) VALUES ($1, $2, $3, 'WILLING'), ($1, $2, $4, 'WILLING')`,
+        [proposal, session, ada, bob],
+      );
+      await run.sql(`ALTER TABLE agreement_party DISABLE TRIGGER USER; ALTER TABLE agreement DISABLE TRIGGER USER`);
+      [{ id: agreement }] = await run.sql<{ id: string }>(
+        `INSERT INTO agreement (session_id, proposal_id, type, description) VALUES ($1, $2, 'COMMITMENT', 'PROBE_AGREEMENT') RETURNING id::text`,
+        [session, proposal],
+      );
+      await run.sql(
+        `INSERT INTO agreement_party (agreement_id, session_id, user_id) VALUES ($1, $2, $3), ($1, $2, $4)`,
+        [agreement, session, ada, bob],
+      );
+      await run.sql(`ALTER TABLE agreement_party ENABLE TRIGGER USER; ALTER TABLE agreement ENABLE TRIGGER USER`);
+      await run.sql(
+        `INSERT INTO session_closure (session_id, kind, reason, summary) VALUES ($1, 'SHARED_AGREEMENT', 'MUTUAL_SELECTION', 's')`,
+        [session],
+      );
+      [{ id: shared }] = await run.sql<{ id: string }>(
+        `INSERT INTO follow_up (session_id, agreement_id, type, scope, status) VALUES ($1, $2, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED', 'OPEN')
+         RETURNING id::text`,
+        [session, agreement],
+      );
+      [{ id: individual }] = await run.sql<{ id: string }>(
+        `INSERT INTO follow_up (session_id, type, scope, owner_user_id, status) VALUES ($1, 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'INDIVIDUAL', $2, 'OPEN')
+         RETURNING id::text`,
+        [session, ada],
+      );
+    });
+
+    it('proposal, proposal_need, proposal_revision: members read them; an individual commitment is its creator’s; a converted one nobody’s', async () => {
+      expect(await count('mwf_app', bob, 'proposal', 'id = $1', [proposal])).toBe(1);
+      expect(await count('mwf_app', carol, 'proposal')).toBe(0);
+      const [{ id: commitment }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, kind, description)
+         VALUES ($1, $2, 'INDIVIDUAL_COMMITMENT', 'PROBE_COMMITMENT') RETURNING id::text`,
+        [session, ada],
+      );
+      // Bob neither edits Ada's commitment nor revises it; Ada cannot hand it to him (work-k5fk.10.9)
+      expect(
+        await as('mwf_app', bob, `UPDATE proposal SET description = 'rewritten' WHERE id = $1 RETURNING id`, [
+          commitment,
+        ]),
+      ).toEqual([]);
+      expect(
+        await code('mwf_app', ada, `UPDATE proposal SET created_by_user_id = $2 WHERE id = $1`, [commitment, bob]),
+      ).toBe('rls');
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action) VALUES ($1, $2, $3, 'REVISED')`,
+          [commitment, session, bob],
+        ),
+      ).toBe('rls');
+      // Nobody creates a proposal in another's name, nor a revision by another, nor outside their session
+      expect(
+        await code(
+          'mwf_app',
+          ada,
+          `INSERT INTO proposal (session_id, created_by_user_id, description) VALUES ($1, $2, 'x')`,
+          [session, bob],
+        ),
+      ).toBe('rls');
+      expect(
+        await code(
+          'mwf_app',
+          ada,
+          `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action) VALUES ($1, $2, $3, 'REVISED')`,
+          [proposal, session, bob],
+        ),
+      ).toBe('rls');
+      expect(
+        await code(
+          'mwf_app',
+          carol,
+          `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action) VALUES ($1, $2, $3, 'REVISED')`,
+          [proposal, session, carol],
+        ),
+      ).toBe('rls');
+      // A converted proposal is the worker's: the app cannot revive it (work-k5fk.10.9)
+      await run.sql(`UPDATE proposal SET status = 'CONVERTED_TO_AGREEMENT' WHERE id = $1`, [proposal]);
+      expect(
+        await as('mwf_app', ada, `UPDATE proposal SET status = 'ACTIVE' WHERE id = $1 RETURNING id`, [proposal]),
+      ).toEqual([]);
+      expect(await count('mwf_app', carol, 'proposal_need')).toBe(0);
+      expect(await count('mwf_app', carol, 'proposal_revision')).toBe(0);
+    });
+
+    it('proposal_choice: Bob’s choice is his until he shares it; nobody chooses for him', async () => {
+      expect(await count('mwf_app', bob, 'proposal_choice', 'user_id = $1', [bob])).toBe(1);
+      expect(await count('mwf_app', ada, 'proposal_choice', 'user_id = $1', [bob])).toBe(0);
+      await run.sql(
+        `INSERT INTO participant_milestone (session_id, user_id, milestone_key) VALUES ($1, $2, 'choices_shared') ON CONFLICT DO NOTHING`,
+        [session, bob],
+      );
+      expect(await count('mwf_app', ada, 'proposal_choice', 'user_id = $1', [bob])).toBe(1);
+      expect(await count('mwf_app', carol, 'proposal_choice')).toBe(0);
+      expect(
+        await as(
+          'mwf_app',
+          ada,
+          `UPDATE proposal_choice SET decision = 'NOT_WILLING' WHERE user_id = $1 RETURNING user_id`,
+          [bob],
+        ),
+      ).toEqual([]);
+    });
+
+    it('agreement, agreement_party, session_closure: their session’s members read them, Carol none', async () => {
+      for (const [table, where, params] of [
+        ['agreement', 'id = $1', [agreement]],
+        ['agreement_party', 'agreement_id = $1', [agreement]],
+        ['session_closure', 'session_id = $1', [session]],
+      ] as const) {
+        expect(await count('mwf_app', bob, table, where, [...params])).toBeGreaterThan(0);
+        expect(await count('mwf_app', carol, table, where, [...params])).toBe(0);
+      }
+    });
+
+    it('follow_up, follow_up_checkin: a check-in is the partner’s only once a SHARED follow-up completes; Bob cannot share Ada’s entry', async () => {
+      expect(await count('mwf_app', bob, 'follow_up', 'id = $1', [shared])).toBe(1);
+      expect(await count('mwf_app', carol, 'follow_up')).toBe(0);
+      expect(
+        await as('mwf_app', bob, `UPDATE follow_up SET opted_in_shared = true WHERE id = $1 RETURNING id`, [
+          individual,
+        ]),
+      ).toEqual([]);
+      await run.sql(
+        `INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id, payload) VALUES ($1, $2, $3, '{}')`,
+        [shared, session, ada],
+      );
+      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
+      await run.sql(`UPDATE follow_up SET status = 'COMPLETED', completed_at = now() WHERE id = $1`, [shared]);
+      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(1);
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id, payload) VALUES ($1, $2, $3, '{}')`,
+          [individual, session, ada],
+        ),
+      ).toBe('rls');
+    });
+
+    it.each([
+      ['follow_up_note', `INSERT INTO follow_up_note (session_id, user_id, content) VALUES ($2, $1, 'PROBE_NOTE')`],
+      [
+        'reminder',
+        `INSERT INTO reminder (user_id, remind_at) SELECT $1, now() + interval '1 day' WHERE $2::uuid IS NOT NULL`,
+      ],
+    ])('%s: Bob neither reads Ada’s nor writes one for her', async (table, insert) => {
+      await run.sql(insert, [ada, session]);
+      expect(await count('mwf_app', ada, table, 'user_id = $1', [ada])).toBeGreaterThan(0);
+      expect(await count('mwf_app', bob, table, 'user_id = $1', [ada])).toBe(0);
+      expect(await code('mwf_app', bob, insert, [ada, session])).toBe('rls');
+    });
+  });
 });

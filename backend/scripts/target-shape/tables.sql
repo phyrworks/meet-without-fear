@@ -2012,6 +2012,8 @@ GRANT UPDATE (decision, note, created_at) ON proposal_choice TO app_access;
 -- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON proposal_choice TO mwf_definer;
+-- mwf_definer: t_agreement_parties (every party WILLING on the proposal)
+GRANT SELECT (proposal_id, decision) ON proposal_choice TO mwf_definer;
 GRANT DELETE ON proposal_choice TO mwf_definer;
 -- mwf_worker: closureInputsAsJob / agreeIfEveryoneWilling (every present human WILLING) and T-agreement-parties
 -- (deferred, invoker = the agreement's writer): every party WILLING on the proposal
@@ -2079,6 +2081,8 @@ COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s fr
 COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 -- mwf_app: read only; agreements are created and moved by the job.
 GRANT SELECT ON agreement TO app_access;
+-- mwf_definer: t_agreement_parties (the agreement whose parties it checks)
+GRANT SELECT (id, session_id, proposal_id, created_at) ON agreement TO mwf_definer;
 -- mwf_worker: stage4-store createAgreementsAsJob / insertAgreementsTx: the agreement row (snapshot of the proposal) and its
 -- id (RETURNING id)
 GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO worker_access;
@@ -2106,6 +2110,8 @@ COMMENT ON COLUMN agreement_party.session_id IS 'The session of every participan
 COMMENT ON COLUMN agreement_party.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: read only (an agreement's parties).
 GRANT SELECT ON agreement_party TO app_access;
+-- mwf_definer: t_agreement_parties (the parties)
+GRANT SELECT (agreement_id, user_id) ON agreement_party TO mwf_definer;
 -- mwf_worker: stage4-store insertAgreementsTx: one party row per present human
 GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO worker_access;
 -- mwf_worker: T-agreement-parties (deferred, invoker = mwf_worker): the party set

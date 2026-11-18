@@ -11,7 +11,7 @@ model today. Data isolation is enforced in application code with authenticated
 request context, explicit Prisma filters, relationship/session membership
 checks, consent checks, and stage retrieval contracts.
 
-## On the target shape (`phoenix/target-shape`, work-k5fk.10.6)
+## On the target shape (`phoenix/target-shape`, work-k5fk.10.6, work-k5fk.10.7)
 
 The target baseline (`backend/scripts/target-shape/trailer.sql` T7) turns RLS on for real — what
 the "Future RLS Requirements" below asked for. Until it reaches `main`, the sections after this one
@@ -28,17 +28,33 @@ describe production.
 - **Policies target capability roles** (`app_access`, `ai_access`, `worker_access`, `ops_access`,
   `mwf_definer`), never logins. Step 20 refuses a baseline where a capability holds a command on a
   table without a policy covering it, or a policy names PUBLIC / a login.
-- `app_access` — `app_interim` (`USING (true)`) on every table it holds a grant on: exactly its
-  pre-RLS reach, so no request moved (the goldens are the proof). Rows 9d–9g of the design note
-  replace each with the per-table predicates (own rows, membership).
-- `ai_access` — `ai_session`: rows of the session in `app.session_scope` only; with no scope, none.
-  `"user"`: that session's participants; `brain_activity`: also sessionless rows (inner work).
+- `app_access` — the design note §6 predicates on every table (rows 9d–9g, work-k5fk.10.7), written
+  `(SELECT app.current_user_id())` (an initplan): own rows (`app_own`), membership through the definer
+  `app.is_member`, a partner's rows only as §6 lets a member see them (an attempt once revealed, a
+  shared need while unrevoked, choices once `choices_shared`, a check-in once its shared follow-up
+  completes, a review once its feedback is sent). No identity bound: no row. The goldens are the proof
+  that no request moved. Where the app needs a fact of a row its caller may not see, a content-free
+  definer answers (trailer.sql T4): `app.invitation_peek` / `app.invitation_answer` (the invitee before
+  joining), `app.attempt_meta` (an unrevealed attempt's author and status, for its subject's share
+  offer), `app.result_facts` (the author's current guidance), `app.participant_presence` /
+  `app.co_participant_presence` (a co-participant's read state and activity), `app.actor_name_for`
+  (a push names its actor), `app.shares_delivered_to_me`, `app.validated_at`, `app.first_need_label`.
+  Deviations from §6, each in its policy's COMMENT: `"user"` also shows co-participants (their names),
+  `conversation` also shows each co-participant's MAIN row (the delivery address), `empathy_review`
+  also shows the author a review once sent.
+- `ai_access` — `ai_session`: rows of the session in `app.session_scope` only, and only while the acting
+  user (`app.current_user_id()`, bound on the AI connection too) is a participant of it
+  (`app.scope_actor_is_member`); with no scope or no such actor, none. `"user"`: that session's
+  participants; `brain_activity`: also the acting user's own reflection's sessionless rows, and (open
+  FINDING, work-k5fk.10.33) unattributed ones.
 - `worker_access` — `worker_session` (scoped) on the Stage 4 closure's tables and on the follow-ups it
   schedules; `worker_all` elsewhere (retention, due follow-ups / reminders, push tokens cross sessions).
 - `ops_access` — `ops_read`: SELECT on every row of its tables. `mwf_definer` — `definer_all`.
 - The database's ACL: PUBLIC has no CONNECT / TEMPORARY; the active capabilities have CONNECT.
 - Tests: `retire-mwf-job.target.test.ts` ("row-level security (9c)") and `job-path.target.test.ts`
-  pin the scoped reads, the owner reading nothing and the dashboard's reach.
+  pin the scoped reads, the owner reading nothing and the dashboard's reach;
+  `rls-cross-user.target.test.ts` holds one cross-user test per table (a wrong user's read or write
+  fails in the database); `app-grants.target.test.ts` snapshots every policy.
 
 ## Current Status
 
