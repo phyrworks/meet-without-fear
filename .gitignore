@@ -97,6 +97,8 @@ coordination/memory_bank/*
 coordination/subtasks/*
 coordination/orchestration/*
 *.db
+# the database image's Dockerfile (work-k5fk.10.6), not a database file
+!infra/aws/Dockerfile.db
 *.db-journal
 *.db-wal
 *.sqlite
