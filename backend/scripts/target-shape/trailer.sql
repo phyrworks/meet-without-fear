@@ -20,12 +20,15 @@
 --   T5  triggers (the T-* set and touch_updated_at ×35), each function followed
 --       by its REVOKE EXECUTE FROM PUBLIC
 --   T6  views (security_invoker = true), each followed by its SELECT grants
---   T7  (empty since work-k5fk.7: every grant sits next to its object)
+--   T7  the database's ACL (PUBLIC loses CONNECT / TEMPORARY, the capabilities
+--       get CONNECT), the seed checks, then ENABLE + FORCE ROW LEVEL SECURITY
+--       and the policies of every table (work-k5fk.10.6, §7 row 9c). No grants:
+--       since work-k5fk.7 every grant sits next to its object
 --   T8  catalog assertions (plan step 20). The database is empty, so there are
 --       no existing rows to re-check: every invariant is enforced by its
 --       trigger or CHECK from the first write on.
 --
--- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (in
+-- Not here: the milestone seed (in
 -- tables.sql, after the milestone table); schema app and app.current_user_id()
 -- (preamble.sql); the tables, their constraints, the domains and every table
 -- grant (tables.sql).
@@ -2155,12 +2158,551 @@ GROUP BY user_id, theme;
 GRANT SELECT ON v_reflection_theme TO app_access;
 
 -- ---------------------------------------------------------------------------
--- T7. Grants: none here (work-k5fk.7). Every grant sits next to its object:
--- table grants (every role) after each table in tables.sql, schema public's
--- USAGE before the tables there, view grants after each view (T6), EXECUTE
--- grants after each function (T4, T5), schema app's in preamble.sql.
--- app-grants.target.test.ts snapshots the privilege matrix of every role.
+-- T7. The database's ACL, then row-level security (design note §6 layers 1–3,
+-- §7 row 9c; work-k5fk.10.6). Grants are not here (work-k5fk.7): every grant
+-- sits next to its object — table grants after each table in tables.sql,
+-- schema public's USAGE before the tables there, view grants after each view
+-- (T6), EXECUTE grants after each function (T4, T5), schema app's in
+-- preamble.sql. app-grants.target.test.ts snapshots the privilege matrix.
 -- ---------------------------------------------------------------------------
+
+-- T7a. Who may connect (review 9a r3 L2): nobody by default. PUBLIC loses CONNECT and TEMPORARY (no runtime path
+-- creates a temporary object, and one shadowing a catalog name is an attack surface: caller test 13); each ACTIVE
+-- capability gets CONNECT, which its one login inherits — never the login itself, so a login added later reaches the
+-- database only through its capability. clinician_access (reserved, Q18) and mwf_definer (nobody logs in) get none.
+-- The owner (mwf_migrator) and superusers connect by ownership / attribute. The operations bot connects through
+-- diag_access (slam_bot_readonly, work-k5fk.10.30); no other role may (step 20 refuses any other grantee).
+-- A database's ACL is not copied by CREATE DATABASE … TEMPLATE, so a clone (the golden runs) starts with PostgreSQL's
+-- default again; the database this migration runs in is the one that counts.
+DO $$
+BEGIN
+  EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO app_access, ai_access, worker_access, ops_access, auth_access, diag_access',
+                 current_database());
+END
+$$;
+
+-- The seeds are complete (step 20 read them until FORCE ROW LEVEL SECURITY, below, hid every row from the migrator).
+DO $$
+DECLARE
+  bad text;
+  n   bigint;
+BEGIN
+  SELECT count(*) INTO n FROM milestone;
+  IF n <> 13 THEN RAISE EXCEPTION 'step 20: % milestone rows, expected 13', n; END IF;
+  -- work-k5fk.8: every name t_doc_schema can derive has a version-1 schema.
+  SELECT string_agg(x.name, ', ' ORDER BY x.name) INTO bad
+  FROM (SELECT 'user_preferences' AS name UNION ALL SELECT 'ai_memory.' || lower(e::text) FROM unnest(enum_range(NULL::ai_memory_kind)) e) x
+  WHERE NOT EXISTS (SELECT 1 FROM app.json_schema j WHERE j.name = x.name AND j.version = 1);
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: no version-1 json_schema for: %', bad; END IF;
+  SELECT count(*) INTO n FROM app.json_schema;
+  IF n <> 4 THEN RAISE EXCEPTION 'step 20: % json_schema rows, expected 4', n; END IF;
+END
+$$;
+
+-- T7b. Row-level security: ENABLE + FORCE on every table (§6 layer 3, owner decision Q8), so the owner mwf_migrator
+-- is held to the policies too and, holding none, reads and writes no row by default. That is a default, not a
+-- control: as the owner it may ALTER TABLE … NO FORCE / DISABLE ROW LEVEL SECURITY, and it may SET ROLE mwf_definer
+-- (definer_all). What holds the migrator is that only the deploy step logs in as it (pg_hba.conf) and pgaudit
+-- logs every statement it runs (infra/aws/ownership.sql). Referential actions and
+-- checks (a cascade, a RESTRICT, a unique probe) are not row reads: PostgreSQL runs them as the owner with RLS off.
+-- Superusers bypass RLS (break-glass only, §6). _prisma_migrations is Prisma's own bookkeeping, written by
+-- `migrate deploy` as the migrator around this script and granted to nobody: it is the one table left out.
+-- A role with no policy on a table sees no row of it; step 20 requires a policy for every command each capability (and
+-- mwf_definer) holds on every table, so a grant can never be silently dead — nor added without its policy.
+-- Policies target capabilities, never logins (Q16), and call app.session_scope() as (SELECT …) so the planner
+-- evaluates it once per statement (an initplan), not once per row. The policies, per capability:
+--   app_access    app_interim: USING (true) / WITH CHECK (true) on every table it holds a grant on — exactly its
+--                 pre-RLS reach, so no request moves (the goldens are the assertion). Each carries a COMMENT; rows
+--                 9d–9g replace them with the §6 per-table predicates (own rows, membership).
+--   ai_access     ai_session: the row's session is app.session_scope() — the one session the AI's transaction acts
+--                 on (Q20). Required: unset is NULL, which matches no row, so an unscoped AI statement reads and
+--                 writes nothing (t_session_scope already refused its writes). session: its id; "user": the
+--                 participants of that session; brain_activity: also the sessionless rows (an inner-work call's
+--                 telemetry, as t_session_scope lets through); app.json_schema: reference data (ai_reference).
+--                 Rows 9d–9g add the §6 row predicates (the acting user is a member) on top.
+--   worker_access worker_session on the Stage 4 closure's tables (agreement, agreement_party, session_closure,
+--                 proposal, proposal_choice, proposal_revision) and on the follow-ups it schedules (INSERT): the
+--                 closure runs scoped to its session (stage4-closure.ts, withSessionScope). worker_all / worker_read /
+--                 worker_update elsewhere: its cross-session jobs (retention, due follow-ups and reminders, push
+--                 tokens) read and change rows of every session — the grants narrow them to columns.
+--   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions; Q10 narrows message.content
+--                 at §7 row 10, by column).
+--   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
+--   auth_access, clinician_access: no table grant, so no policy.
+-- Each table below says which capabilities hold which commands (S I U D) on it.
+-- agreement: app_access S, worker_access SIU
+ALTER TABLE agreement ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON agreement TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON agreement IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_session ON agreement TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+
+-- agreement_party: app_access S, worker_access SI
+ALTER TABLE agreement_party ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON agreement_party TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON agreement_party IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_session ON agreement_party TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+
+-- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD, ops_access S
+ALTER TABLE ai_memory ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON ai_memory TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON ai_memory IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON ai_memory TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY ops_read ON ai_memory FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON ai_memory TO mwf_definer USING (true) WITH CHECK (true);
+
+-- brain_activity: ai_access SIU, mwf_definer SD, ops_access S, worker_access SUD
+ALTER TABLE brain_activity ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY ai_session ON brain_activity TO ai_access
+  USING (session_id IS NULL OR session_id = (SELECT app.session_scope())) WITH CHECK (session_id IS NULL OR session_id = (SELECT app.session_scope()));
+CREATE POLICY worker_all ON brain_activity TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY ops_read ON brain_activity FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON brain_activity TO mwf_definer USING (true) WITH CHECK (true);
+
+-- consent: app_access SIU, mwf_definer SU
+ALTER TABLE consent ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON consent TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON consent IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON consent TO mwf_definer USING (true) WITH CHECK (true);
+
+-- context_share_offer: ai_access SIU, app_access SU, mwf_definer SU
+ALTER TABLE context_share_offer ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON context_share_offer TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON context_share_offer IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON context_share_offer TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON context_share_offer TO mwf_definer USING (true) WITH CHECK (true);
+
+-- conversation: ai_access S, app_access SIU, mwf_definer SUD, ops_access S
+ALTER TABLE conversation ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON conversation TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON conversation IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON conversation TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY ops_read ON conversation FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON conversation TO mwf_definer USING (true) WITH CHECK (true);
+
+-- conversation_read_state: app_access SIU, mwf_definer SD
+ALTER TABLE conversation_read_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON conversation_read_state TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON conversation_read_state IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON conversation_read_state TO mwf_definer USING (true) WITH CHECK (true);
+
+-- draft: app_access SIUD, mwf_definer SD
+ALTER TABLE draft ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON draft TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON draft IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON draft TO mwf_definer USING (true) WITH CHECK (true);
+
+-- empathy_attempt: ai_access SU, app_access SI, mwf_definer SIUD
+ALTER TABLE empathy_attempt ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON empathy_attempt TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON empathy_attempt IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON empathy_attempt TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON empathy_attempt TO mwf_definer USING (true) WITH CHECK (true);
+
+-- empathy_review: app_access SIU, mwf_definer S
+ALTER TABLE empathy_review ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON empathy_review TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON empathy_review IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON empathy_review TO mwf_definer USING (true) WITH CHECK (true);
+
+-- feature_state: app_access SIU, mwf_definer SD
+ALTER TABLE feature_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON feature_state TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON feature_state IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON feature_state TO mwf_definer USING (true) WITH CHECK (true);
+
+-- follow_up: app_access SIU, mwf_definer S, worker_access SIU
+ALTER TABLE follow_up ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON follow_up TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON follow_up IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_read ON follow_up FOR SELECT TO worker_access USING (true);
+CREATE POLICY worker_update ON follow_up FOR UPDATE TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY worker_session ON follow_up FOR INSERT TO worker_access WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON follow_up TO mwf_definer USING (true) WITH CHECK (true);
+
+-- follow_up_checkin: app_access SI, mwf_definer SD
+ALTER TABLE follow_up_checkin ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON follow_up_checkin TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON follow_up_checkin IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON follow_up_checkin TO mwf_definer USING (true) WITH CHECK (true);
+
+-- follow_up_note: app_access SIU, mwf_definer SD
+ALTER TABLE follow_up_note ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON follow_up_note TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON follow_up_note IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON follow_up_note TO mwf_definer USING (true) WITH CHECK (true);
+
+-- invitation: app_access SIU, mwf_definer S, ops_access S
+ALTER TABLE invitation ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON invitation TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON invitation IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ops_read ON invitation FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON invitation TO mwf_definer USING (true) WITH CHECK (true);
+
+-- json_schema: ai_access S, app_access S
+ALTER TABLE app.json_schema ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON app.json_schema TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON app.json_schema IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_reference ON app.json_schema FOR SELECT TO ai_access USING (true);
+
+-- live_session_pair: app_access S, mwf_definer SID
+ALTER TABLE live_session_pair ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON live_session_pair TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON live_session_pair IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON live_session_pair TO mwf_definer USING (true) WITH CHECK (true);
+
+-- message: ai_access SI, app_access SID, mwf_definer SI, ops_access S, worker_access S
+ALTER TABLE message ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON message TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON message IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON message TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY worker_all ON message TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY ops_read ON message FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON message TO mwf_definer USING (true) WITH CHECK (true);
+
+-- milestone: app_access S, mwf_definer S, ops_access S
+ALTER TABLE milestone ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON milestone TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON milestone IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ops_read ON milestone FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON milestone TO mwf_definer USING (true) WITH CHECK (true);
+
+-- mood_reading: app_access SI, mwf_definer SD, ops_access S
+ALTER TABLE mood_reading ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON mood_reading TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON mood_reading IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ops_read ON mood_reading FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON mood_reading TO mwf_definer USING (true) WITH CHECK (true);
+
+-- need: app_access SIU, mwf_definer SD
+ALTER TABLE need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON need TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON need IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON need TO mwf_definer USING (true) WITH CHECK (true);
+
+-- need_disposition: app_access SIUD, mwf_definer SD
+ALTER TABLE need_disposition ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON need_disposition TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON need_disposition IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON need_disposition TO mwf_definer USING (true) WITH CHECK (true);
+
+-- need_share: app_access S, mwf_definer SIU
+ALTER TABLE need_share ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON need_share TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON need_share IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON need_share TO mwf_definer USING (true) WITH CHECK (true);
+
+-- participant: ai_access S, app_access SI, mwf_definer SU, ops_access S, worker_access S
+ALTER TABLE participant ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON participant TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON participant IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON participant TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY worker_all ON participant TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY ops_read ON participant FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON participant TO mwf_definer USING (true) WITH CHECK (true);
+
+-- participant_key: mwf_definer SU
+ALTER TABLE participant_key ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY definer_all ON participant_key TO mwf_definer USING (true) WITH CHECK (true);
+
+-- participant_milestone: ai_access S, app_access SI, mwf_definer SID, ops_access S, worker_access S
+ALTER TABLE participant_milestone ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON participant_milestone TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON participant_milestone IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON participant_milestone TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY worker_all ON participant_milestone TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY ops_read ON participant_milestone FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON participant_milestone TO mwf_definer USING (true) WITH CHECK (true);
+
+-- persona: mwf_definer S
+ALTER TABLE persona ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY definer_all ON persona TO mwf_definer USING (true) WITH CHECK (true);
+
+-- proposal: app_access SIU, mwf_definer S, worker_access SU
+ALTER TABLE proposal ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON proposal TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON proposal IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_session ON proposal TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON proposal TO mwf_definer USING (true) WITH CHECK (true);
+
+-- proposal_choice: app_access SIU, mwf_definer SD, worker_access S
+ALTER TABLE proposal_choice ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON proposal_choice TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON proposal_choice IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_session ON proposal_choice TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON proposal_choice TO mwf_definer USING (true) WITH CHECK (true);
+
+-- proposal_need: app_access SID
+ALTER TABLE proposal_need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON proposal_need TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON proposal_need IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+
+-- proposal_revision: app_access SI, worker_access I
+ALTER TABLE proposal_revision ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON proposal_revision TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON proposal_revision IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_session ON proposal_revision TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+
+-- reconciler_guidance: ai_access SI, app_access S
+ALTER TABLE reconciler_guidance ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON reconciler_guidance TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON reconciler_guidance IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON reconciler_guidance TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+
+-- reconciler_result: ai_access SIU, app_access S
+ALTER TABLE reconciler_result ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON reconciler_result TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON reconciler_result IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON reconciler_result TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+
+-- reflection: app_access SIU, mwf_definer SD, ops_access S
+ALTER TABLE reflection ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON reflection TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON reflection IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ops_read ON reflection FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON reflection TO mwf_definer USING (true) WITH CHECK (true);
+
+-- reflection_message: app_access SI, ops_access S
+ALTER TABLE reflection_message ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON reflection_message TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON reflection_message IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ops_read ON reflection_message FOR SELECT TO ops_access USING (true);
+
+-- regulation_event: app_access SI, mwf_definer SD
+ALTER TABLE regulation_event ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON regulation_event TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON regulation_event IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON regulation_event TO mwf_definer USING (true) WITH CHECK (true);
+
+-- reminder: app_access SID, mwf_definer SD, worker_access SU
+ALTER TABLE reminder ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON reminder TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON reminder IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_all ON reminder TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY definer_all ON reminder TO mwf_definer USING (true) WITH CHECK (true);
+
+-- session: ai_access SU, app_access SIU, mwf_definer SU, ops_access S, worker_access SD
+ALTER TABLE session ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON session TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON session IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON session TO ai_access USING (id = (SELECT app.session_scope())) WITH CHECK (id = (SELECT app.session_scope()));
+CREATE POLICY worker_all ON session TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY ops_read ON session FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON session TO mwf_definer USING (true) WITH CHECK (true);
+
+-- session_closure: app_access S, worker_access I
+ALTER TABLE session_closure ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON session_closure TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON session_closure IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_session ON session_closure TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+
+-- session_key: no grant, so no policy: no runtime role reads or writes a row
+ALTER TABLE session_key ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+
+-- takeaway: app_access SIUD
+ALTER TABLE takeaway ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON takeaway TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON takeaway IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+
+-- takeaway_link: app_access SID
+ALTER TABLE takeaway_link ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON takeaway_link TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON takeaway_link IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+
+-- user: ai_access S, app_access SU, mwf_definer SIU, ops_access S
+ALTER TABLE "user" ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON "user" TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON "user" IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY ai_session ON "user" FOR SELECT TO ai_access
+  USING (EXISTS (SELECT 1 FROM participant p WHERE p.session_id = (SELECT app.session_scope()) AND p.user_id = "user".id));
+CREATE POLICY ops_read ON "user" FOR SELECT TO ops_access USING (true);
+CREATE POLICY definer_all ON "user" TO mwf_definer USING (true) WITH CHECK (true);
+
+-- user_contact: app_access SIU, mwf_definer SD
+ALTER TABLE user_contact ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON user_contact TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON user_contact IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON user_contact TO mwf_definer USING (true) WITH CHECK (true);
+
+-- user_device: app_access SIU, mwf_definer SD, worker_access SU
+ALTER TABLE user_device ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON user_device TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON user_device IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY worker_all ON user_device TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY definer_all ON user_device TO mwf_definer USING (true) WITH CHECK (true);
+
+-- user_identity: mwf_definer SID
+ALTER TABLE user_identity ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY definer_all ON user_identity TO mwf_definer USING (true) WITH CHECK (true);
+
+-- user_key: mwf_definer SU
+ALTER TABLE user_key ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY definer_all ON user_key TO mwf_definer USING (true) WITH CHECK (true);
+
+-- user_memory: app_access SIUD, mwf_definer SD
+ALTER TABLE user_memory ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON user_memory TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON user_memory IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON user_memory TO mwf_definer USING (true) WITH CHECK (true);
+
+-- user_preferences: app_access SIU, mwf_definer SD
+ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY app_interim ON user_preferences TO app_access USING (true) WITH CHECK (true);
+COMMENT ON POLICY app_interim ON user_preferences IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON user_preferences TO mwf_definer USING (true) WITH CHECK (true);
+
+-- T7c. Diagnostics (work-k5fk.10.30; owner decision 2026-11-17: "diagnostics, no content"). diag_access is the
+-- operations bot's capability (login slam_bot_readonly, its only member; infra/aws/roles.sql). It reads, on every
+-- row (diag_read, USING (true)), only the columns that carry ids, statuses, kinds, stages, counts, flags and
+-- timestamps — chosen by type: uuid7, ts_ms, the integer types, boolean, the enums, milestone_key, schema_version.
+-- Never: any text / ciphertext / jsonb / array / bytea column (message, empathy, need, reflection and memory
+-- content, names, emails, nicknames, push tokens, notes, model names), the mood and regulation intensities, the
+-- reconciler's alignment score, and no column of the key tables (session_key, participant_key, user_key), of
+-- user_identity (sign-in subjects) or of app.json_schema. A new column is invisible to the bot until listed here.
+-- Review 9c r2 (the owner's least privilege): operational facts only, so also none of a user's private state, not
+-- even as an enum or a flag — need / need_share.category, regulation_event (all of it), proposal_choice / consent
+-- .decision, empathy_review.validated, reconciler_result's gap_severity / recommended_action /
+-- sharing_would_help, session_closure.reason, user_memory.category, feature_state.feature; none of the
+-- relationship graph (user_contact, live_session_pair, persona.owner_user_id); and no per-user activity times
+-- (user_device.last_seen_at, conversation_read_state.last_active_at, mood_reading.recorded_at).
+-- Grants are here rather than next to each table: check-schema.sh applies tables.sql to a cluster that need not
+-- have diag_access, and the policy must follow its grant. Plus the migration status the bot reports
+-- (_prisma_migrations, which has no RLS: its bookkeeping columns only, when Prisma created it).
+DO $$
+BEGIN
+  IF pg_catalog.to_regclass('public._prisma_migrations') IS NOT NULL THEN
+    GRANT SELECT (id, migration_name, started_at, finished_at, rolled_back_at, applied_steps_count)
+      ON public._prisma_migrations TO diag_access;
+  END IF;
+END
+$$;
+
+-- agreement
+GRANT SELECT (id, session_id, proposal_id, type, status, follow_up_at, completed_at, created_at, updated_at) ON agreement TO diag_access;
+CREATE POLICY diag_read ON agreement FOR SELECT TO diag_access USING (true);
+-- agreement_party
+GRANT SELECT (agreement_id, session_id, user_id, agreed_at, created_at) ON agreement_party TO diag_access;
+CREATE POLICY diag_read ON agreement_party FOR SELECT TO diag_access USING (true);
+-- ai_memory
+GRANT SELECT (id, session_id, user_id, kind, doc_schema_version, created_at, updated_at) ON ai_memory TO diag_access;
+CREATE POLICY diag_read ON ai_memory FOR SELECT TO diag_access USING (true);
+-- brain_activity
+GRANT SELECT (id, session_id, reflection_id, participant_user_id, activity_type, call_type, token_count_input, token_count_output, duration_ms, status, created_at, completed_at, updated_at) ON brain_activity TO diag_access;
+CREATE POLICY diag_read ON brain_activity FOR SELECT TO diag_access USING (true);
+-- consent
+GRANT SELECT (id, session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id, decided_at, revoked_at, created_at, updated_at, target_kind) ON consent TO diag_access;
+CREATE POLICY diag_read ON consent FOR SELECT TO diag_access USING (true);
+-- context_share_offer
+GRANT SELECT (id, attempt_id, result_id, session_id, subject_user_id, iteration, status, shared_at, declined_at, offered_at, delivery_status, delivered_at, seen_at, delivery_notified_at, seen_notified_at, created_at, updated_at) ON context_share_offer TO diag_access;
+CREATE POLICY diag_read ON context_share_offer FOR SELECT TO diag_access USING (true);
+-- conversation
+GRANT SELECT (id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at) ON conversation TO diag_access;
+CREATE POLICY diag_read ON conversation FOR SELECT TO diag_access USING (true);
+-- conversation_read_state
+GRANT SELECT (session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, archived_at, created_at, updated_at) ON conversation_read_state TO diag_access;
+CREATE POLICY diag_read ON conversation_read_state FOR SELECT TO diag_access USING (true);
+-- draft
+GRANT SELECT (id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at) ON draft TO diag_access;
+CREATE POLICY diag_read ON draft FOR SELECT TO diag_access USING (true);
+-- empathy_attempt
+GRANT SELECT (id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at) ON empathy_attempt TO diag_access;
+CREATE POLICY diag_read ON empathy_attempt FOR SELECT TO diag_access USING (true);
+-- empathy_review
+GRANT SELECT (id, attempt_id, session_id, reviewer_user_id, feedback_sent_at, created_at, updated_at) ON empathy_review TO diag_access;
+CREATE POLICY diag_read ON empathy_review FOR SELECT TO diag_access USING (true);
+-- feature_state
+GRANT SELECT (user_id, created_at, updated_at) ON feature_state TO diag_access;
+CREATE POLICY diag_read ON feature_state FOR SELECT TO diag_access USING (true);
+-- follow_up
+GRANT SELECT (id, session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for, response_deadline_at, opened_at, completed_at, created_at, updated_at) ON follow_up TO diag_access;
+CREATE POLICY diag_read ON follow_up FOR SELECT TO diag_access USING (true);
+-- follow_up_checkin
+GRANT SELECT (id, follow_up_id, session_id, user_id, next_action, continue_choice, submitted_at, created_at) ON follow_up_checkin TO diag_access;
+CREATE POLICY diag_read ON follow_up_checkin FOR SELECT TO diag_access USING (true);
+-- follow_up_note
+GRANT SELECT (id, session_id, user_id, carry_forward, carried_into_checkin_id, created_at, updated_at) ON follow_up_note TO diag_access;
+CREATE POLICY diag_read ON follow_up_note FOR SELECT TO diag_access USING (true);
+-- invitation
+GRANT SELECT (id, session_id, invited_by_user_id, accepted_by_user_id, status, message_confirmed_at, expires_at, accepted_at, declined_at, created_at, updated_at) ON invitation TO diag_access;
+CREATE POLICY diag_read ON invitation FOR SELECT TO diag_access USING (true);
+-- message
+GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, refining_need_id, source_attempt_id, created_at) ON message TO diag_access;
+CREATE POLICY diag_read ON message FOR SELECT TO diag_access USING (true);
+-- milestone
+GRANT SELECT (key, ordinal, scope, self_assertable, created_at, updated_at) ON milestone TO diag_access;
+CREATE POLICY diag_read ON milestone FOR SELECT TO diag_access USING (true);
+-- mood_reading
+GRANT SELECT (id, session_id, user_id, created_at) ON mood_reading TO diag_access;
+CREATE POLICY diag_read ON mood_reading FOR SELECT TO diag_access USING (true);
+-- need
+GRANT SELECT (id, session_id, user_id, confirmed_at, locked_at, superseded_by_need_id, deleted_at, created_at, updated_at) ON need TO diag_access;
+CREATE POLICY diag_read ON need FOR SELECT TO diag_access USING (true);
+-- need_disposition
+GRANT SELECT (need_id, session_id, user_id, status, is_current, created_at, updated_at) ON need_disposition TO diag_access;
+CREATE POLICY diag_read ON need_disposition FOR SELECT TO diag_access USING (true);
+-- need_share
+GRANT SELECT (need_id, session_id, user_id, shared_at, revoked_at, created_at, updated_at) ON need_share TO diag_access;
+CREATE POLICY diag_read ON need_share FOR SELECT TO diag_access USING (true);
+-- participant
+GRANT SELECT (session_id, user_id, kind, added_by_user_id, joined_at, left_at, created_at, updated_at) ON participant TO diag_access;
+CREATE POLICY diag_read ON participant FOR SELECT TO diag_access USING (true);
+-- participant_milestone
+GRANT SELECT (session_id, user_id, milestone_key, reached_at, created_at) ON participant_milestone TO diag_access;
+CREATE POLICY diag_read ON participant_milestone FOR SELECT TO diag_access USING (true);
+-- persona
+GRANT SELECT (user_id, kind, owner_kind, created_at) ON persona TO diag_access;
+CREATE POLICY diag_read ON persona FOR SELECT TO diag_access USING (true);
+-- proposal
+GRANT SELECT (id, session_id, created_by_user_id, source, kind, status, removed_at, removed_by_user_id, shared_at, created_at, updated_at) ON proposal TO diag_access;
+CREATE POLICY diag_read ON proposal FOR SELECT TO diag_access USING (true);
+-- proposal_choice
+GRANT SELECT (proposal_id, session_id, user_id, created_at, updated_at) ON proposal_choice TO diag_access;
+CREATE POLICY diag_read ON proposal_choice FOR SELECT TO diag_access USING (true);
+-- proposal_need
+GRANT SELECT (proposal_id, need_id, session_id, created_at) ON proposal_need TO diag_access;
+CREATE POLICY diag_read ON proposal_need FOR SELECT TO diag_access USING (true);
+-- proposal_revision
+GRANT SELECT (id, proposal_id, session_id, actor_user_id, action, reason, created_at) ON proposal_revision TO diag_access;
+CREATE POLICY diag_read ON proposal_revision FOR SELECT TO diag_access USING (true);
+-- reconciler_guidance
+GRANT SELECT (result_id, session_id, author_user_id, subject_user_id, guidance_type, created_at) ON reconciler_guidance TO diag_access;
+CREATE POLICY diag_read ON reconciler_guidance FOR SELECT TO diag_access USING (true);
+-- reconciler_result
+GRANT SELECT (id, attempt_id, session_id, subject_user_id, iteration, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
+CREATE POLICY diag_read ON reconciler_result FOR SELECT TO diag_access USING (true);
+-- reflection
+GRANT SELECT (id, user_id, status, linked_session_id, linked_at, distilled_at, created_at, updated_at) ON reflection TO diag_access;
+CREATE POLICY diag_read ON reflection FOR SELECT TO diag_access USING (true);
+-- reflection_message
+GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO diag_access;
+CREATE POLICY diag_read ON reflection_message FOR SELECT TO diag_access USING (true);
+-- reminder
+GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
+CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
+-- session
+GRANT SELECT (id, status, topic_frame_confirmed_at, previous_session_id, resolved_at, archived_at, archived_by_user_id, created_at, updated_at) ON session TO diag_access;
+CREATE POLICY diag_read ON session FOR SELECT TO diag_access USING (true);
+-- session_closure
+GRANT SELECT (session_id, kind, closed_by_user_id, check_in_at, closed_at, created_at) ON session_closure TO diag_access;
+CREATE POLICY diag_read ON session_closure FOR SELECT TO diag_access USING (true);
+-- takeaway
+GRANT SELECT (id, reflection_id, source, type, "position", resolved_at, created_at, updated_at) ON takeaway TO diag_access;
+CREATE POLICY diag_read ON takeaway FOR SELECT TO diag_access USING (true);
+-- takeaway_link
+GRANT SELECT (source_id, target_id, link_type, created_at) ON takeaway_link TO diag_access;
+CREATE POLICY diag_read ON takeaway_link FOR SELECT TO diag_access USING (true);
+-- user
+GRANT SELECT (id, kind, deleted_at, created_at, updated_at) ON "user" TO diag_access;
+CREATE POLICY diag_read ON "user" FOR SELECT TO diag_access USING (true);
+-- user_device
+GRANT SELECT (id, user_id, platform, biometric_enabled, biometric_enrolled_at, created_at, updated_at) ON user_device TO diag_access;
+CREATE POLICY diag_read ON user_device FOR SELECT TO diag_access USING (true);
+-- user_memory
+GRANT SELECT (id, user_id, session_id, status, source, created_at, updated_at) ON user_memory TO diag_access;
+CREATE POLICY diag_read ON user_memory FOR SELECT TO diag_access USING (true);
+-- user_preferences
+GRANT SELECT (user_id, doc_schema_version, created_at, updated_at) ON user_preferences TO diag_access;
+CREATE POLICY diag_read ON user_preferences FOR SELECT TO diag_access USING (true);
 
 -- ---------------------------------------------------------------------------
 -- T8. Catalog assertions (plan step 20). The tables are empty (OD7 baseline),
@@ -2231,19 +2773,13 @@ BEGIN
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: envelope CHECK(s) (their DETAIL echoes the row): %', bad; END IF;
 
   -- work-k5fk.8: t_doc_schema validates exactly user_preferences and ai_memory, each with a
-  -- doc_schema_version; every name the trigger can derive has a version-1 schema.
+  -- doc_schema_version (the version-1 schema of every name the trigger can derive: T7a, read before FORCE).
   SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO bad FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
   WHERE t.tgname = 't_doc_schema';
   IF bad IS DISTINCT FROM 'ai_memory, user_preferences' THEN RAISE EXCEPTION 'step 20: t_doc_schema on %, expected ai_memory, user_preferences', bad; END IF;
   SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad FROM information_schema.columns
   WHERE table_schema = 'public' AND column_name = 'doc_schema_version';
   IF bad IS DISTINCT FROM 'ai_memory, user_preferences' THEN RAISE EXCEPTION 'step 20: doc_schema_version on %, expected ai_memory, user_preferences', bad; END IF;
-  SELECT string_agg(x.name, ', ' ORDER BY x.name) INTO bad
-  FROM (SELECT 'user_preferences' AS name UNION ALL SELECT 'ai_memory.' || lower(e::text) FROM unnest(enum_range(NULL::ai_memory_kind)) e) x
-  WHERE NOT EXISTS (SELECT 1 FROM app.json_schema j WHERE j.name = x.name AND j.version = 1);
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: no version-1 json_schema for: %', bad; END IF;
-  SELECT count(*) INTO n FROM app.json_schema;
-  IF n <> 4 THEN RAISE EXCEPTION 'step 20: % json_schema rows, expected 4', n; END IF;
 
   -- Every uuid column of a table is a uuid7 (tables.sql): 32 primary keys
   -- defaulting to uuidv7() and the 103 columns that reference them.
@@ -2309,11 +2845,13 @@ BEGIN
   SELECT count(*) INTO n FROM pg_trigger WHERE tgname = 'touch_updated_at';
   IF n <> 34 THEN RAISE EXCEPTION 'step 20: % touch_updated_at triggers, expected 34', n; END IF;
 
-  -- Views are security_invoker.
-  SELECT string_agg(c.relname, ', ') INTO bad
+  -- Views are security_invoker, in every schema that is not PostgreSQL's own (review 9c F4), and there is no
+  -- materialized view: it stores rows its readers get with no row-level security at all.
+  SELECT string_agg(c.oid::regclass::text, ', ') INTO bad
   FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace
-  WHERE s.nspname = 'public' AND c.relkind = 'v' AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false);
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: view(s) without security_invoker: %', bad; END IF;
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_(toast|temp_|toast_temp_)'
+    AND ((c.relkind = 'v' AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false)) OR c.relkind = 'm');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: view(s) without security_invoker, or materialized view(s): %', bad; END IF;
 
   -- Every SECURITY DEFINER function and every trigger function in schema app
   -- pins search_path with pg_temp last (C1/I4: no temp-object shadowing).
@@ -2335,12 +2873,17 @@ BEGIN
   -- job_access are retired (work-k5fk.10.5, §7 row 9b). Roles are cluster-level (infra/aws/roles.sql, init-db.sh), so
   -- these read the cluster as the migration finds it and refuse a baseline over a cluster that drifted.
   DECLARE
-    v_logins CONSTANT text[] := ARRAY['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician'];
+    -- slam_bot_readonly / diag_access: the operations bot (work-k5fk.10.30, T7c).
+    v_logins CONSTANT text[] := ARRAY['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician',
+                                      'slam_bot_readonly'];
     v_caps   CONSTANT text[] := ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access',
-                                      'clinician_access'];
+                                      'clinician_access', 'diag_access'];
+    -- LOGIN or not: the bot logs in where it is deployed (production), and exists NOLOGIN elsewhere (roles.sql).
+    v_either CONSTANT text[] := ARRAY['slam_bot_readonly'];
     -- Reserved (review 9a F4): NOLOGIN until the clinician portal (Q18) uses it. mwf_ai and mwf_worker log in since
     -- §7 row 9b gave them their call sites.
     v_reserved CONSTANT text[] := ARRAY['mwf_clinician'];
+    v_reserved_caps CONSTANT text[] := ARRAY['clinician_access'];
     -- What the definer bodies write (T4/T5; review 9a F3): mwf_definer's INSERT / UPDATE / DELETE grants, exactly.
     -- Reads are pinned by app-grants.target.test.ts's privilege matrix; a write beyond these widens what a
     -- definer bug, or an injection into one, can change.
@@ -2396,7 +2939,7 @@ BEGIN
            (SELECT string_agg(r.rolname, '+' ORDER BY r.rolname) FROM pg_roles r
             WHERE r.oid <> lr.oid AND pg_has_role(lr.oid, r.oid, 'MEMBER')), 'nothing'), ', ' ORDER BY l.login) INTO bad
   FROM unnest(v_logins, v_caps) AS l(login, capability) JOIN pg_roles lr ON lr.rolname = l.login
-  WHERE lr.rolcanlogin = (l.login = ANY (v_reserved))
+  WHERE (lr.rolcanlogin = (l.login = ANY (v_reserved)) AND NOT l.login = ANY (v_either))
      OR lr.rolsuper OR lr.rolbypassrls OR lr.rolcreaterole OR lr.rolcreatedb OR lr.rolreplication
      OR ARRAY(SELECT r.rolname::text FROM pg_roles r WHERE r.oid <> lr.oid AND pg_has_role(lr.oid, r.oid, 'MEMBER'))
         IS DISTINCT FROM ARRAY[l.capability::text]
@@ -2424,18 +2967,32 @@ BEGIN
   END IF;
 
   -- Review 9a F3: no runtime login, capability or mwf_definer may CREATE in the database or in schema public / app
-  -- (directly or inherited), and a runtime login or capability holds no ACL entry on the database but CONNECT.
+  -- (directly or inherited). The database's own ACL (T7a; review 9a r3 L2, work-k5fk.10.6): a runtime login holds no
+  -- entry of its own, an active capability exactly CONNECT, clinician_access and mwf_definer nothing.
   SELECT string_agg(DISTINCT r.rolname, ', ') INTO bad
   FROM pg_roles r
   WHERE r.rolname IN (SELECT unnest(v_logins || v_caps) UNION ALL SELECT 'mwf_definer')
     AND (has_database_privilege(r.oid, current_database(), 'CREATE')
          OR has_schema_privilege(r.oid, 'public', 'CREATE') OR has_schema_privilege(r.oid, 'app', 'CREATE')
-         OR EXISTS (SELECT 1 FROM pg_database d, aclexplode(d.datacl) a
-                    WHERE d.datname = current_database() AND a.grantee = r.oid
-                      AND (a.privilege_type <> 'CONNECT' OR r.rolname IN (SELECT unnest(v_caps) UNION ALL SELECT 'mwf_definer'))));
+         OR ARRAY(SELECT a.privilege_type::text FROM pg_database d, aclexplode(d.datacl) a
+                  WHERE d.datname = current_database() AND a.grantee = r.oid ORDER BY 1)
+            IS DISTINCT FROM CASE WHEN r.rolname = ANY (v_caps) AND NOT r.rolname = ANY (v_reserved_caps)
+                                  THEN ARRAY['CONNECT'] ELSE ARRAY[]::text[] END);
   IF bad IS NOT NULL THEN
-    RAISE EXCEPTION 'step 20: role(s) that may CREATE in the database or schema public/app, or hold a database grant: %', bad;
+    RAISE EXCEPTION 'step 20: role(s) that may CREATE in the database or schema public/app, or whose database ACL entry is not exactly CONNECT for an active capability and nothing otherwise: %', bad;
   END IF;
+  -- And nobody else (review 9c F4): the database's ACL names only its owner and the active capabilities — not
+  -- PUBLIC (grantee 0: no CONNECT, no TEMPORARY), no login, no other role. An unset ACL is PostgreSQL's default,
+  -- which grants PUBLIC both.
+  SELECT CASE WHEN d.datacl IS NULL THEN 'PUBLIC: the default ACL (CONNECT, TEMPORARY)'
+              ELSE (SELECT string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+                                      || ' ' || a.privilege_type, ', ' ORDER BY 1)
+                    FROM aclexplode(d.datacl) a
+                    WHERE a.grantee <> d.datdba
+                      AND NOT (pg_get_userbyid(a.grantee) = ANY (v_caps) AND NOT pg_get_userbyid(a.grantee) = ANY (v_reserved_caps)
+                               AND a.privilege_type = 'CONNECT')) END
+  INTO bad FROM pg_database d WHERE d.datname = current_database();
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: database ACL entries beyond the owner and the capabilities'' CONNECT: %', bad; END IF;
 
   -- Review 9a F3: no runtime login or capability may EXECUTE app.next_message_seq (the counter; t_message_seq is its
   -- one caller) or any trigger function (EXECUTE is checked only at CREATE TRIGGER; a definer trigger function
@@ -2563,6 +3120,60 @@ BEGIN
   WHERE NOT r.rolsuper AND r.rolname <> 'mwf_definer' AND r.rolname !~ '^pg_' AND NOT pg_has_role(r.oid, c.relowner, 'USAGE')
     AND has_column_privilege(r.oid, c.oid, 'next_seq', 'UPDATE');
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) other than mwf_definer that may UPDATE conversation.next_seq: %', bad; END IF;
+
+  -- Row-level security (work-k5fk.10.6; §6 layer 3, Q8; T7b). Every table in public / app has it ENABLED and FORCED
+  -- (the owner is held to the policies too) — all but _prisma_migrations, Prisma's bookkeeping, which no runtime role
+  -- or capability may hold any privilege on.
+  SELECT string_agg(c.oid::regclass::text, ', ' ORDER BY c.oid::regclass::text) INTO bad
+  FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_(toast|temp_|toast_temp_)' AND c.relkind IN ('r', 'p', 'f')
+    AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
+    AND NOT (s.nspname = 'public' AND c.relname = '_prisma_migrations');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: table(s) without row-level security enabled and forced: %', bad; END IF;
+  -- _prisma_migrations has no RLS: only diag_access may read it, and only its bookkeeping columns (T7c).
+  SELECT string_agg(DISTINCT r.rolname, ', ') INTO bad
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
+  WHERE n.nspname = 'public' AND c.relname = '_prisma_migrations'
+    AND r.rolname IN (SELECT unnest(v_logins || v_caps) UNION ALL SELECT 'mwf_definer')
+    AND (has_table_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+         OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE, REFERENCES')
+         OR (NOT pg_has_role(r.oid, 'diag_access', 'USAGE') AND has_any_column_privilege(r.oid, c.oid, 'SELECT'))
+         OR has_column_privilege(r.oid, c.oid, 'checksum', 'SELECT') OR has_column_privilege(r.oid, c.oid, 'logs', 'SELECT'));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) with a privilege on _prisma_migrations (it has no RLS): %', bad; END IF;
+  -- TRUNCATE ignores row-level security: no runtime login, capability or mwf_definer holds it anywhere (review 9c F4).
+  SELECT string_agg(DISTINCT r.rolname || ' ' || c.oid::regclass::text, ', ') INTO bad
+  FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace CROSS JOIN pg_roles r
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_(toast|temp_|toast_temp_)' AND c.relkind IN ('r', 'p', 'f')
+    AND r.rolname IN (SELECT unnest(v_logins || v_caps) UNION ALL SELECT 'mwf_definer')
+    AND has_table_privilege(r.oid, c.oid, 'TRUNCATE');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) that may TRUNCATE (RLS does not apply to it): %', bad; END IF;
+  -- Every command a capability or mwf_definer holds on a table (table- or column-level grant) is covered by a
+  -- permissive policy naming that role for that command or ALL: under FORCE a grant with no policy is dead, and a
+  -- grant added later must come with its policy (capability:table:command).
+  SELECT string_agg(w.role || ':' || w.rel || ':' || w.cmd, ', ' ORDER BY w.role, w.rel, w.cmd) INTO bad
+  FROM (
+    SELECT DISTINCT r.oid AS roleoid, r.rolname::text AS role, c.oid AS reloid, c.oid::regclass::text AS rel, e.cmd, e.code
+    FROM pg_roles r CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    CROSS JOIN (VALUES ('SELECT', 'r'), ('INSERT', 'a'), ('UPDATE', 'w'), ('DELETE', 'd')) e(cmd, code)
+    WHERE r.rolname IN (SELECT unnest(v_caps) UNION ALL SELECT 'mwf_definer')
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_|toast_temp_)'
+      AND c.relkind IN ('r', 'p', 'f') AND NOT (n.nspname = 'public' AND c.relname = '_prisma_migrations')
+      AND (EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type = e.cmd)
+           OR EXISTS (SELECT 1 FROM pg_attribute att, aclexplode(att.attacl) a
+                      WHERE att.attrelid = c.oid AND a.grantee = r.oid AND a.privilege_type = e.cmd))
+  ) w
+  WHERE NOT EXISTS (SELECT 1 FROM pg_policy pol
+                    WHERE pol.polrelid = w.reloid AND pol.polpermissive AND w.roleoid = ANY (pol.polroles)
+                      AND pol.polcmd IN ('*', w.code::"char"));
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'step 20: grant(s) with no policy for that command (capability:table:command): %', bad;
+  END IF;
+  -- Policies name capabilities or mwf_definer, never PUBLIC, a login or the owner (Q16).
+  SELECT string_agg(pol.polname || ' ON ' || pol.polrelid::regclass::text, ', ' ORDER BY pol.polname, pol.polrelid::regclass::text) INTO bad
+  FROM pg_policy pol
+  WHERE EXISTS (SELECT 1 FROM unnest(pol.polroles) x(oid)
+                WHERE x.oid = 0 OR pg_get_userbyid(x.oid) NOT IN (SELECT unnest(v_caps) UNION ALL SELECT 'mwf_definer'));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: policy(ies) for a role other than a capability or mwf_definer: %', bad; END IF;
   END;
 
   -- work-k5fk.4 (k5fk.21, .23): the column-list SET NULL keys, which Prisma reads as plain SetNull — so the
@@ -2582,8 +3193,5 @@ BEGIN
         WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass) <> 1;
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: expected exactly one key: %', bad; END IF;
 
-  -- The milestone seed is in.
-  SELECT count(*) INTO n FROM milestone;
-  IF n <> 13 THEN RAISE EXCEPTION 'step 20: % milestone rows, expected 13', n; END IF;
 END
 $$;

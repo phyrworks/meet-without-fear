@@ -1,0 +1,17 @@
+# The database image: the pinned pgvector PostgreSQL 18 image plus pgaudit (design note §6, owner
+# decision Q17; work-k5fk.10.6) and the TLS entrypoint wrapper (db-entrypoint.sh). Built on the host
+# by build-db-image.sh, which tags it with the hash of this file and the wrapper and writes that
+# tag to DB_IMAGE in /etc/mwf/release.env (README "Database image").
+#
+# The base is the digest in images.env.example (DB_BASE_IMAGE). pgaudit comes from the PGDG apt
+# repository the official image already trusts; its version is pinned so a rebuild cannot move it.
+ARG DB_BASE_IMAGE
+FROM ${DB_BASE_IMAGE}
+ARG PGAUDIT_VERSION=18.0-3.pgdg12+2
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends "postgresql-18-pgaudit=${PGAUDIT_VERSION}" \
+ && rm -rf /var/lib/apt/lists/*
+COPY db-entrypoint.sh /usr/local/bin/mwf-db-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/mwf-db-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/mwf-db-entrypoint.sh"]
+CMD ["postgres"]

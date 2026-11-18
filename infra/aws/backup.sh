@@ -9,7 +9,9 @@ flock -n 8 || { echo 'Backup already running' >&2; exit 1; }
 work=$(mktemp -d /var/lib/mwf/backup.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 stamp=$(date -u +%Y%m%dT%H%M%SZ)-$(cat /proc/sys/kernel/random/uuid)
-compose exec -T db pg_dump -U postgres -d mwf --format=custom --no-owner --no-acl > "$work/database.dump"
+# Owners and ACLs are kept (work-k5fk.10.6 review F2): the target shape's grants, the definer functions'
+# owner and the row-level policies are part of the schema, and restore.sh replays them as the superuser.
+compose exec -T db pg_dump -U postgres -d mwf --format=custom > "$work/database.dump"
 compose exec -T db pg_restore --list < "$work/database.dump" > /dev/null
 (cd "$work" && sha256sum database.dump > SHA256SUMS)
 version=$(printf 'SHOW server_version;\n' | dbsql | sed -n '3p' | xargs)

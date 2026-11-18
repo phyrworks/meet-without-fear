@@ -97,6 +97,8 @@ coordination/memory_bank/*
 coordination/subtasks/*
 coordination/orchestration/*
 *.db
+# the database image's Dockerfile (work-k5fk.10.6), not a database file
+!infra/aws/Dockerfile.db
 *.db-journal
 *.db-wal
 *.sqlite
@@ -153,6 +155,7 @@ backend/src/testing/golden/.smoke*.ts
 
 # Local production replica: generated env files, build context, web export
 infra/local/.local/
+infra/local/.local-*/
 
 # AWS deployment: secrets, state, plans, backups, and local build contexts
 infra/aws/.local/

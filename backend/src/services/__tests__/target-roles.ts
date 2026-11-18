@@ -38,8 +38,20 @@ export function authUrlFor(t: { host: string; port: number }, database: string):
   return `postgresql://mwf_auth:${pw}@${t.host}:${t.port}/${database}`;
 }
 
-/** The logins a target test connects as. */
-export type RunRole = 'mwf_app' | 'mwf_auth' | 'mwf_ai' | 'mwf_worker';
+/** The dashboard role on a run database (dev password; GOLDEN_OPS_PASSWORD overrides). work-k5fk.10.6. */
+export function opsUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_OPS_PASSWORD ?? 'mwf_ops_dev');
+  return `postgresql://mwf_ops:${pw}@${t.host}:${t.port}/${database}`;
+}
+
+/** The owner (migrations only) on a run database (dev password, as target-baseline.ts migratorTarget). */
+export function migratorUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_MIGRATOR_PASSWORD ?? process.env.MIGRATOR_PASSWORD ?? 'mwf_migrator_dev');
+  return `postgresql://mwf_migrator:${pw}@${t.host}:${t.port}/${database}`;
+}
+
+/** The logins a target test connects as (mwf_ops and the owner mwf_migrator: work-k5fk.10.6's RLS cases). */
+export type RunRole = 'mwf_app' | 'mwf_auth' | 'mwf_ai' | 'mwf_worker' | 'mwf_ops' | 'mwf_migrator';
 
 export interface TargetRun {
   fx: RestoredFixture;
@@ -86,7 +98,11 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
           ? authUrlFor(fx.target, fx.database)
           : role === 'mwf_ai'
             ? aiUrlFor(fx.target, fx.database)
-            : workerUrlFor(fx.target, fx.database);
+            : role === 'mwf_ops'
+              ? opsUrlFor(fx.target, fx.database)
+              : role === 'mwf_migrator'
+                ? migratorUrlFor(fx.target, fx.database)
+                : workerUrlFor(fx.target, fx.database);
     const c = new Client({ connectionString: url });
     await c.connect();
     try {

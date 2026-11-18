@@ -25,9 +25,11 @@ Lightsail prepends a `/bin/sh` wrapper to user data; Terraform explicitly invoke
 
 `bootstrap.sh` installs Docker, AWS CLI, unattended security updates, bounded logs and 2 GB swap. Automatic reboots are disabled. Copy this directory's runtime files into root-owned `/opt/mwf` (exclude `.local`, Terraform state/config and `.terraform`). Create root-only `/etc/mwf` files:
 
-- `application.env`: exact production integration settings; `DATABASE_URL` uses non-superuser `mwf_app` at `db:5432/mwf`, with `connection_limit=12`. On the target shape (work-k5fk.1) it also needs `AUTH_DATABASE_URL` = `mwf_auth` at the same `db:5432/mwf` with `connection_limit=12`, the app pool's size: every Clerk-signed request resolves its user on that pool (`app.resolve_user`), and the API's startup check opens it. Since work-k5fk.10.5 it also needs `AI_DATABASE_URL` (`mwf_ai`) and `WORKER_DATABASE_URL` (`mwf_worker`), which never fall back to `DATABASE_URL`, and `DB_IDENTITY_BINDING=on`: the API refuses to start without any of them. Preserve encryption keys and production Bedrock settings. No local development settings.
+- `application.env`: exact production integration settings and the runtime role URLs, never the migrator's. Every URL is at `db:5432/mwf` and ends in `sslmode=verify-full&sslrootcert=/etc/mwf-db-tls/ca.crt` (work-k5fk.10.6: `pg_hba.conf` accepts TCP clients over `hostssl` only, and the API verifies the server against the CA `db-tls.sh` made; compose mounts it there). `DATABASE_URL` and `APP_DATABASE_URL` are `mwf_app` with `connection_limit=12`; `AUTH_DATABASE_URL` = `mwf_auth` with `connection_limit=12`, the app pool's size: every Clerk-signed request resolves its user on that pool (`app.resolve_user`), and the API's startup check opens it. Since work-k5fk.10.5 it also needs `AI_DATABASE_URL` (`mwf_ai`) and `WORKER_DATABASE_URL` (`mwf_worker`), which never fall back to `DATABASE_URL`, and `DB_IDENTITY_BINDING=on`: the API refuses to start without any of them. Preserve encryption keys and production Bedrock settings. No local development settings.
+- `migrator.env` (work-k5fk.10.6): one line, `MIGRATOR_DATABASE_URL=postgresql://mwf_migrator:<MIGRATOR_DB_PASSWORD>@db:5432/mwf?sslmode=require&sslcert=/etc/mwf-db-tls/ca.crt&sslaccept=strict` (Prisma's schema engine: encrypted, chain and host name checked against the CA). Only `deploy.sh` reads it, for the migration container; `pg_hba.conf` admits `mwf_migrator` from that container's address only.
+- `db-tls/`: the database's CA and server certificate, from `sudo /opt/mwf/db-tls.sh` (once; delete the directory to rotate). `ca.key` stays here; the API mounts only `ca.crt`.
 - `database.env`: `POSTGRES_USER=postgres`, random `POSTGRES_PASSWORD`, `POSTGRES_DB=mwf`, random `APP_DB_PASSWORD`, random `READONLY_DB_PASSWORD`, and random `MIGRATOR_DB_PASSWORD`, `AI_DB_PASSWORD`, `WORKER_DB_PASSWORD`, `OPS_DB_PASSWORD`, `AUTH_DB_PASSWORD` for the Phase 3 logins (`init-db.sh` creates them with the NOLOGIN capability roles and `mwf_definer` (work-k5fk.10.4) on a fresh cluster; an existing cluster gets them from `roles.sql`, run by the operator over the SSH tunnel as `postgres` before the first release containing migration `phase3_app_schema_helpers`; that run also retires `mwf_job` / `job_access` (work-k5fk.10.5) and stops, naming the database, while either still owns an object or holds a privilege in another database).
-- `release.env`: pinned `DB_IMAGE`, `CADDY_IMAGE` from `images.env.example`, and immutable `APP_IMAGE`.
+- `release.env`: pinned `DB_BASE_IMAGE`, `CADDY_IMAGE` from `images.env.example`, immutable `APP_IMAGE`, and `DB_IMAGE`, which `sudo /opt/mwf/build-db-image.sh` writes: `mwf-db:<hash>`, the base plus pgaudit and the TLS entrypoint (`Dockerfile.db`, `db-entrypoint.sh`). Re-run it after changing `DB_BASE_IMAGE`; the database moves to a new image only on `compose up -d db` (a restart).
 - `operations.env`: `BACKUP_BUCKET` and `AWS_DEFAULT_REGION=us-west-2`.
 - `backup.credentials`: AWS credentials-file format for Terraform's backup user (PutObject on nightly/preserved only).
 - `release.credentials`: credentials for the release reader (GetObject on releases, PutObject on release status only).
@@ -56,6 +58,47 @@ ssh -i /path/to/operator-key -L 15432:127.0.0.1:5432 -L 18080:127.0.0.1:8080 ubu
 
 The bot uses `slam_bot_readonly` over its own restricted SSH tunnel (`bot-db-tunnel.service`). The server account `mwf-tunnel` has no shell and can forward only to loopback port 5432. Recreate the account, authorized key and SSH Match configuration from the protected configuration backup on recovery. Dashboard users connect through the existing API hostname. Update the operator CIDR with Terraform when the operator IP changes.
 
+## Cutover to the target shape: ownership, TLS, per-role access, pgaudit (work-k5fk.10.6)
+
+Design note §6 / §7 row 9c (owner decisions Q8, Q17). One maintenance window, the API stopped, with
+the target-shape release in hand. Until it is done, `deploy.sh`'s role-guard preflight refuses any
+target-shape image (the database is `mwf_app`'s) and the old release keeps running. Nothing here
+runs automatically; rehearse it on the local replica first (`docs/deployment/local-replica.md`).
+
+1. Install the new runtime files into `/opt/mwf` (the release bundle carries them; `release-poll.sh`
+   installs them, or copy them by hand): `compose.yaml`, `pg_hba.conf`, `ownership.sql`, `db-tls.sh`,
+   `Dockerfile.db`, `db-entrypoint.sh`, `build-db-image.sh`, `deploy.sh`.
+2. `sudo touch /etc/mwf/deploy-paused`, then `sudo /opt/mwf/backup.sh preserved`. Either `backup.sh` is
+   fine here: an old-shape archive restores the old way whatever its flags — `restore.sh` tells the
+   shapes apart by `app.json_schema` (target) vs `public."User"` (old), refuses an archive with
+   neither or both, and restores the old shape with `--no-owner --no-acl` as `mwf_app` (rehearsed
+   with both dump forms, work-k5fk.10.6 review r2).
+3. `sudo /opt/mwf/db-tls.sh` and `sudo /opt/mwf/build-db-image.sh` (writes `DB_IMAGE`).
+4. Write `/etc/mwf/migrator.env` (mode 0600) and rewrite `application.env`'s URLs with the TLS
+   suffix (above). Add `DB_BASE_IMAGE` to `release.env` from `images.env.example`.
+5. Over the SSH tunnel as `postgres`: `roles.sql` (as before), then the cutover proper,
+   `drop-old-objects.sql` (plan §6).
+6. Recreate the stack on the new networks and image: `compose down` (**never** `-v`), then
+   `compose up -d db` and wait for healthy. The `database` and `admin` networks now have pinned
+   subnets, which Docker applies only to a new network. Check
+   `compose exec -T db psql -U postgres -d mwf -Atc "SHOW ssl; SHOW shared_preload_libraries"`
+   (`on`, `pgaudit`). Then `compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d mwf -f - < /opt/mwf/ownership.sql`:
+   `mwf_migrator` owns the database and schema `public`, PUBLIC loses CONNECT / TEMPORARY, the
+   capabilities get CONNECT, `slam_bot_readonly` keeps its own, pgaudit's extension and the
+   per-role `pgaudit.log`. It is idempotent; it refuses (changing nothing) without pgaudit loaded.
+7. `sudo rm /etc/mwf/deploy-paused` and deploy the target-shape release (`deploy.sh` runs the
+   preflight over TLS, migrates as `mwf_migrator` from 172.29.1.4, starts the API).
+8. Verify: `ops-health.sh`; the bot tunnel still answers (`prod-query.py 'SELECT 1'`); a plain-text
+   connection is refused (`psql "sslmode=disable host=127.0.0.1 port=15432 user=postgres"` through
+   the tunnel: `no pg_hba.conf entry … no encryption`); `compose logs db | grep AUDIT` shows the
+   migration's statements as `mwf_migrator` and none of `mwf_app`'s.
+
+What the bot sees afterwards (owner decision 2026-11-17, work-k5fk.10.30): `slam_bot_readonly` is a
+member of the capability `diag_access` only (`roles.sql`); `ownership.sql` withdraws its old direct
+CONNECT, USAGE, table SELECTs and default ACLs. It reads every row, but only the id, status, kind,
+stage, count, flag and timestamp columns (trailer T7c), and `_prisma_migrations`' bookkeeping columns:
+no content, names, emails, keys or push tokens (`bot-workspaces/shared/diagnostics/check-db.md`).
+
 ## Back up and restore
 
 ```sh
@@ -64,7 +107,7 @@ sudo /opt/mwf/backup.sh preserved  # before migration or maintenance
 sudo systemctl list-timers mwf-backup.timer
 ```
 
-Backups are custom-format `pg_dump` files, checked for readability, SHA-256 checksummed, and uploaded with timestamp, source release and migration metadata. Successful upload of every file precedes the last-success record. Nightly retention is 7 days; preserved/final Render backups 30 days; old object versions also expire. The timer runs around 10:00 UTC, catches missed runs and uses a lock. `ops-health.sh` fails at 26 hours without success. Temporary files are cleaned on exit. Check backup-service failures in the journal.
+Backups are custom-format `pg_dump` files with owners and ACLs (work-k5fk.10.6: the target shape's grants, definer ownership and row-level policies are schema; `restore.sh` replays them as the superuser into a database owned by `mwf_migrator`, data loaded with triggers off, then runs `ownership.sql`; it refuses a target-shape archive without ACLs and needs every role of `roles.sql` on the cluster first; an old-shape archive restores as before, owned by `mwf_app`), checked for readability, SHA-256 checksummed, and uploaded with timestamp, source release and migration metadata. Successful upload of every file precedes the last-success record. Nightly retention is 7 days; preserved/final Render backups 30 days; old object versions also expire. The timer runs around 10:00 UTC, catches missed runs and uses a lock. `ops-health.sh` fails at 26 hours without success. Temporary files are cleaned on exit. Check backup-service failures in the journal.
 
 Use operator AWS credentials to download `database.dump`, `SHA256SUMS`, and `metadata.json` from one prefix, then securely copy them to the host. The host's backup credential intentionally cannot download backups.
 
@@ -94,7 +137,7 @@ For full server loss: provision a replacement (deliberately address `prevent_des
 migration). It checks every runtime role URL and refuses a superuser, BYPASSRLS, CREATEROLE/CREATEDB/
 REPLICATION login, a member of any role, the database owner, CREATE on the database or on schema
 `public`/`app`, SET on `session_replication_role`, or ownership of any object — then the deploy stops
-and the previous release keeps running. Today's production database (owned by `mwf_app`) is refused until the design note §7 row 9c cutover; that is intended. Rolling back:
+and the previous release keeps running. A database still owned by `mwf_app` is refused until the cutover above; that is intended. Rolling back:
 - to an image **with** the preflight: it runs as for any deploy;
 - to an image that **predates** the guard (no `dist/backend/src/lib/prisma-role-guard.js`): `deploy.sh`
   warns and skips the preflight — that image has no startup role check, so it cannot crash-loop on

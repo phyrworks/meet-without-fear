@@ -104,7 +104,10 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
   });
 
   it('the circuit breaker counts resubmissions as rounds − 1 (RefinementAttemptCounter → rounds)', async () => {
-    const { checkAttempts } = await import('../reconciler/circuit-breaker');
+    const { checkAttempts: check } = await import('../reconciler/circuit-breaker');
+    const { withSessionScope } = await import('../../lib/request-context');
+    // The reconciler reads as the AI, scoped to the session (a seated request's, here explicit).
+    const checkAttempts: typeof check = (s, a, b) => withSessionScope(s, () => check(s, a, b));
     expect(await checkAttempts(ada.sessionId, ada.userId, bob.userId)).toEqual({
       shouldSkipReconciler: false,
       attempts: 1,

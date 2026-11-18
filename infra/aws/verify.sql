@@ -16,5 +16,16 @@ BEGIN
   END IF;
 END
 $$;
-SELECT id, "createdAt" FROM "User" ORDER BY id LIMIT 1;
-SELECT id, "sessionId" FROM "Message" ORDER BY id LIMIT 1;
+-- A representative read on whichever shape this is (work-k5fk.10.6: the target shape has no "User" / "Message").
+SELECT CASE WHEN to_regclass('public."User"') IS NOT NULL
+            THEN 'SELECT id, "createdAt" FROM "User" ORDER BY id LIMIT 1'
+            ELSE 'SELECT id, created_at FROM "user" ORDER BY id LIMIT 1' END \gexec
+SELECT CASE WHEN to_regclass('public."Message"') IS NOT NULL
+            THEN 'SELECT id, "sessionId" FROM "Message" ORDER BY id LIMIT 1'
+            ELSE 'SELECT conversation_id, seq, session_id FROM message ORDER BY conversation_id, seq LIMIT 1' END \gexec
+-- Target shape: every table still has row-level security enabled and forced, and policies exist.
+SELECT count(*) FILTER (WHERE NOT (c.relrowsecurity AND c.relforcerowsecurity)) AS tables_without_forced_rls,
+       (SELECT count(*) FROM pg_policy) AS policies
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname IN ('public', 'app') AND c.relkind = 'r' AND c.relname <> '_prisma_migrations'
+  AND to_regnamespace('app') IS NOT NULL;

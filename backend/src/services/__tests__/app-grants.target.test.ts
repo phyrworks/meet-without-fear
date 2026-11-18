@@ -247,6 +247,37 @@ describeTarget('mwf_app grants (target)', () => {
     );
     expect([...rows, ...owners].map(r => r.line).join('\n')).toMatchSnapshot();
   });
+
+  // work-k5fk.10.30: the operations bot's capability — column SELECTs only (trailer T7c). Recorded on its own so
+  // the matrices above did not move.
+  it('the diag_access (slam_bot_readonly) privilege matrix is exactly the recorded one', async () => {
+    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [['diag_access']]);
+    expect(rows.map(r => r.line).join('\n')).toMatchSnapshot();
+  });
+
+  // work-k5fk.10.6 review F3: step 20 proves every grant has a policy, not what the policy says. This pins what
+  // each one says — table, name, command, permissive, roles, USING and WITH CHECK — and every table's RLS flags,
+  // so a widened predicate (ai_session to USING (true)) or an extra permissive policy shows up as a diff, and the
+  // rewrites of rows 9d–9g are reviewed as one. Update deliberately (jest -u).
+  it('every row-level policy, and every table’s RLS flags, are exactly the recorded ones', async () => {
+    const rows = await run.sql<{ line: string }>(
+      `SELECT line FROM (
+         SELECT c.oid::regclass::text || ' [rls ' || c.relrowsecurity || ', force ' || c.relforcerowsecurity || ']' AS line
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname IN ('public', 'app') AND c.relkind IN ('r', 'p')
+         UNION ALL
+         SELECT pol.polrelid::regclass::text || ' ' || pol.polname || ' FOR '
+                || CASE pol.polcmd WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE'
+                                   WHEN 'd' THEN 'DELETE' ELSE 'ALL' END
+                || CASE WHEN pol.polpermissive THEN '' ELSE ' RESTRICTIVE' END
+                || ' TO ' || (SELECT string_agg(CASE WHEN x = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x) END, ',' ORDER BY 1)
+                              FROM unnest(pol.polroles) x)
+                || ' USING (' || coalesce(pg_get_expr(pol.polqual, pol.polrelid), '-') || ')'
+                || ' CHECK (' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '-') || ')'
+         FROM pg_policy pol) x ORDER BY line`,
+    );
+    expect(rows.map(r => r.line).join('\n')).toMatchSnapshot();
+  });
 });
 
 /**

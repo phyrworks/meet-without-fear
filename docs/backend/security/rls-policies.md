@@ -11,6 +11,35 @@ model today. Data isolation is enforced in application code with authenticated
 request context, explicit Prisma filters, relationship/session membership
 checks, consent checks, and stage retrieval contracts.
 
+## On the target shape (`phoenix/target-shape`, work-k5fk.10.6)
+
+The target baseline (`backend/scripts/target-shape/trailer.sql` T7) turns RLS on for real — what
+the "Future RLS Requirements" below asked for. Until it reaches `main`, the sections after this one
+describe production.
+
+- **Every table** in `public` / `app` has `ENABLE` + `FORCE ROW LEVEL SECURITY`, except Prisma's
+  `_prisma_migrations` (granted to nobody). The owner `mwf_migrator` is held to the policies too
+  and has none, so by default it reads no row — a default, not a control: as owner it can lift FORCE
+  or `SET ROLE mwf_definer`. What holds it is `pg_hba.conf` (deploy step only) and pgaudit (every
+  statement logged). Superusers bypass RLS (break-glass only).
+- `diag_access` (the bot, `slam_bot_readonly`) — `diag_read`: every row, but SELECT only on id,
+  status, kind, stage, count, flag and timestamp columns (T7c). No content, names, emails, keys or
+  push tokens (work-k5fk.10.30).
+- **Policies target capability roles** (`app_access`, `ai_access`, `worker_access`, `ops_access`,
+  `mwf_definer`), never logins. Step 20 refuses a baseline where a capability holds a command on a
+  table without a policy covering it, or a policy names PUBLIC / a login.
+- `app_access` — `app_interim` (`USING (true)`) on every table it holds a grant on: exactly its
+  pre-RLS reach, so no request moved (the goldens are the proof). Rows 9d–9g of the design note
+  replace each with the per-table predicates (own rows, membership).
+- `ai_access` — `ai_session`: rows of the session in `app.session_scope` only; with no scope, none.
+  `"user"`: that session's participants; `brain_activity`: also sessionless rows (inner work).
+- `worker_access` — `worker_session` (scoped) on the Stage 4 closure's tables and on the follow-ups it
+  schedules; `worker_all` elsewhere (retention, due follow-ups / reminders, push tokens cross sessions).
+- `ops_access` — `ops_read`: SELECT on every row of its tables. `mwf_definer` — `definer_all`.
+- The database's ACL: PUBLIC has no CONNECT / TEMPORARY; the active capabilities have CONNECT.
+- Tests: `retire-mwf-job.target.test.ts` ("row-level security (9c)") and `job-path.target.test.ts`
+  pin the scoped reads, the owner reading nothing and the dashboard's reach.
+
 ## Current Status
 
 Migration `20260430000000_remove_unenforced_rls` disables the previously created

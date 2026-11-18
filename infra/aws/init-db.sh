@@ -5,7 +5,8 @@ set -euo pipefail
 # says what each role is for. No mwf_* or *_access role is SUPERUSER or
 # BYPASSRLS. work-k5fk.10.4 (design note §6): grants target NOLOGIN capability
 # roles; each runtime login is a member of exactly one (INHERIT, no SET/ADMIN);
-# mwf_definer (NOLOGIN) owns the SECURITY DEFINER functions.
+# mwf_definer (NOLOGIN) owns the SECURITY DEFINER functions. ownership.sql (20-mwf-ownership.sql,
+# after this) makes mwf_migrator the owner of the database and schema public (work-k5fk.10.6).
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --set=app_password="$APP_DB_PASSWORD" --set=readonly_password="$READONLY_DB_PASSWORD" \
   --set=migrator_password="$MIGRATOR_DB_PASSWORD" --set=ai_password="$AI_DB_PASSWORD" \
@@ -36,11 +37,12 @@ GRANT clinician_access TO mwf_clinician WITH INHERIT TRUE, SET FALSE;
 -- The target baseline hands its definer helpers to mwf_definer (ALTER FUNCTION
 -- ... OWNER TO), which needs SET ROLE mwf_definer; no inheritance.
 GRANT mwf_definer TO mwf_migrator WITH INHERIT FALSE, SET TRUE;
-CREATE ROLE slam_bot_readonly LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'readonly_password';
-ALTER DATABASE mwf OWNER TO mwf_app;
+CREATE ROLE slam_bot_readonly LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'readonly_password';
+-- The bot's one capability (work-k5fk.10.30: diagnostics, no content; its grants and policies are the baseline's T7c).
+CREATE ROLE diag_access NOLOGIN;
+GRANT diag_access TO slam_bot_readonly WITH INHERIT TRUE, SET FALSE;
 CREATE EXTENSION IF NOT EXISTS vector;
-ALTER SCHEMA public OWNER TO mwf_app;
-GRANT CONNECT ON DATABASE mwf TO slam_bot_readonly;
-GRANT USAGE ON SCHEMA public TO slam_bot_readonly;
-ALTER DEFAULT PRIVILEGES FOR ROLE mwf_app IN SCHEMA public GRANT SELECT ON TABLES TO slam_bot_readonly;
+-- Ownership (mwf_migrator owns the database and schema public; work-k5fk.10.6, design note §6 layer 1),
+-- the database's ACL (CONNECT for the capabilities only) and pgaudit: ownership.sql,
+-- which the entrypoint runs next (20-mwf-ownership.sql) and an existing cluster runs at the cutover.
 SQL

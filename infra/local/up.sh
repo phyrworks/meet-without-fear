@@ -4,7 +4,8 @@
 #
 #   infra/local/up.sh
 #
-# Env: MWF_LOCAL_PORT (18180), MWF_LOCAL_DB_PORT (15433), MWF_LOCAL_ABLY_API_KEY
+# Env: MWF_LOCAL_INSTANCE (unset: the default replica; a name: a separate one, common.sh),
+#      MWF_LOCAL_PORT (18180), MWF_LOCAL_DB_PORT (15433), MWF_LOCAL_ABLY_API_KEY
 #      (optional; unset = the backend's mock Ably tokens), MWF_LOCAL_REBUILD=1
 #      (rebuild the image and web export even when their inputs are unchanged),
 #      MWF_LOCAL_APP_IMAGE (run this existing image instead of building one).
@@ -66,23 +67,41 @@ WORKER_DB_PASSWORD=$WORKER_DB_PASSWORD
 OPS_DB_PASSWORD=$OPS_DB_PASSWORD
 AUTH_DB_PASSWORD=$AUTH_DB_PASSWORD
 EOF
-# Production's application.env shape, at target-shape ownership (work-k5fk.10.3; production
-# reaches it at the design note row 9c cutover): DATABASE_URL is mwf_migrator, the owner — it runs
-# the migrations (step 5) and backs only the E2E tooling connection (lib/prisma
-# getE2EToolingPrisma; E2E_AUTH_BYPASS is on in the replica). Every runtime client has its own
-# least-privilege URL, which the role guard checks (step 4b, and the API at startup).
-# Per-role URLs and identity binding as on target-shape.
+# The database's TLS pair (infra/aws/db-tls.sh, as production; work-k5fk.10.6). Every runtime URL
+# verifies the server against ca.crt, mounted into the API at the path production uses.
+"$REPO/infra/aws/db-tls.sh" "$LOCAL/db-tls" | sed 's/^/   /'
+TLS='sslmode=verify-full&sslrootcert=/etc/mwf-db-tls/ca.crt'
+# pg_hba.conf: production's (infra/aws/pg_hba.conf) with this instance's subnets, plus one
+# replica-only line before the final refusals: the superuser from the API's address, for the E2E
+# tooling connection below.
+{
+  sed -n '/^# Everything else: refused/q;p' "$REPO/infra/aws/pg_hba.conf"
+  echo '# Replica only (infra/local/compose.yaml): the E2E tooling connection, the superuser from the API.'
+  echo "hostssl  mwf       postgres                                      172.29.1.3/32    scram-sha-256"
+  echo
+  sed -n '/^# Everything else: refused/,$p' "$REPO/infra/aws/pg_hba.conf"
+} | sed -e "s/172\.29\.1\./$NET.78./g" -e "s/172\.29\.2\./$NET.79./g" | write_if_changed "$LOCAL/pg_hba.conf"
+# The migrations' URL, as production's /etc/mwf/migrator.env (deploy.sh): never in application.env.
+write_if_changed "$LOCAL/migrator.env" <<EOF
+MIGRATOR_DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?sslmode=require&sslcert=/etc/mwf-db-tls/ca.crt&sslaccept=strict
+EOF
+# Production's application.env shape (infra/aws/README.md): every runtime client has its own
+# least-privilege URL, which the role guard checks (step 4b, and the API at startup), over TLS.
+# DATABASE_URL backs only the E2E tooling connection (lib/prisma getE2EToolingPrisma; E2E_AUTH_BYPASS
+# is on in the replica): the superuser here — it seeds and deletes what no request may, and the owner
+# mwf_migrator reads no row under FORCE ROW LEVEL SECURITY (work-k5fk.10.6). Production has no such
+# connection (its DATABASE_URL is the app's).
 # GOLDEN_SHAPE=target: the E2E seeder's shape detection reads
 # prisma/schema.prisma relative to src/, which does not exist under dist/ in
 # the image (filed as a beads issue); the override is the documented one.
 {
   cat <<EOF
-DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?connection_limit=4
-APP_DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
-AI_DATABASE_URL=postgresql://mwf_ai:$AI_DB_PASSWORD@db:5432/mwf?connection_limit=5
-WORKER_DATABASE_URL=postgresql://mwf_worker:$WORKER_DB_PASSWORD@db:5432/mwf?connection_limit=3
-OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?connection_limit=2
-AUTH_DATABASE_URL=postgresql://mwf_auth:$AUTH_DB_PASSWORD@db:5432/mwf?connection_limit=12
+DATABASE_URL=postgresql://postgres:$POSTGRES_PASSWORD@db:5432/mwf?$TLS&connection_limit=4
+APP_DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?$TLS&connection_limit=12
+AI_DATABASE_URL=postgresql://mwf_ai:$AI_DB_PASSWORD@db:5432/mwf?$TLS&connection_limit=5
+WORKER_DATABASE_URL=postgresql://mwf_worker:$WORKER_DB_PASSWORD@db:5432/mwf?$TLS&connection_limit=3
+OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?$TLS&connection_limit=2
+AUTH_DATABASE_URL=postgresql://mwf_auth:$AUTH_DB_PASSWORD@db:5432/mwf?$TLS&connection_limit=12
 DB_IDENTITY_BINDING=on
 FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
 E2E_FIXTURE_ID=user-a-full-journey
@@ -126,9 +145,19 @@ else
   echo "   built $APP_IMAGE"
 fi
 
-# Production pins (images.env.example) for db and caddy; the app image above.
-grep -E '^(DB_IMAGE|CADDY_IMAGE)=' "$REPO/infra/aws/images.env.example" >"$LOCAL/release.env.next"
-{ echo "APP_IMAGE=$APP_IMAGE"; echo "MWF_LOCAL_PORT=$MWF_LOCAL_PORT"; echo "MWF_LOCAL_DB_PORT=$MWF_LOCAL_DB_PORT"; } >>"$LOCAL/release.env.next"
+# The database image as production builds it (infra/aws/build-db-image.sh: the pinned base +
+# pgaudit + the TLS entrypoint), tracked in its own small env file so release.env is written once.
+{ grep -E '^DB_BASE_IMAGE=' "$REPO/infra/aws/images.env.example"
+  grep -E '^DB_IMAGE=' "$LOCAL/db-image.env" 2>/dev/null || true; } >"$LOCAL/db-image.env.next"
+mv "$LOCAL/db-image.env.next" "$LOCAL/db-image.env"
+MWF_CONTAINER_ENGINE=podman "$REPO/infra/aws/build-db-image.sh" "$LOCAL/db-image.env" >"$LOCAL/db-image.log" 2>&1 \
+  || { tail -30 "$LOCAL/db-image.log"; die "database image build failed (full log: $LOCAL/db-image.log)"; }
+grep '^build-db-image:' "$LOCAL/db-image.log" | sed 's/^/   /'
+# Production pins (images.env.example) for caddy; the db image above; the app image above.
+{ grep -E '^CADDY_IMAGE=' "$REPO/infra/aws/images.env.example"
+  grep -E '^DB_IMAGE=' "$LOCAL/db-image.env"
+  echo "APP_IMAGE=$APP_IMAGE"; echo "MWF_LOCAL_PORT=$MWF_LOCAL_PORT"; echo "MWF_LOCAL_DB_PORT=$MWF_LOCAL_DB_PORT"
+  echo "MWF_LOCAL_DIR=$LOCAL"; echo "MWF_LOCAL_NET=$NET"; echo "MWF_LOCAL_VOLUME_PREFIX=$VOLUME_PREFIX"; } >"$LOCAL/release.env.next"
 write_if_changed "$LOCAL/release.env" <"$LOCAL/release.env.next"; rm -f "$LOCAL/release.env.next"
 
 # --- 3. the Expo web export, in E2E mode, against this origin ----------------------
@@ -163,6 +192,10 @@ fi
 if [ "$(psql_db -Atc "SELECT count(*) FROM pg_roles WHERE (rolname IN ('mwf_ai', 'mwf_worker') AND rolcanlogin) OR rolname IN ('mwf_job', 'job_access')")" != 2 ]; then
   die "the replica's cluster predates work-k5fk.10.5 (mwf_job still exists, or mwf_ai / mwf_worker cannot log in): run infra/local/reset.sh, then up.sh"
 fi
+# work-k5fk.10.6: ownership.sql ran at init (pgaudit, the database's ACL) and the server enforces TLS.
+if [ "$(psql_db -Atc "SELECT (SELECT count(*) FROM pg_extension WHERE extname = 'pgaudit') || ',' || current_setting('ssl') || ',' || has_database_privilege('public', 'mwf', 'CONNECT')::text")" != '1,on,false' ]; then
+  die "the replica's database predates work-k5fk.10.6 (no pgaudit / TLS, or PUBLIC may connect): run infra/local/reset.sh, then up.sh"
+fi
 
 # --- 4b. role-guard preflight, before migrating (work-k5fk.10.3; deploy.sh does the same) ---
 step "4b. role-guard preflight (every runtime role URL; no switch to skip it)"
@@ -171,7 +204,7 @@ if [ "$(psql_db -Atc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datn
 fi
 # The image runs directly on the internal database network only (project mwf-local -> network
 # mwf-local_database; the db service answers as "db" there), not `compose run api`: the api service
-# pins 172.30.77.3 on the edge network, which a running API (a second up.sh) already holds.
+# pins $NET.77.3 on the edge network, which a running API (a second up.sh) already holds.
 # Same three cases as deploy.sh: preflight present -> run it; guard without preflight -> refuse;
 # an image predating the guard (MWF_LOCAL_APP_IMAGE) -> warn and continue.
 PREFLIGHT=dist/backend/src/scripts/role-guard-preflight.js
@@ -189,7 +222,9 @@ image_has() {
   esac
 }
 if image_has "$PREFLIGHT"; then
-  if ! podman run --rm --network "${PROJECT}_database" --env-file "$LOCAL/application.env" "$APP_IMAGE" \
+  if ! podman run --rm --network "${PROJECT}_database" --cap-drop ALL --security-opt no-new-privileges:true \
+      --env-file "$LOCAL/application.env" \
+      -v "$LOCAL/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro" "$APP_IMAGE" \
       node "$PREFLIGHT" >"$LOCAL/preflight.log" 2>&1; then
     sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight REFUSED a runtime login: not migrating"
   fi
@@ -203,7 +238,7 @@ else
 fi
 
 # --- 5. migrations, the way deploy.sh runs them -------------------------------------
-step "5. migrations (deploy.sh: stop api, one-off api container runs prisma migrate deploy)"
+step "5. migrations (deploy.sh: stop api; as mwf_migrator from migrator.env, at the migration address)"
 api_id="$(service_id api)"
 running_image=""
 [ -z "$api_id" ] || running_image="$(podman inspect --format '{{.ImageName}}' "$api_id")"
@@ -217,7 +252,11 @@ if [ "$running_image" = "$APP_IMAGE" ] && [ "$api_state" = healthy ] && [ "$appl
   echo "   api already runs $APP_IMAGE and every migration is applied: nothing to do"
 else
   [ -z "$api_id" ] || compose stop api
-  if ! compose run --rm --no-deps -T api node /app/node_modules/prisma/build/index.js migrate deploy \
+  MIGRATOR_URL="$(sed -n 's/^MIGRATOR_DATABASE_URL=//p' "$LOCAL/migrator.env")"
+  if ! DATABASE_URL="$MIGRATOR_URL" podman run --rm --network "${PROJECT}_database" --ip "$NET.78.4" -e DATABASE_URL \
+      --cap-drop ALL --security-opt no-new-privileges:true \
+      -v "$LOCAL/db-tls/ca.crt:/etc/mwf-db-tls/ca.crt:ro" "$APP_IMAGE" \
+      node /app/node_modules/prisma/build/index.js migrate deploy \
       --schema=/app/backend/prisma/schema.prisma >"$LOCAL/migrate.log" 2>&1; then
     sed 's/^/   /' "$LOCAL/migrate.log"; die "migrate deploy failed (api left stopped, as deploy.sh does)"
   fi

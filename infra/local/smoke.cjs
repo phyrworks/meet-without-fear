@@ -64,7 +64,13 @@ async function req(path, { as, body, method } = {}) {
   ok('reads-as-both-partners');
 
   // A message turn on a fresh session of A's own (as the production smoke does).
-  const solo = { id: crypto.randomUUID(), email: `smoke-solo-${tag}@e2e.test` };
+  // The bypass requires a UUIDv7 (middleware/auth.ts; the target's uuid7 domain): 48-bit ms time, version 7, variant 10.
+  const b = crypto.randomBytes(16);
+  b.writeUIntBE(Date.now(), 0, 6);
+  b[6] = (b[6] & 0x0f) | 0x70;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const v7 = b.toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-');
+  const solo = { id: v7, email: `smoke-solo-${tag}@e2e.test` };
   const created = await req('/api/sessions', { as: solo, body: { inviteName: 'Local smoke (unshared)', forceCreate: true } });
   assert.ok(created.status === 200 || created.status === 201, `create session: ${created.status} ${JSON.stringify(created.data).slice(0, 300)}`);
   const sid = created.data.data.session.id;
