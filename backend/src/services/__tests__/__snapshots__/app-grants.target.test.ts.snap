@@ -393,14 +393,14 @@ column public.invitation UPDATE: accepted_by_user_id, status, accepted_at, decli
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, dedupe_key, refining_need_id, source_attempt_id, created_at (ai_access)
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (mwf_definer)
 column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (ai_access)
-column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, source_attempt_id, created_at (mwf_definer)
+column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, source_attempt_id, created_at (mwf_definer)
 column public.message SELECT: session_id, created_at (worker_access)
 column public.milestone SELECT: key, self_assertable (mwf_definer)
 column public.mood_reading SELECT: id, session_id, user_id, intensity, recorded_at (mwf_definer)
-column public.need SELECT: id, session_id, user_id, category, confirmed_at, superseded_by_need_id, deleted_at, created_at (mwf_definer)
+column public.need SELECT: id, session_id, user_id, category, superseded_by_need_id, deleted_at (mwf_definer)
 column public.need_disposition SELECT: session_id, user_id (mwf_definer)
 column public.need_share INSERT: need_id, session_id, user_id, category, shared_text (mwf_definer)
-column public.need_share SELECT: need_id, shared_text, revoked_at (mwf_definer)
+column public.need_share SELECT: need_id, revoked_at (mwf_definer)
 column public.need_share UPDATE: revoked_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, added_by_user_id, display_name, joined_at, left_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, display_name, joined_at, left_at (ai_access)
@@ -476,7 +476,6 @@ routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone)
 routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone): EXECUTE (mwf_definer)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (ai_access)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_definer)
-routine app.first_need_label(uuid,uuid): EXECUTE (mwf_definer)
 routine app.identity_subject(identity_provider): EXECUTE (mwf_definer)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (mwf_definer)
 routine app.invitation_peek(uuid): EXECUTE (mwf_definer)
@@ -522,6 +521,7 @@ routine app.share_offers_expire(uuid,uuid[]): EXECUTE (mwf_definer)
 routine app.share_offers_mark_notified(uuid[],boolean): EXECUTE (mwf_definer)
 routine app.shares_delivered_to_me(uuid): EXECUTE (mwf_definer)
 routine app.shares_session_with(uuid): EXECUTE (mwf_definer)
+routine app.stage4_transition_started(uuid): EXECUTE (mwf_definer)
 routine app.t_agreement_parties(): EXECUTE (mwf_definer)
 routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
@@ -669,7 +669,6 @@ routine owner app.deliver_message(uuid,uuid,message_kind,text,uuid,timestamp wit
 routine owner app.empathy_direction_status(): mwf_definer
 routine owner app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone): mwf_definer
 routine owner app.empathy_set_status(uuid,empathy_status,text): mwf_definer
-routine owner app.first_need_label(uuid,uuid): mwf_definer
 routine owner app.identity_subject(identity_provider): mwf_definer
 routine owner app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): mwf_definer
 routine owner app.invitation_peek(uuid): mwf_definer
@@ -704,6 +703,7 @@ routine owner app.share_offers_expire(uuid,uuid[]): mwf_definer
 routine owner app.share_offers_mark_notified(uuid[],boolean): mwf_definer
 routine owner app.shares_delivered_to_me(uuid): mwf_definer
 routine owner app.shares_session_with(uuid): mwf_definer
+routine owner app.stage4_transition_started(uuid): mwf_definer
 routine owner app.t_agreement_parties(): mwf_definer
 routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
@@ -800,7 +800,6 @@ routine app.deliver_message(uuid,uuid,message_kind,text,uuid,timestamp with time
 routine app.empathy_direction_status(): EXECUTE (app_access)
 routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone): EXECUTE (app_access)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (app_access)
-routine app.first_need_label(uuid,uuid): EXECUTE (app_access)
 routine app.identity_subject(identity_provider): EXECUTE (app_access)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (app_access)
 routine app.invitation_peek(uuid): EXECUTE (app_access)
@@ -830,6 +829,7 @@ routine app.share_offers_expire(uuid,uuid[]): EXECUTE (app_access)
 routine app.share_offers_mark_notified(uuid[],boolean): EXECUTE (app_access)
 routine app.shares_delivered_to_me(uuid): EXECUTE (app_access)
 routine app.shares_session_with(uuid): EXECUTE (app_access)
+routine app.stage4_transition_started(uuid): EXECUTE (app_access)
 routine app.validated_at(uuid[]): EXECUTE (app_access)
 schema app: USAGE (app_access)
 schema public: USAGE (PUBLIC)

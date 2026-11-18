@@ -668,6 +668,12 @@ async function applyOperation(
           measureOfSuccess: operation.measureOfSuccess,
           kind: operation.kind,
           status: Stage4ProposalStatus.ACTIVE,
+          // Becoming an individual commitment makes it the actor's own (the database refuses one handed to anyone
+          // else: t_proposal_app_moves).
+          ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
+          superseded.kind !== Stage4ProposalKind.INDIVIDUAL_COMMITMENT
+            ? creatorColumns(ctx, ctx.actor.userId)
+            : {}),
         },
       });
       await linkNeeds(ctx, superseded.id, operation.needsAddressed);

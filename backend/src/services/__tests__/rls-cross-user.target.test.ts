@@ -653,14 +653,11 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await count('mwf_app', ada, 'need_share', 'need_id = $1', [adaNeed])).toBe(1);
     });
 
-    it('the content-free definers answer a party of the session only (shares_delivered_to_me, validated_at, first_need_label)', async () => {
+    it('the content-free definers answer a party of the session only (shares_delivered_to_me, validated_at)', async () => {
       expect(await as('mwf_app', carol, `SELECT 1 FROM app.shares_delivered_to_me($1)`, [session])).toEqual([]);
       expect(await as('mwf_app', carol, `SELECT 1 FROM app.validated_at($1)`, [[bobAttempt]])).toEqual([]);
       // Ada, the subject, learns nothing of Bob's verdicts on his own attempt (it is the author's question)
       expect(await as('mwf_app', ada, `SELECT 1 FROM app.validated_at($1)`, [[bobAttempt]])).toEqual([]);
-      expect(
-        await as<{ l: string | null }>('mwf_app', carol, `SELECT app.first_need_label($1, $2) AS l`, [session, ada]),
-      ).toEqual([{ l: null }]);
     });
 
     it('the AI acting for Carol reads no attempt, result or offer of their session', async () => {
@@ -908,33 +905,17 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       );
     });
 
-    it('F1: first_need_label gives Bob the wording Ada shared of her first shared need, never an unshared one', async () => {
-      const need = async (label: string, ago: string) =>
-        (
-          await run.sql<{ id: string }>(
-            `INSERT INTO need (session_id, user_id, label, category, ai_confidence, confirmed_at, created_at)
-             VALUES ($1, $2, $3, 'AUTONOMY', 0.9, now(), now() - $4::interval) RETURNING id::text`,
-            [session, ada, label, ago],
-          )
-        )[0].id;
-      await need('PROBE_SECRET_NEED', '3 days'); // first by creation, never shared
-      const sharedNeed = await need('PROBE_SHARED_LABEL', '2 days');
+    it('F1: no definer hands Bob Ada’s need wording — first_need_label is gone (each line is its own participant’s)', async () => {
+      expect(await run.sql(`SELECT to_regprocedure('app.first_need_label(uuid, uuid)') AS f`)).toEqual([{ f: null }]);
       await run.sql(
-        `INSERT INTO consent (session_id, user_id, need_id, decision, decided_at) VALUES ($1, $2, $3, 'GRANTED', now())`,
-        [session, ada, sharedNeed],
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence, confirmed_at) VALUES ($1, $2, 'PROBE_SECRET_NEED', 'AUTONOMY', 0.9, now())`,
+        [session, ada],
       );
-      await run.sql(
-        `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'AUTONOMY', 'PROBE_SHARED_TEXT')`,
-        [sharedNeed, session, ada],
-      );
-      const label = async () =>
-        (await as<{ l: string | null }>('mwf_app', bob, `SELECT app.first_need_label($1, $2) AS l`, [session, ada]))[0]
-          .l;
-      expect(await label()).toBe('PROBE_SHARED_TEXT');
-      // revoked: nothing shared is left to name
-      await run.sql(`UPDATE need_share SET revoked_at = now() WHERE need_id = $1`, [sharedNeed]);
-      expect(await label()).not.toBe('PROBE_SHARED_TEXT');
-      expect(await label()).not.toBe('PROBE_SECRET_NEED');
+      expect(await count('mwf_app', bob, 'need', 'user_id = $1', [ada])).toBe(0);
+      // the lazy write's one-boolean probe answers only a party of the session
+      expect(await as('mwf_app', carol, `SELECT app.stage4_transition_started($1) AS s`, [session])).toEqual([
+        { s: false },
+      ]);
     });
 
     it('F2: v_participant gives Bob none of Ada’s mood or read state, and her activity only as her preference allows', async () => {
@@ -1080,8 +1061,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           [bobOwn, ada],
         ),
       ).toBe('42501');
-      expect(await run.sql(`SELECT status::text FROM proposal WHERE id = $1`, [adaShared])).toEqual([
-        { status: 'ACTIVE' },
+      // a kind-only change never hands Ada a commitment she did not make (owner decision after r1)
+      expect(
+        await code('mwf_app', bob, `UPDATE proposal SET kind = 'INDIVIDUAL_COMMITMENT' WHERE id = $1`, [adaShared]),
+      ).toBe('42501');
+      expect(await run.sql(`SELECT status::text, kind::text FROM proposal WHERE id = $1`, [adaShared])).toEqual([
+        { status: 'ACTIVE', kind: 'SHARED_PROPOSAL' },
       ]);
       // control: Bob removes the shared proposal in his own name, and restores it
       expect(

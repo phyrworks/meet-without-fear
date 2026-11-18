@@ -49,6 +49,7 @@ import {
 } from '../services/message-store';
 import { loadInvitationPending, loadMilestones, loadStageStates } from '../services/stage-shim';
 import { getPartnerParticipant, loadSessionParties } from '../services/participant-resolver';
+import { ensureOwnStage4TransitionLine } from '../services/stage4-transition';
 import { reachMilestone } from '../services/milestone-writer';
 
 // Re-exported for existing callers that import these from this controller.
@@ -446,6 +447,10 @@ export async function getConversationHistory(req: Request, res: Response): Promi
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
+
+    // The caller's own Stage 4 transition line, if the mutual share completed in a partner's request (written
+    // here, from the caller's own request: services/stage4-transition.ts).
+    if (!participant.leftAt) await ensureOwnStage4TransitionLine(participant, participant.mainConversationId);
 
     // The caller's MAIN conversation IS the audience: no sender/recipient
     // filter exists any more (target shape: no recipient column).

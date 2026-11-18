@@ -25,6 +25,7 @@ import { departedParticipantUsers } from '../utils/session';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma, getE2EToolingPrisma } from '../lib/prisma';
+import { ensureOwnStage4TransitionLine } from '../services/stage4-transition';
 import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { lockInvitationForAccept, repointInvitationDraftsAsTooling } from '../services/empathy-store';
@@ -165,6 +166,9 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     }
     const me = participant;
     const conversationId = participant.mainConversationId;
+    // The caller's own Stage 4 transition line, if the mutual share completed in a partner's request (written
+    // here, from the caller's own request: services/stage4-transition.ts).
+    if (!participant.leftAt) await ensureOwnStage4TransitionLine(participant, conversationId);
 
     // Fetch core session data in parallel
     const [session, latestInvitation, linkedReflection, messages, readState, partner] = await Promise.all([

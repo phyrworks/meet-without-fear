@@ -495,6 +495,9 @@ GRANT EXECUTE ON FUNCTION app.invitation_repoint_drafts(uuid) TO app_access;
 -- on the recipient's latest invitation the caller accepted (ciphertext; contacts.ts namesIGave's order). Both are the
 -- recipient's private rows (user_contact app_own, invitation app_select), read here only by the actor the push is
 -- about, for a recipient they share a session with (work-k5fk.10.7). No row: no such recipient for the caller.
+-- Review r1 (accepted, owner decision 2026-11-18): the recipient's nickname for the actor thus reaches the actor's
+-- request — server memory only. push.ts composes the push to the recipient from it and returns it to no client: the
+-- actor's own device never receives it.
 CREATE FUNCTION app.actor_name_for(recipient uuid)
   RETURNS TABLE (has_entry boolean, nickname text, invite_name text)
   LANGUAGE sql STABLE SECURITY DEFINER
@@ -509,7 +512,7 @@ CREATE FUNCTION app.actor_name_for(recipient uuid)
     LEFT JOIN public.user_contact c ON c.user_id = actor_name_for.recipient AND c.contact_user_id = app.current_user_id()
     WHERE pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND app.shares_session_with(actor_name_for.recipient)
   $$;
-COMMENT ON FUNCTION app.actor_name_for(uuid) IS 'The recipient''s own name for the caller (their user_contact nickname, else the invite name of their invitation the caller accepted, ciphertext), for a push about the caller to a recipient they share a session with. Identity-bound, app_access (work-k5fk.10.7).';
+COMMENT ON FUNCTION app.actor_name_for(uuid) IS 'The recipient''s own name for the caller (their user_contact nickname, else the invite name of their invitation the caller accepted, ciphertext), for a push about the caller to a recipient they share a session with; server memory only, never the caller''s client (review r1, accepted). Identity-bound, app_access (work-k5fk.10.7).';
 -- mwf_app (app_access): push.ts getNotificationActorName.
 REVOKE EXECUTE ON FUNCTION app.actor_name_for(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.actor_name_for(uuid) TO app_access;
@@ -630,32 +633,6 @@ COMMENT ON FUNCTION app.validated_at(uuid[]) IS 'The instant each of the caller'
 REVOKE EXECUTE ON FUNCTION app.validated_at(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.validated_at(uuid[]) TO app_access;
 
--- The wording of a participant's first shared need (need_share.shared_text, ciphertext — the text they chose to
--- share, edited or not), for a co-participant of the same session: controllers/stage3.ts announceStage4 writes each
--- participant's Stage 4 transition line ("Let's start with one of yours: …") from the request of whoever completed
--- the mutual share. Only a need with a live (unrevoked) share, never one they kept private (review F1): the
--- co-participant already reads that wording (need_share app_select). Field encryption keeps the key out of
--- Postgres, so the line itself is composed by the app (work-k5fk.10.36, owner decision 2026-11-18).
-CREATE FUNCTION app.first_need_label(session uuid, "user" uuid) RETURNS text
-  LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-    SELECT s.shared_text
-    FROM public.need n
-    JOIN public.need_share s ON s.need_id = n.id AND s.revoked_at IS NULL
-    WHERE n.session_id = first_need_label.session AND n.user_id = first_need_label."user"
-      AND n.deleted_at IS NULL AND n.superseded_by_need_id IS NULL AND n.confirmed_at IS NOT NULL
-      AND EXISTS (SELECT 1 FROM public.participant me
-                  WHERE me.session_id = first_need_label.session AND me.user_id = app.current_user_id())
-      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
-    ORDER BY n.created_at, n.id
-    LIMIT 1
-  $$;
-COMMENT ON FUNCTION app.first_need_label(uuid, uuid) IS 'The shared wording (need_share.shared_text, ciphertext) of a participant''s first shared, unrevoked need, for a co-participant: the Stage 4 transition line (stage3.ts announceStage4). Never an unshared need. Identity-bound, app_access (work-k5fk.10.7, review F1).';
--- mwf_app (app_access): controllers/stage3.ts firstNeedText.
-REVOKE EXECUTE ON FUNCTION app.first_need_label(uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.first_need_label(uuid, uuid) TO app_access;
-
 -- requireSessionAccess for a caller with no participant row (middleware/auth.ts): 'missing' when the session does
 -- not exist, 'invited' when it has an invitation the caller did not send that is PENDING and unexpired, or that
 -- the caller accepted (the acceptance timing gap; Phase 3 §7 W6 schedules its removal), else 'denied'. Under RLS a
@@ -756,6 +733,26 @@ COMMENT ON FUNCTION app.session_parties(uuid[]) IS 'Every participant of the giv
 -- mwf_app (app_access): empathy-store.ts, contacts.ts, invitations.ts listPeople, messages.ts, stage3.ts.
 REVOKE EXECUTE ON FUNCTION app.session_parties(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_parties(uuid[]) TO app_access;
+
+-- Has the Stage 4 transition started under the own-request rule (services/stage4-transition.ts)? True once some
+-- participant of the session holds their STAGE4_TRANSITION line — the one the request that completed the mutual
+-- share writes for its own user. A co-participant's next read then writes theirs. A session that reached
+-- needs_shared any other way (a fixture, a migrated session whose lines predate the key) holds none, so no read
+-- writes a second line into it. Content-free: one boolean, for a caller seated in the session.
+CREATE FUNCTION app.stage4_transition_started(session uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (
+      SELECT 1 FROM public.message m JOIN public.conversation c ON c.id = m.conversation_id
+      WHERE c.session_id = stage4_transition_started.session AND c.kind = 'MAIN' AND m.dedupe_key = 'STAGE4_TRANSITION'
+    ) AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = stage4_transition_started.session AND me.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.stage4_transition_started(uuid) IS 'True when a participant of the session holds a STAGE4_TRANSITION line (the own-request rule has begun) and the caller is seated in it. No content (owner decision 2026-11-18, review r1).';
+-- mwf_app (app_access): services/stage4-transition.ts ensureOwnStage4TransitionLine.
+REVOKE EXECUTE ON FUNCTION app.stage4_transition_started(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.stage4_transition_started(uuid) TO app_access;
 
 -- Content-free status of every empathy direction in the caller's sessions
 -- (the latest round per direction): what both parties may see while neither
@@ -1670,7 +1667,6 @@ ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz
 ALTER FUNCTION app.session_invitee_access(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.shares_delivered_to_me(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.validated_at(uuid[]) OWNER TO mwf_definer;
-ALTER FUNCTION app.first_need_label(uuid, uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.result_facts(uuid[]) OWNER TO mwf_definer;
 ALTER FUNCTION app.attempt_meta(uuid[]) OWNER TO mwf_definer;
 ALTER FUNCTION app.co_participant_presence(uuid, uuid) OWNER TO mwf_definer;
@@ -1678,6 +1674,7 @@ ALTER FUNCTION app.actor_name_for(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_repoint_drafts(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.participant_presence(uuid, uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_parties(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.stage4_transition_started(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.empathy_direction_status() OWNER TO mwf_definer;
 ALTER FUNCTION app.session_set_status(uuid, public.session_status) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_archive(uuid) OWNER TO mwf_definer;
@@ -1992,6 +1989,7 @@ CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
 --    commitment (Stage 4 capture): created_by_user_id becomes the acting user AND kind becomes INDIVIDUAL_COMMITMENT
 --    in the same UPDATE. Any other change — a re-assignment from the model's output, to the partner or to oneself —
 --    is refused.
+--  * A move into INDIVIDUAL_COMMITMENT names the acting user as creator (the same rule from the kind's side).
 --  * CONVERTED_TO_AGREEMENT is the agreement path's (the worker's createAgreementsAsJob, with its agreement rows),
 --    never an app edit's.
 --  * A removal is attributed to the acting user: removed_by_user_id moves only to the acting user or back to NULL
@@ -2016,6 +2014,13 @@ CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
       RAISE EXCEPTION 'a proposal''s creator changes only when it becomes the editor''s own commitment'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
+    -- owner decision 2026-11-18 (after review r1): a move into INDIVIDUAL_COMMITMENT makes the actor its creator in the
+    -- same UPDATE; a kind-only change never hands someone else a commitment.
+    IF NEW.kind = 'INDIVIDUAL_COMMITMENT' AND OLD.kind IS DISTINCT FROM 'INDIVIDUAL_COMMITMENT'
+       AND NEW.created_by_user_id IS DISTINCT FROM v_me THEN
+      RAISE EXCEPTION 'a proposal becomes an individual commitment only as the editor''s own'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     IF NEW.status = 'CONVERTED_TO_AGREEMENT' AND OLD.status IS DISTINCT FROM 'CONVERTED_TO_AGREEMENT' THEN
       RAISE EXCEPTION 'a proposal becomes an agreement only through the agreement path'
         USING ERRCODE = 'insufficient_privilege';
@@ -2032,7 +2037,7 @@ CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
   $$;
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_proposal_app_moves() FROM PUBLIC;
-COMMENT ON FUNCTION app.t_proposal_app_moves() IS 'For mwf_app: proposal.created_by_user_id changes only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT; status never becomes CONVERTED_TO_AGREEMENT; a removal names the acting user. work-k5fk.10.9, review F5.';
+COMMENT ON FUNCTION app.t_proposal_app_moves() IS 'For mwf_app: proposal.created_by_user_id changes only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT, and no proposal becomes an INDIVIDUAL_COMMITMENT of anyone else; status never becomes CONVERTED_TO_AGREEMENT; a removal names the acting user. work-k5fk.10.9, review F5.';
 CREATE TRIGGER t_proposal_app_moves BEFORE UPDATE ON public.proposal
   FOR EACH ROW EXECUTE FUNCTION app.t_proposal_app_moves();
 

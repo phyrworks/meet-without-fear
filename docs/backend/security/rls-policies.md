@@ -42,8 +42,9 @@ describe production.
   parties of the caller's sessions: the name the app calls each by, a tombstone flag, the MAIN
   conversation id — `"user"` and `conversation` are own-row, so no partner's email, last name,
   deletion instant or `next_seq`), `app.actor_name_for` (a push names its actor),
-  `app.shares_delivered_to_me`, `app.validated_at`, `app.first_need_label` (the shared wording of the
-  partner's first shared need only). A participant who left keeps reading but writes nothing: every
+  `app.shares_delivered_to_me`, `app.validated_at`. No definer reads a partner's need label: each
+  participant's Stage 4 transition line is written from their own request
+  (`services/stage4-transition.ts`). A participant who left keeps reading but writes nothing: every
   session-scoped table carries `app_active_*` RESTRICTIVE policies on `app.is_current_member`
   (review r1 F4). `t_proposal_app_moves` holds what a proposal UPDATE may not do (re-assign its
   creator, convert it to an agreement, attribute a removal to someone else). Deviations from §6,

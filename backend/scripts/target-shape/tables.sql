@@ -541,8 +541,8 @@ CREATE TYPE message_role AS ENUM ('USER', 'AI', 'SYSTEM');
 COMMENT ON TYPE message_role IS 'Who wrote a line: the human (USER), the AI guide (AI) or the app (SYSTEM). Also used by reflection_message.';
 CREATE TYPE message_kind AS ENUM ('CHAT', 'EMPATHY_STATEMENT', 'EMPATHY_REVEAL_INTRO', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION', 'EMPATHY_VALIDATION_PROMPT');
 COMMENT ON TYPE message_kind IS 'CHAT for an ordinary turn; every other member is an item delivered across participants (an empathy statement, shared context, validation feedback, a share suggestion and their prompts).';
-CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE');
-COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts). A closed set: no value is derived from message content.';
+CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE', 'STAGE4_TRANSITION');
+COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts); STAGE4_TRANSITION, each participant''s Stage 4 transition line, written from their own request (services/stage4-transition.ts). A closed set: no value is derived from message content.';
 CREATE TYPE draft_kind AS ENUM ('EMPATHY', 'VALIDATION_FEEDBACK', 'SHARE_CONTEXT');
 COMMENT ON TYPE draft_kind IS 'The sharing point a draft is for; it decides which of draft''s arc columns is set.';
 CREATE TYPE milestone_scope AS ENUM ('participant', 'session');
@@ -1164,8 +1164,6 @@ GRANT INSERT (session_id, user_id, label, category, evidence, ai_confidence, con
 GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO app_access;
 -- mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
 GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_definer;
--- mwf_definer: first_need_label (stage3.ts announceStage4: the order of a participant's confirmed needs)
-GRANT SELECT (confirmed_at, created_at) ON need TO mwf_definer;
 -- mwf_definer: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
 GRANT SELECT (session_id, user_id) ON need TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
@@ -1228,6 +1226,8 @@ GRANT DELETE ON message TO app_access;
 -- mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe; deliver_message: the delivered copy with
 -- its instant, RETURNING seq, created_at
 GRANT SELECT (conversation_id, source_attempt_id, kind, seq, created_at) ON message TO mwf_definer;
+-- mwf_definer: stage4_transition_started (whether a party's Stage 4 transition line exists: its key, never content)
+GRANT SELECT (dedupe_key) ON message TO mwf_definer;
 -- mwf_definer: co_participant_presence (a co-participant's last turn: the instant of their latest USER CHAT line)
 GRANT SELECT (session_id, sender_user_id, role) ON message TO mwf_definer;
 GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at) ON message TO mwf_definer;
@@ -1933,8 +1933,6 @@ COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-remov
 GRANT SELECT ON need_share TO app_access;
 -- mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
 GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_definer;
--- mwf_definer: first_need_label (the wording of the participant's first shared need)
-GRANT SELECT (shared_text) ON need_share TO mwf_definer;
 GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
 GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
 
