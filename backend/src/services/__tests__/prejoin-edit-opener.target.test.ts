@@ -102,6 +102,9 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     expect(
       (await http(ada, 'post', `/sessions/${s.sessionId}/empathy/draft`, { content, readyToShare: true })).status,
     ).toBe(200);
+    // ts_ms is millisecond precision and "pre-join" is draft.updated_at < joined_at: an accept in the same
+    // millisecond as the save (measured 0–1 ms apart in-process) is not a pre-join draft. A real join is later.
+    await new Promise(r => setTimeout(r, 5));
     expect((await http(partner, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     const partnerParticipant = await participantOf(s.sessionId, partner.id);
     return { ...s, partner, partnerParticipant };
