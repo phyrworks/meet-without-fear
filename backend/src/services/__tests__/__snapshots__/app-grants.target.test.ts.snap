@@ -23,7 +23,6 @@ agreement_party worker_session FOR ALL TO worker_access USING (((session_id)::uu
 ai_memory [rls true, force true]
 ai_memory ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
 ai_memory app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
-ai_memory app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (((session_id IS NULL) OR app.is_current_member((session_id)::uuid))) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
 ai_memory app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 ai_memory definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 ai_memory diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -214,7 +213,7 @@ persona diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal [rls true, force true]
 proposal app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 proposal app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
-proposal app_insert FOR INSERT TO app_access USING (-) CHECK ((((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid)))
+proposal app_insert FOR INSERT TO app_access USING (-) CHECK ((((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid) AND (status = 'ACTIVE'::proposal_status) AND (removed_by_user_id IS NULL)))
 proposal app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 proposal app_update FOR UPDATE TO app_access USING ((app.is_member((session_id)::uuid) AND (status <> 'CONVERTED_TO_AGREEMENT'::proposal_status) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind)))) CHECK ((app.is_member((session_id)::uuid) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind))))
 proposal definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
@@ -261,7 +260,6 @@ reconciler_result definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reconciler_result diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection [rls true, force true]
 reflection app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((linked_session_id IS NULL) OR app.is_current_member((linked_session_id)::uuid)))
-reflection app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (((linked_session_id IS NULL) OR app.is_current_member((linked_session_id)::uuid))) CHECK (((linked_session_id IS NULL) OR app.is_current_member((linked_session_id)::uuid)))
 reflection app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((linked_session_id IS NULL) OR app.is_member((linked_session_id)::uuid))))
 reflection definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reflection diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -334,9 +332,7 @@ user_identity definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 user_key [rls true, force true]
 user_key definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 user_memory [rls true, force true]
-user_memory app_active_delete FOR DELETE RESTRICTIVE TO app_access USING (((session_id IS NULL) OR app.is_current_member((session_id)::uuid))) CHECK (-)
 user_memory app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
-user_memory app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (((session_id IS NULL) OR app.is_current_member((session_id)::uuid))) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
 user_memory app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 user_memory definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 user_memory diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -540,6 +536,7 @@ routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
 routine app.t_proposal_app_moves(): EXECUTE (mwf_migrator)
 routine app.t_result_live_attempt(): EXECUTE (mwf_definer)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
+routine app.t_session_link_moves(): EXECUTE (mwf_migrator)
 routine app.t_session_purge(): EXECUTE (mwf_migrator)
 routine app.t_session_scope(): EXECUTE (mwf_migrator)
 routine app.touch_updated_at(): EXECUTE (mwf_migrator)
@@ -722,6 +719,7 @@ routine owner app.t_participant_cardinality(): mwf_migrator
 routine owner app.t_proposal_app_moves(): mwf_migrator
 routine owner app.t_result_live_attempt(): mwf_definer
 routine owner app.t_session_cardinality(): mwf_migrator
+routine owner app.t_session_link_moves(): mwf_migrator
 routine owner app.t_session_purge(): mwf_migrator
 routine owner app.t_session_scope(): mwf_migrator
 routine owner app.touch_updated_at(): mwf_migrator

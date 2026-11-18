@@ -952,8 +952,11 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     WHERE p.session_id = a.session_id AND p.user_id = a.author_user_id;
     SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p
     WHERE p.session_id = a.session_id AND p.user_id = a.subject_user_id;
-    v_is_author  := v_app AND v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
-    v_is_subject := v_app AND v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user;
+    -- review r2 N1: the author's / subject's moves are a PRESENT participant's (a leaver moves no round).
+    v_is_author  := v_app AND v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user
+                    AND v_author_left IS NULL;
+    v_is_subject := v_app AND v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user
+                    AND v_subject_left IS NULL;
     IF NOT (v_job OR v_is_author OR v_is_subject) THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
@@ -1058,7 +1061,9 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
   BEGIN
     IF NOT (session_user = 'mwf_migrator'
             OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
-                  SELECT 1 FROM public.need n WHERE n.id = need_share.need AND n.user_id = app.current_user_id()))) THEN
+                  SELECT 1 FROM public.need n WHERE n.id = need_share.need AND n.user_id = app.current_user_id()
+                    AND app.is_current_member(n.session_id)))) THEN
+      -- review r2 N1: the owner, while a present participant of the need's session (a leaver shares nothing).
       RAISE EXCEPTION 'need_share is the need owner''s' USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.need n
@@ -1091,7 +1096,8 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
     v_me  uuid := app.current_user_id();
   BEGIN
     IF NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND v_me IS NOT NULL AND EXISTS (
-              SELECT 1 FROM public.need n WHERE n.id = need_revoke_share.need AND n.user_id = v_me))) THEN
+              SELECT 1 FROM public.need n WHERE n.id = need_revoke_share.need AND n.user_id = v_me
+                AND app.is_current_member(n.session_id)))) THEN  -- review r2 N1: a present participant only
       RAISE EXCEPTION 'need not found' USING ERRCODE = 'P0002';
     END IF;
     UPDATE public.need_share SET revoked_at = now() WHERE need_id = need_revoke_share.need AND revoked_at IS NULL;
@@ -1415,7 +1421,8 @@ CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery
          session_user = 'mwf_migrator'
          OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false)
                   AND app.scope_actor_is_member())
-         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND coalesce(app.current_user_id() = v_subject, false))) THEN
+         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND coalesce(app.current_user_id() = v_subject, false)
+             AND app.is_current_member(v_session))) THEN  -- review r2 N1: a present subject only
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
     -- review F10: only a revealed round is delivered or seen, and the stamp moves forward only (PENDING → DELIVERED →
@@ -1522,6 +1529,9 @@ CREATE FUNCTION app.choices_unshare(session uuid) RETURNS integer
     IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
       RAISE EXCEPTION 'choices_unshare is identity-bound' USING ERRCODE = 'insufficient_privilege';
     END IF;
+    IF NOT app.is_current_member(choices_unshare.session) THEN
+      RETURN 0;  -- review r2 N1: a leaver changes nothing in the session
+    END IF;
     DELETE FROM public.participant_milestone pm
     WHERE pm.session_id = choices_unshare.session AND pm.user_id = v_me AND pm.milestone_key = 'choices_shared';
     GET DIAGNOSTICS n = ROW_COUNT;
@@ -1578,10 +1588,12 @@ CREATE FUNCTION app.share_offers_mark_notified(offers uuid[], seen boolean) RETU
     END IF;
     IF share_offers_mark_notified.seen THEN
       UPDATE public.context_share_offer o SET seen_notified_at = now()
-      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me;
+      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me
+        AND app.is_current_member(o.session_id);  -- review r2 N1
     ELSE
       UPDATE public.context_share_offer o SET delivery_notified_at = now()
-      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me;
+      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me
+        AND app.is_current_member(o.session_id);
     END IF;
     GET DIAGNOSTICS n = ROW_COUNT;
     RETURN n;
@@ -1992,8 +2004,8 @@ CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
 --  * A move into INDIVIDUAL_COMMITMENT names the acting user as creator (the same rule from the kind's side).
 --  * CONVERTED_TO_AGREEMENT is the agreement path's (the worker's createAgreementsAsJob, with its agreement rows),
 --    never an app edit's.
---  * A removal is attributed to the acting user: removed_by_user_id moves only to the acting user or back to NULL
---    (a restore), and a move into REMOVED names the acting user.
+--  * A removal is attributed to the acting user: removed_by_user_id moves only with the status — into REMOVED it
+--    names the acting user, out of REMOVED (a restore) it returns to NULL — and is otherwise immutable (review r2 N4).
 -- Exempt, as t_session_scope: any current_user that is not a member of app_access (the worker's conversion, every
 -- definer body) and any that holds the database owner's privileges.
 CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
@@ -2025,10 +2037,13 @@ CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
       RAISE EXCEPTION 'a proposal becomes an agreement only through the agreement path'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
-    IF (NEW.removed_by_user_id IS DISTINCT FROM OLD.removed_by_user_id
-        AND NEW.removed_by_user_id IS NOT NULL AND NEW.removed_by_user_id IS DISTINCT FROM v_me)
-       OR (NEW.status = 'REMOVED' AND OLD.status IS DISTINCT FROM 'REMOVED'
-           AND NEW.removed_by_user_id IS DISTINCT FROM v_me) THEN
+    -- review r2 N4: removed_by_user_id moves only with the status — into REMOVED (to the acting user) or out of it
+    -- (back to NULL, a restore); otherwise it is immutable.
+    IF (NEW.status = 'REMOVED' AND OLD.status IS DISTINCT FROM 'REMOVED'
+        AND NEW.removed_by_user_id IS DISTINCT FROM v_me)
+       OR (OLD.status = 'REMOVED' AND NEW.status IS DISTINCT FROM 'REMOVED' AND NEW.removed_by_user_id IS NOT NULL)
+       OR (NEW.status IS NOT DISTINCT FROM OLD.status
+           AND NEW.removed_by_user_id IS DISTINCT FROM OLD.removed_by_user_id) THEN
       RAISE EXCEPTION 'a proposal''s removal is attributed to the acting user'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
@@ -2040,6 +2055,38 @@ REVOKE EXECUTE ON FUNCTION app.t_proposal_app_moves() FROM PUBLIC;
 COMMENT ON FUNCTION app.t_proposal_app_moves() IS 'For mwf_app: proposal.created_by_user_id changes only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT, and no proposal becomes an INDIVIDUAL_COMMITMENT of anyone else; status never becomes CONVERTED_TO_AGREEMENT; a removal names the acting user. work-k5fk.10.9, review F5.';
 CREATE TRIGGER t_proposal_app_moves BEFORE UPDATE ON public.proposal
   FOR EACH ROW EXECUTE FUNCTION app.t_proposal_app_moves();
+
+-- T-session-link-moves (review r2 N2): on an own-row table with an optional session link (TG_ARGV[0] names the
+-- column), mwf_app may keep or clear the link whatever its membership, and may change it only to a session it is a
+-- present participant of. Exempt as t_proposal_app_moves: a current_user outside app_access, the database owner.
+CREATE FUNCTION app.t_session_link_moves() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_new uuid := (pg_catalog.to_jsonb(NEW) ->> TG_ARGV[0])::uuid;
+    v_old uuid := (pg_catalog.to_jsonb(OLD) ->> TG_ARGV[0])::uuid;
+  BEGIN
+    IF NOT pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      RETURN NEW;
+    END IF;
+    IF v_new IS NOT NULL AND v_new IS DISTINCT FROM v_old AND NOT app.is_current_member(v_new) THEN
+      RAISE EXCEPTION 'a row links only to a session its owner is a present participant of'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_link_moves() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_session_link_moves() IS 'For mwf_app: an optional session link (TG_ARGV[0]) is kept or cleared freely and changed only to a session the caller is a present participant of. Review r2 N2.';
+CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.reflection
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('linked_session_id');
+CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.ai_memory
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
+CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.user_memory
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
@@ -3082,8 +3129,10 @@ CREATE POLICY definer_all ON persona TO mwf_definer USING (true) WITH CHECK (tru
 ALTER TABLE proposal ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON proposal FOR SELECT TO app_access USING (app.is_member(session_id));
 COMMENT ON POLICY app_select ON proposal IS 'The proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
-CREATE POLICY app_insert ON proposal FOR INSERT TO app_access WITH CHECK (created_by_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id));
-COMMENT ON POLICY app_insert ON proposal IS 'A proposal the caller makes, in a session of theirs (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal FOR INSERT TO app_access
+  WITH CHECK (created_by_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
+              AND status = 'ACTIVE' AND removed_by_user_id IS NULL);
+COMMENT ON POLICY app_insert ON proposal IS 'A proposal the caller makes, in a session of theirs, starting ACTIVE and unremoved — never born converted or removed (design note §6; work-k5fk.10.7, review r2 N3).';
 CREATE POLICY app_update ON proposal FOR UPDATE TO app_access
   USING (app.is_member(session_id) AND status <> 'CONVERTED_TO_AGREEMENT'
          AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'))
@@ -3265,10 +3314,13 @@ CREATE POLICY definer_all ON user_preferences TO mwf_definer USING (true) WITH C
 -- row outside any session (a NULL session_id / linked_session_id) is the caller's own and unaffected. participant
 -- itself is guarded in its policy (the adder arm) and t_participant_added_by; session INSERT by its
 -- previous_session_id (below).
+-- Review r2 N2: an own-row table whose session link is optional (reflection.linked_session_id, ai_memory /
+-- user_memory.session_id) is the user's own, not the session's: a leaver keeps editing, unlinking and deleting it.
+-- Only a NEW link (an INSERT naming a session, or an UPDATE that changes the link to one) needs present
+-- membership: app_active_insert below, and t_session_link_moves for the UPDATE (a policy cannot compare OLD with
+-- NEW).
 CREATE POLICY app_active_insert ON ai_memory AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
 COMMENT ON POLICY app_active_insert ON ai_memory IS 'Writes only by a present participant of the row''s session (review F4).';
-CREATE POLICY app_active_update ON ai_memory AS RESTRICTIVE FOR UPDATE TO app_access USING ((session_id IS NULL OR app.is_current_member(session_id))) WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
-COMMENT ON POLICY app_active_update ON ai_memory IS 'Writes only by a present participant of the row''s session (review F4).';
 CREATE POLICY app_active_insert ON consent AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
 COMMENT ON POLICY app_active_insert ON consent IS 'Writes only by a present participant of the row''s session (review F4).';
 CREATE POLICY app_active_update ON consent AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
@@ -3343,18 +3395,12 @@ CREATE POLICY app_active_insert ON proposal_revision AS RESTRICTIVE FOR INSERT T
 COMMENT ON POLICY app_active_insert ON proposal_revision IS 'Writes only by a present participant of the row''s session (review F4).';
 CREATE POLICY app_active_insert ON reflection AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((linked_session_id IS NULL OR app.is_current_member(linked_session_id)));
 COMMENT ON POLICY app_active_insert ON reflection IS 'Writes only by a present participant of the row''s session (review F4).';
-CREATE POLICY app_active_update ON reflection AS RESTRICTIVE FOR UPDATE TO app_access USING ((linked_session_id IS NULL OR app.is_current_member(linked_session_id))) WITH CHECK ((linked_session_id IS NULL OR app.is_current_member(linked_session_id)));
-COMMENT ON POLICY app_active_update ON reflection IS 'Writes only by a present participant of the row''s session (review F4).';
 CREATE POLICY app_active_insert ON regulation_event AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
 COMMENT ON POLICY app_active_insert ON regulation_event IS 'Writes only by a present participant of the row''s session (review F4).';
 CREATE POLICY app_active_update ON session AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(id)) WITH CHECK (app.is_current_member(id));
 COMMENT ON POLICY app_active_update ON session IS 'Writes only by a present participant of the row''s session (review F4).';
 CREATE POLICY app_active_insert ON user_memory AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
 COMMENT ON POLICY app_active_insert ON user_memory IS 'Writes only by a present participant of the row''s session (review F4).';
-CREATE POLICY app_active_update ON user_memory AS RESTRICTIVE FOR UPDATE TO app_access USING ((session_id IS NULL OR app.is_current_member(session_id))) WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
-COMMENT ON POLICY app_active_update ON user_memory IS 'Writes only by a present participant of the row''s session (review F4).';
-CREATE POLICY app_active_delete ON user_memory AS RESTRICTIVE FOR DELETE TO app_access USING ((session_id IS NULL OR app.is_current_member(session_id)));
-COMMENT ON POLICY app_active_delete ON user_memory IS 'Writes only by a present participant of the row''s session (review F4).';
 
 -- T7c. Diagnostics (work-k5fk.10.30; owner decision 2026-11-17: "diagnostics, no content"). diag_access is the
 -- operations bot's capability (login slam_bot_readonly, its only member; infra/aws/roles.sql). It reads, on every

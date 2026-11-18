@@ -1238,4 +1238,148 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('ok');
     });
   });
+
+  /**
+   * Review r2 (branch9dg/review-r2.md): one test per item, on the reviewer's repros. A session of Gil and Hal; Hal
+   * leaves it after his rows are seeded.
+   */
+  describe('review r2', () => {
+    let gil: string;
+    let hal: string;
+    let gh: string;
+    let halNeed: string;
+    let halAttempt: string;
+    let halReflection: string;
+    beforeAll(async () => {
+      gil = randomUuidV7();
+      hal = randomUuidV7();
+      for (const [id, name] of [
+        [gil, 'Gil'],
+        [hal, 'Hal'],
+      ]) {
+        await run.sql(`INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, $3)`, [
+          id,
+          `${name.toLowerCase()}-${process.pid}@e2e.test`,
+          name,
+        ]);
+      }
+      [{ id: gh }] = await run.sql<{ id: string }>(
+        `INSERT INTO session (status, topic_frame) VALUES ('ACTIVE', 'PROBE_R2') RETURNING id::text`,
+      );
+      await run.sql(`INSERT INTO participant (session_id, user_id, kind) VALUES ($1, $2, 'human')`, [gh, gil]);
+      await run.sql(
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`,
+        [gh, hal, gil],
+      );
+      [{ id: halNeed }] = await run.sql<{ id: string }>(
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence, confirmed_at) VALUES ($1, $2, 'PROBE_R2_NEED', 'SAFETY', 0.9, now())
+         RETURNING id::text`,
+        [gh, hal],
+      );
+      await run.sql(
+        `INSERT INTO consent (session_id, user_id, need_id, decision, decided_at) VALUES ($1, $2, $3, 'GRANTED', now())`,
+        [gh, hal, halNeed],
+      );
+      [{ id: halAttempt }] = await run.sql<{ id: string }>(
+        `INSERT INTO empathy_attempt (session_id, author_user_id, subject_user_id, round, content, status)
+         VALUES ($1, $2, $3, 1, 'PROBE_R2_GUESS', 'HELD') RETURNING id::text`,
+        [gh, hal, gil],
+      );
+      [{ id: halReflection }] = await run.sql<{ id: string }>(
+        `INSERT INTO reflection (user_id, title, linked_session_id) VALUES ($1, 'PROBE_R2_REFLECTION', $2) RETURNING id::text`,
+        [hal, gh],
+      );
+      await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [gh, hal]);
+    });
+
+    it('N1: a participant who left shares no need and moves no round through the definers', async () => {
+      expect(await code('mwf_app', hal, `SELECT app.need_share($1, 'shared after leaving')`, [halNeed])).toBe('42501');
+      expect(await run.sql(`SELECT count(*)::int AS n FROM need_share WHERE need_id = $1`, [halNeed])).toEqual([
+        { n: 0 },
+      ]);
+      expect(await code('mwf_app', hal, `SELECT app.empathy_set_status($1, 'READY')`, [halAttempt])).toBe('P0002');
+      expect(
+        await code('mwf_app', hal, `SELECT app.empathy_set_status($1, 'SUPERSEDED', 'new round after leaving')`, [
+          halAttempt,
+        ]),
+      ).toBe('P0002');
+      expect(await run.sql(`SELECT status::text FROM empathy_attempt WHERE id = $1`, [halAttempt])).toEqual([
+        { status: 'HELD' },
+      ]);
+    });
+
+    it('N2: a leaver keeps editing and unlinking their own reflection, but links nothing new to the left session', async () => {
+      expect(
+        await as('mwf_app', hal, `UPDATE reflection SET title = 'renamed' WHERE id = $1 RETURNING id`, [halReflection]),
+      ).toHaveLength(1);
+      expect(
+        await as('mwf_app', hal, `UPDATE reflection SET linked_session_id = NULL WHERE id = $1 RETURNING id`, [
+          halReflection,
+        ]),
+      ).toHaveLength(1);
+      expect(
+        await code('mwf_app', hal, `UPDATE reflection SET linked_session_id = $2 WHERE id = $1`, [halReflection, gh]),
+      ).toBe('42501');
+      expect(
+        await code('mwf_app', hal, `INSERT INTO reflection (user_id, title, linked_session_id) VALUES ($1, 'x', $2)`, [
+          hal,
+          gh,
+        ]),
+      ).toBe('rls');
+    });
+
+    it('N3: no proposal is born converted (or removed)', async () => {
+      expect(
+        await code(
+          'mwf_app',
+          gil,
+          `INSERT INTO proposal (session_id, created_by_user_id, kind, description, status)
+           VALUES ($1, $2, 'SHARED_PROPOSAL', 'born converted', 'CONVERTED_TO_AGREEMENT')`,
+          [gh, gil],
+        ),
+      ).toBe('rls');
+      expect(
+        await code(
+          'mwf_app',
+          gil,
+          `INSERT INTO proposal (session_id, created_by_user_id, kind, description) VALUES ($1, $2, 'SHARED_PROPOSAL', 'born active')`,
+          [gh, gil],
+        ),
+      ).toBe('ok');
+    });
+
+    it('N4: a partner neither strips nor takes over the attribution of a removal', async () => {
+      const [{ id: p }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, kind, description) VALUES ($1, $2, 'SHARED_PROPOSAL', 'PROBE_N4')
+         RETURNING id::text`,
+        [session, ada],
+      );
+      expect(
+        await code(
+          'mwf_app',
+          ada,
+          `UPDATE proposal SET status = 'REMOVED', removed_at = now(), removed_by_user_id = $2, removal_reason = 'A reason' WHERE id = $1`,
+          [p, ada],
+        ),
+      ).toBe('ok');
+      expect(await code('mwf_app', bob, `UPDATE proposal SET removed_by_user_id = NULL WHERE id = $1`, [p])).toBe(
+        '42501',
+      );
+      expect(await code('mwf_app', bob, `UPDATE proposal SET removed_by_user_id = $2 WHERE id = $1`, [p, bob])).toBe(
+        '42501',
+      );
+      expect(await run.sql(`SELECT removed_by_user_id::text AS r FROM proposal WHERE id = $1`, [p])).toEqual([
+        { r: ada },
+      ]);
+      // control: a restore clears it together with the status
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `UPDATE proposal SET status = 'ACTIVE', removed_at = NULL, removed_by_user_id = NULL, removal_reason = NULL WHERE id = $1`,
+          [p],
+        ),
+      ).toBe('ok');
+    });
+  });
 });
