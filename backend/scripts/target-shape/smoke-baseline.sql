@@ -96,8 +96,14 @@ END $$;
 SELECT author_user_id, subject_user_id, round, status, result_id, share_offer_id, review_id FROM v_empathy_direction
 ORDER BY author_user_id;
 DO $$ BEGIN
-  IF (SELECT array_agg(status::text ORDER BY author_user_id) FROM v_empathy_direction) <> ARRAY['AWAITING_SHARING', 'HELD'] THEN
-    RAISE EXCEPTION 'smoke v_empathy_direction: expected A→B AWAITING_SHARING, B→A HELD';
+  -- RLS (work-k5fk.10.7, empathy_attempt app_select): A reads their own direction (A→B AWAITING_SHARING) and not
+  -- B's unrevealed HELD attempt about them — its status is v_empathy_direction_status's, below; nor the
+  -- reconciler's result or the share offer of A→B, both B's (the subject's).
+  IF (SELECT array_agg(status::text ORDER BY author_user_id) FROM v_empathy_direction) <> ARRAY['AWAITING_SHARING'] THEN
+    RAISE EXCEPTION 'smoke v_empathy_direction: expected only A→B AWAITING_SHARING';
+  END IF;
+  IF (SELECT result_id IS NOT NULL OR share_offer_id IS NOT NULL FROM v_empathy_direction) THEN
+    RAISE EXCEPTION 'smoke v_empathy_direction: A, the author, reads the subject''s result or offer';
   END IF;
   RAISE NOTICE 'smoke ok: v_empathy_direction';
 END $$;

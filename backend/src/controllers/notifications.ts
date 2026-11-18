@@ -20,7 +20,7 @@ import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { successResponse, errorResponse } from '../utils/response';
 import { loadCurrentStages } from '../services/stage-shim';
-import { partyOf, sessionParties } from '../services/empathy-store';
+import { partyOf, sessionParties, withAttemptMeta } from '../services/empathy-store';
 import type { Seat } from '../services/participant-resolver';
 import { withMessageId } from '../services/message-store';
 
@@ -75,10 +75,13 @@ async function unreadContext(me: Me) {
 }
 
 async function openOffers(me: Me) {
-  return prisma.contextShareOffer.findMany({
-    where: { sessionId: me.sessionId, subjectUserId: me.userId, status: { in: ['PENDING', 'OFFERED'] } },
-    include: { result: true, attempt: { select: { authorUserId: true } } },
-  });
+  // The attempts are the authors', unrevealed to the subject: their facts come through app.attempt_meta (work-k5fk.10.7).
+  return withAttemptMeta(
+    await prisma.contextShareOffer.findMany({
+      where: { sessionId: me.sessionId, subjectUserId: me.userId, status: { in: ['PENDING', 'OFFERED'] } },
+      include: { result: true },
+    }),
+  );
 }
 
 // ============================================================================

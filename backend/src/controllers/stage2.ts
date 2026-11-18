@@ -75,6 +75,7 @@ import {
   upsertDraft,
   deleteEmpathyDraft,
   openInvitationOf,
+  currentGuidance,
   type EmpathySubject,
   type AttemptRow,
   type SessionParty,
@@ -1278,10 +1279,14 @@ export async function refineEmpathy(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const guidance = await prisma.reconcilerGuidance.findFirst({
-      where: { sessionId, authorUserId: me.userId, result: { attemptId: attempt.id, supersededAt: null } },
-      select: { areaHint: true, promptSeed: true },
-    });
+    // The result is the subject's (R6): its attempt and supersession come through app.result_facts (work-k5fk.10.7).
+    const [guidance] = await currentGuidance(
+      await prisma.reconcilerGuidance.findMany({
+        where: { sessionId, authorUserId: me.userId },
+        select: { areaHint: true, promptSeed: true, resultId: true },
+      }),
+      attempt.id,
+    );
     const partnerName = partner?.name ?? 'your partner';
     const areaHint = guidance?.areaHint ?? 'deeper emotional experiences';
     const promptSeed = guidance?.promptSeed ?? 'what might be underneath the surface';

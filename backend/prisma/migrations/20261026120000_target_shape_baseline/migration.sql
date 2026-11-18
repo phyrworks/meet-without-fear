@@ -1314,6 +1314,8 @@ GRANT INSERT (session_id, user_id, label, category, evidence, ai_confidence, con
 GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO app_access;
 -- mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
 GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_definer;
+-- mwf_definer: first_need_label (stage3.ts announceStage4: a participant's first confirmed need, once shared)
+GRANT SELECT (label, confirmed_at, created_at) ON need TO mwf_definer;
 -- mwf_definer: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
 GRANT SELECT (session_id, user_id) ON need TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
@@ -1501,6 +1503,8 @@ COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (parti
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
 GRANT SELECT ON reconciler_result TO app_access;
+-- mwf_definer: result_facts (which attempt a result analysed, its iteration and supersession — never the analysis)
+GRANT SELECT (id, attempt_id, subject_user_id, iteration, superseded_at) ON reconciler_result TO mwf_definer;
 -- mwf_ai: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
 -- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL).
@@ -1573,6 +1577,8 @@ GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content
 -- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
 -- offer on the recipient's round, review F3)
 GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
+-- mwf_definer: shares_delivered_to_me (the author's delivered shared text — never the offer)
+GRANT SELECT (shared_content, shared_at, delivered_at) ON context_share_offer TO mwf_definer;
 GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
 -- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
 -- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a
@@ -1946,6 +1952,8 @@ GRANT INSERT (attempt_id, session_id, reviewer_user_id, validated, feedback, fee
 GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO app_access;
 -- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
 GRANT SELECT (id, session_id, reviewer_user_id) ON empathy_review TO mwf_definer;
+-- mwf_definer: validated_at (when the author's attempt was first validated — nothing else of the review)
+GRANT SELECT (attempt_id, validated, created_at) ON empathy_review TO mwf_definer;
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
@@ -2075,6 +2083,8 @@ COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-remov
 GRANT SELECT ON need_share TO app_access;
 -- mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
 GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_definer;
+-- mwf_definer: first_need_label (has the participant shared?)
+GRANT SELECT (session_id, user_id) ON need_share TO mwf_definer;
 GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
 GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
 
@@ -3357,6 +3367,118 @@ COMMENT ON FUNCTION app.co_participant_presence(uuid, uuid) IS 'A co-participant
 REVOKE EXECUTE ON FUNCTION app.co_participant_presence(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.co_participant_presence(uuid, uuid) TO app_access;
 
+-- Content-free facts of empathy attempts the caller is a party of (author or subject): who wrote it, about whom,
+-- the round and its status (with status_version, the optimistic check of app.empathy_set_status) — never content.
+-- The subject of an unrevealed attempt does not see its row (empathy_attempt app_select, P0-2), yet answers a share
+-- offer on it, which moves its round (reconciler.ts, reconciler/sharing.ts, notifications.ts). work-k5fk.10.7.
+CREATE FUNCTION app.attempt_meta(attempts uuid[])
+  RETURNS TABLE (id uuid, session_id uuid, author_user_id uuid, subject_user_id uuid, round integer,
+                 status public.empathy_status, status_version integer, revealed_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT a.id, a.session_id, a.author_user_id, a.subject_user_id, a.round, a.status, a.status_version, a.revealed_at
+    FROM public.empathy_attempt a
+    WHERE a.id = ANY (attempt_meta.attempts)
+      AND app.current_user_id() IN (a.author_user_id, a.subject_user_id)
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.attempt_meta(uuid[]) IS 'Who wrote each attempt, about whom, its round and status (status_version) — never its content — for an attempt the caller is the author or the subject of. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): empathy-store attemptMetaOf (the subject's share-offer paths).
+REVOKE EXECUTE ON FUNCTION app.attempt_meta(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.attempt_meta(uuid[]) TO app_access;
+
+-- Content-free facts of reconciler results behind the guidance the caller may read (reconciler_guidance app_select:
+-- author or subject): which attempt each analysed, its iteration and whether it was superseded — never the analysis.
+-- The author of the attempt reads its guidance but not the result (reconciler_result app_select is the subject's,
+-- R6), yet picks the current guidance by the result's superseded_at (context-assembler, empathy-status, stage2,
+-- reconciler/state). For a result the caller is the subject of, or of an attempt the caller authored. work-k5fk.10.7.
+CREATE FUNCTION app.result_facts(results uuid[])
+  RETURNS TABLE (id uuid, attempt_id uuid, iteration integer, superseded_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT r.id, r.attempt_id, r.iteration, r.superseded_at
+    FROM public.reconciler_result r
+    JOIN public.empathy_attempt a ON a.id = r.attempt_id
+    WHERE r.id = ANY (result_facts.results)
+      AND app.current_user_id() IN (r.subject_user_id, a.author_user_id)
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.result_facts(uuid[]) IS 'Which attempt each reconciler result analysed, its iteration and superseded_at — never the analysis — for a result the caller is the subject of or whose attempt the caller authored. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): empathy-store resultFactsOf (the author's current guidance).
+REVOKE EXECUTE ON FUNCTION app.result_facts(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.result_facts(uuid[]) TO app_access;
+
+-- What reached the caller as an attempt's AUTHOR through a share: the offers on attempts the caller authored whose
+-- shared text was delivered (DELIVERED / SEEN) — the shared text, its status and instants, never the offer the
+-- subject was shown (suggested_* / offer_message; R6). The offer row is the subject's (context_share_offer
+-- app_select), and the author already holds the text as the delivered SHARED_CONTEXT line; the context assembler
+-- reads it here (work-k5fk.10.7).
+CREATE FUNCTION app.shares_delivered_to_me(session uuid)
+  RETURNS TABLE (id uuid, subject_user_id uuid, status public.share_offer_status, delivery_status public.delivery_status,
+                 shared_content text, shared_at timestamptz, delivered_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT o.id, o.subject_user_id, o.status, o.delivery_status, o.shared_content, o.shared_at, o.delivered_at
+    FROM public.context_share_offer o
+    JOIN public.empathy_attempt a ON a.id = o.attempt_id
+    WHERE o.session_id = shares_delivered_to_me.session AND a.author_user_id = app.current_user_id()
+      AND o.shared_content IS NOT NULL AND o.delivery_status IN ('DELIVERED', 'SEEN')
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.shares_delivered_to_me(uuid) IS 'The shared text (ciphertext), status and instants of the delivered share offers on attempts the caller authored — never the offer the subject was shown. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): context-assembler buildSharedVessel.
+REVOKE EXECUTE ON FUNCTION app.shares_delivered_to_me(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.shares_delivered_to_me(uuid) TO app_access;
+
+-- When each of the caller's own attempts was first validated by its subject (the earliest validated review): the
+-- verdict reaches the author through their round's status, and the context assembler dates it (review rows are the
+-- reviewer's until feedback is sent — empathy_review app_own / app_author_sent; work-k5fk.10.7).
+CREATE FUNCTION app.validated_at(attempts uuid[])
+  RETURNS TABLE (attempt_id uuid, validated_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT v.attempt_id, min(v.created_at)
+    FROM public.empathy_review v
+    JOIN public.empathy_attempt a ON a.id = v.attempt_id
+    WHERE v.attempt_id = ANY (validated_at.attempts) AND v.validated AND a.author_user_id = app.current_user_id()
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+    GROUP BY v.attempt_id
+  $$;
+COMMENT ON FUNCTION app.validated_at(uuid[]) IS 'The instant each of the caller''s own attempts was first validated (its earliest validated review''s created_at), nothing else of the review. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): context-assembler buildSharedVessel.
+REVOKE EXECUTE ON FUNCTION app.validated_at(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.validated_at(uuid[]) TO app_access;
+
+-- The first live confirmed need label (ciphertext) of a participant who has shared their needs, for a co-participant
+-- of the same session: controllers/stage3.ts announceStage4 writes each participant's Stage 4 transition line ("Let's
+-- start with one of yours: …") from the request of whoever completed the mutual share. need is own-row
+-- (work-k5fk.10.7). FINDING: the label (which the share may have edited) reaches the co-participant's request; a
+-- definer that writes the line itself would keep it in the database.
+CREATE FUNCTION app.first_need_label(session uuid, "user" uuid) RETURNS text
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT n.label
+    FROM public.need n
+    WHERE n.session_id = first_need_label.session AND n.user_id = first_need_label."user"
+      AND n.deleted_at IS NULL AND n.superseded_by_need_id IS NULL AND n.confirmed_at IS NOT NULL
+      AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = first_need_label.session AND me.user_id = app.current_user_id())
+      AND EXISTS (SELECT 1 FROM public.need_share s
+                  WHERE s.session_id = first_need_label.session AND s.user_id = first_need_label."user" AND s.revoked_at IS NULL)
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+    ORDER BY n.created_at, n.id
+    LIMIT 1
+  $$;
+COMMENT ON FUNCTION app.first_need_label(uuid, uuid) IS 'A participant''s first live confirmed need label (ciphertext), once they have shared, for a co-participant: the Stage 4 transition line (stage3.ts announceStage4). Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): controllers/stage3.ts firstNeedText.
+REVOKE EXECUTE ON FUNCTION app.first_need_label(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.first_need_label(uuid, uuid) TO app_access;
+
 -- requireSessionAccess for a caller with no participant row (middleware/auth.ts): 'missing' when the session does
 -- not exist, 'invited' when it has an invitation the caller did not send that is PENDING and unexpired, or that
 -- the caller accepted (the acceptance timing gap; Phase 3 §7 W6 schedules its removal), else 'denied'. Under RLS a
@@ -4317,6 +4439,11 @@ ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_invitee_access(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.shares_delivered_to_me(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.validated_at(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.first_need_label(uuid, uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.result_facts(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.attempt_meta(uuid[]) OWNER TO mwf_definer;
 ALTER FUNCTION app.co_participant_presence(uuid, uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.actor_name_for(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_repoint_drafts(uuid) OWNER TO mwf_definer;
@@ -4723,8 +4850,11 @@ CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
 -- T-result-live-attempt: no result on a SUPERSEDED round. (The subject = the attempt's
 -- subject half is a key since work-k5fk.3 (6a): reconciler_result (attempt_id,
 -- session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).)
+-- SECURITY DEFINER (owned by mwf_definer, handed over with the k5fk.2 trigger functions below; work-k5fk.10.33):
+-- it asks whether a row exists, and under the writer's RLS a row the writer may not see would read as absent — the
+-- answer must be the table's, not the caller's view of it.
 CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
-  LANGUAGE plpgsql
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
@@ -5007,6 +5137,7 @@ CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
 -- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
@@ -5441,15 +5572,18 @@ CREATE POLICY definer_all ON brain_activity TO mwf_definer USING (true) WITH CHE
 
 -- consent: app_access SIU, mwf_definer SU
 ALTER TABLE consent ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON consent TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON consent IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON consent TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON consent IS 'The caller''s own rows: the deciders (no requester arm, P1-4) (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON consent TO mwf_definer USING (true) WITH CHECK (true);
 
 -- context_share_offer: ai_access SIU, app_access SU, mwf_definer SU
 ALTER TABLE context_share_offer ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON context_share_offer TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON context_share_offer IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON context_share_offer TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON context_share_offer FOR SELECT TO app_access USING (subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON context_share_offer IS 'The share offers made to the caller (the subject); the author sees the shared text only as its delivered copy (design note §6, R6; work-k5fk.10.7).';
+CREATE POLICY app_update ON context_share_offer FOR UPDATE TO app_access USING (subject_user_id = (SELECT app.current_user_id())) WITH CHECK (subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON context_share_offer IS 'The subject answers their own offer (status, shared / declined; work-k5fk.10.7).';
+CREATE POLICY ai_session ON context_share_offer TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY definer_all ON context_share_offer TO mwf_definer USING (true) WITH CHECK (true);
 
 -- conversation: ai_access S, app_access SIU, mwf_definer SUD, ops_access S
@@ -5480,15 +5614,23 @@ CREATE POLICY definer_all ON draft TO mwf_definer USING (true) WITH CHECK (true)
 
 -- empathy_attempt: ai_access SU, app_access SI, mwf_definer SIUD
 ALTER TABLE empathy_attempt ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON empathy_attempt TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON empathy_attempt IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON empathy_attempt TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON empathy_attempt FOR SELECT TO app_access
+  USING (author_user_id = (SELECT app.current_user_id()) OR (subject_user_id = (SELECT app.current_user_id()) AND revealed_at IS NOT NULL));
+COMMENT ON POLICY app_select ON empathy_attempt IS 'The caller''s own attempts; the ones about the caller only once revealed — before that its subject reads the direction''s status through v_empathy_direction_status (design note §6, P0-2; work-k5fk.10.7).';
+CREATE POLICY app_insert ON empathy_attempt FOR INSERT TO app_access WITH CHECK (author_user_id = (SELECT app.current_user_id()) AND status = 'HELD');
+COMMENT ON POLICY app_insert ON empathy_attempt IS 'The caller''s own new attempt, HELD; every move after is app.empathy_set_status (design note §6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON empathy_attempt TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY definer_all ON empathy_attempt TO mwf_definer USING (true) WITH CHECK (true);
 
 -- empathy_review: app_access SIU, mwf_definer S
 ALTER TABLE empathy_review ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON empathy_review TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON empathy_review IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON empathy_review TO app_access USING (reviewer_user_id = (SELECT app.current_user_id())) WITH CHECK (reviewer_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON empathy_review IS 'The caller''s own rows: their reviews of an attempt about them (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_author_sent ON empathy_review FOR SELECT TO app_access
+  USING (feedback_sent_at IS NOT NULL
+         AND EXISTS (SELECT 1 FROM empathy_attempt a WHERE a.id = empathy_review.attempt_id AND a.author_user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_author_sent ON empathy_review IS 'The author of the attempt reads its review once the feedback was sent — before that nothing, the validated flag included (spec §1.2 RLS, fix1 m2; empathy-store reviewVisibleToAuthor; work-k5fk.10.7).';
 CREATE POLICY definer_all ON empathy_review TO mwf_definer USING (true) WITH CHECK (true);
 
 -- feature_state: app_access SIU, mwf_definer SD
@@ -5573,20 +5715,21 @@ CREATE POLICY definer_all ON mood_reading TO mwf_definer USING (true) WITH CHECK
 
 -- need: app_access SIU, mwf_definer SD
 ALTER TABLE need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON need TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON need IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON need TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON need IS 'The caller''s own rows: their needs (a soft delete is deleted_at) (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON need TO mwf_definer USING (true) WITH CHECK (true);
 
 -- need_disposition: app_access SIUD, mwf_definer SD
 ALTER TABLE need_disposition ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON need_disposition TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON need_disposition IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON need_disposition TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON need_disposition IS 'The caller''s own rows: their dispositions of a need (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON need_disposition TO mwf_definer USING (true) WITH CHECK (true);
 
 -- need_share: app_access S, mwf_definer SIU
 ALTER TABLE need_share ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON need_share TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON need_share IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON need_share FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (revoked_at IS NULL AND app.is_member(session_id)));
+COMMENT ON POLICY app_select ON need_share IS 'The caller''s own shares, and every unrevoked share of a session the caller is in; a share is written by app.need_share (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON need_share TO mwf_definer USING (true) WITH CHECK (true);
 
 -- participant: ai_access S, app_access SI, mwf_definer SU, ops_access S, worker_access S
@@ -5655,15 +5798,18 @@ CREATE POLICY worker_session ON proposal_revision TO worker_access USING (sessio
 
 -- reconciler_guidance: ai_access SI, app_access S
 ALTER TABLE reconciler_guidance ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reconciler_guidance TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reconciler_guidance IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON reconciler_guidance TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON reconciler_guidance FOR SELECT TO app_access USING (author_user_id = (SELECT app.current_user_id()) OR subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON reconciler_guidance IS 'Guidance in a direction the caller is a party of (design note §6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON reconciler_guidance TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 
--- reconciler_result: ai_access SIU, app_access S
+-- reconciler_result: ai_access SIU, app_access S, mwf_definer S
 ALTER TABLE reconciler_result ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reconciler_result TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reconciler_result IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON reconciler_result TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON reconciler_result TO mwf_definer USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON reconciler_result FOR SELECT TO app_access USING (subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON reconciler_result IS 'The reconciler''s analysis of an attempt about the caller — never its author''s (design note §6, R6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON reconciler_result TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 
 -- reflection: app_access SIU, mwf_definer SD, ops_access S
 ALTER TABLE reflection ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;

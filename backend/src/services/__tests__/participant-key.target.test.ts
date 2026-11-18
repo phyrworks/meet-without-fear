@@ -606,7 +606,7 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       const insertResult = (subjectUser: string) =>
         run.as(
           'mwf_ai',
-          null,
+          ids.adaUser, // the AI acts for a participant of its scope (work-k5fk.10.7)
           `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
                                           gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
            VALUES ($1, $2, $3, 99, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false)`,

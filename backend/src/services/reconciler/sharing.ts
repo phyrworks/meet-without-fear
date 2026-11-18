@@ -30,7 +30,14 @@ import { cleanVisibleAIText } from '../../utils/visible-text';
 import type { ReconcilerResult, ShareOfferMessage } from '@meet-without-fear/shared';
 import { createFacilitatorMessage, deliverMessage } from '../message-store';
 import { loadCurrentStages } from '../stage-shim';
-import { currentAttempt, jobMoveIfUnchanged, partyOf, sessionParties, type SessionParty } from '../empathy-store';
+import {
+  currentAttempt,
+  jobMoveIfUnchanged,
+  partyOf,
+  sessionParties,
+  withOneAttemptMeta,
+  type SessionParty,
+} from '../empathy-store';
 
 import {
   type UserInfo,
@@ -72,18 +79,18 @@ async function displayNameForViewer(
 
 /** The open (PENDING/OFFERED) offer of a subject in a session, with its attempt's author. */
 async function openOfferOf(sessionId: string, subjectUserId: string) {
-  return prisma.contextShareOffer.findFirst({
-    where: {
-      sessionId,
-      subjectUserId,
-      status: { in: ['OFFERED', 'PENDING'] },
-    },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      attempt: { select: { id: true, authorUserId: true, status: true, statusVersion: true } },
-      result: true,
-    },
-  });
+  // The attempt is the author's, unrevealed to the subject: its facts come through app.attempt_meta (work-k5fk.10.7).
+  return withOneAttemptMeta(
+    await prisma.contextShareOffer.findFirst({
+      where: {
+        sessionId,
+        subjectUserId,
+        status: { in: ['OFFERED', 'PENDING'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: { result: true },
+    }),
+  );
 }
 
 // ============================================================================
@@ -533,11 +540,12 @@ export async function getShareSuggestionForUser(
   const me = partyOf(parties, { userId });
   if (!me) return { hasSuggestion: false, suggestion: null };
 
-  const offer = await prisma.contextShareOffer.findFirst({
-    where: { sessionId, subjectUserId: me.userId, status: 'PENDING' },
-    orderBy: { createdAt: 'desc' },
-    include: { attempt: { select: { authorUserId: true } } },
-  });
+  const offer = await withOneAttemptMeta(
+    await prisma.contextShareOffer.findFirst({
+      where: { sessionId, subjectUserId: me.userId, status: 'PENDING' },
+      orderBy: { createdAt: 'desc' },
+    }),
+  );
   if (!offer || !offer.suggestedContent) return { hasSuggestion: false, suggestion: null };
 
   // The subject's own row: OFFERED once viewed (app connection).
@@ -797,17 +805,19 @@ export async function resumeUndeliveredShare(
   parties: SessionParty[],
   opts: { offerId?: string } = {},
 ): Promise<{ sharedContent: string; sharedMessageId: string | null } | null> {
-  const stuck = await prisma.contextShareOffer.findFirst({
-    where: {
-      ...(opts.offerId ? { id: opts.offerId } : {}),
-      sessionId,
-      subjectUserId: me.userId,
-      status: 'ACCEPTED',
-      deliveryStatus: 'PENDING',
-    },
-    orderBy: { updatedAt: 'desc' },
-    select: { id: true, sharedContent: true, attempt: { select: { id: true, authorUserId: true } } },
-  });
+  const stuck = await withOneAttemptMeta(
+    await prisma.contextShareOffer.findFirst({
+      where: {
+        ...(opts.offerId ? { id: opts.offerId } : {}),
+        sessionId,
+        subjectUserId: me.userId,
+        status: 'ACCEPTED',
+        deliveryStatus: 'PENDING',
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, sharedContent: true, attemptId: true },
+    }),
+  );
   if (!stuck?.sharedContent) return null;
   const author = partyOf(parties, { userId: stuck.attempt.authorUserId });
   if (!author) return null;
@@ -962,11 +972,12 @@ export async function getSharedContentDeliveryStatus(
   const parties = await sessionParties(sessionId);
   const me = partyOf(parties, { userId: subjectId });
   if (!me) return { hasSharedContent: false, deliveryStatus: null, sharedAt: null, sharedContent: null };
-  const offer = await prisma.contextShareOffer.findFirst({
-    where: { sessionId, subjectUserId: me.userId, status: 'ACCEPTED' },
-    orderBy: { sharedAt: 'desc' },
-    include: { attempt: { select: { authorUserId: true } } },
-  });
+  const offer = await withOneAttemptMeta(
+    await prisma.contextShareOffer.findFirst({
+      where: { sessionId, subjectUserId: me.userId, status: 'ACCEPTED' },
+      orderBy: { sharedAt: 'desc' },
+    }),
+  );
   if (!offer || !offer.sharedContent || !offer.sharedAt) {
     return { hasSharedContent: false, deliveryStatus: null, sharedAt: null, sharedContent: null };
   }

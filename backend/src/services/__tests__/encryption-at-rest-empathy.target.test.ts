@@ -363,7 +363,7 @@ describeTarget(
 
     it('the reveal (checkAndRevealBothIfReady as mwf_ai): the EMPATHY_STATEMENT copies are ciphertext, the subject reads plaintext, the hook runs', async () => {
       await asUser(ids.bobUser, () => store.setAttemptStatus(bobRound1, 'READY', { actor: 'participant' }));
-      const round2 = (await store.currentAttempt(ids.session, ids.adaUser, ids.bobUser))!;
+      const round2 = (await asUser(ids.adaUser, () => store.currentAttempt(ids.session, ids.adaUser, ids.bobUser)))!;
       await asAi(() => store.setAttemptStatus(round2.id, 'READY', { actor: 'job' }));
       hook.mockClear();
       const state = await import('../reconciler/state');

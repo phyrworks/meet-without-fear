@@ -669,6 +669,129 @@ export async function repointInvitationDraftsAsTooling(
   return drafts.length;
 }
 
+/** Content-free facts of a reconciler result behind guidance the caller may read (app.result_facts). */
+export interface ResultFacts {
+  id: string;
+  attemptId: string;
+  iteration: number;
+  supersededAt: Date | null;
+}
+
+/**
+ * Which attempt each result analysed, its iteration and supersession — never the analysis — through
+ * app.result_facts (work-k5fk.10.7): the author of an attempt reads its guidance, but the result is the
+ * subject's (reconciler_result app_select, R6), so a relation filter on it would see nothing.
+ */
+export async function resultFactsOf(ids: string[], client: DbClient = prisma): Promise<Map<string, ResultFacts>> {
+  if (ids.length === 0) return new Map();
+  const rows = await client.$queryRaw<
+    Array<{ id: string; attempt_id: string; iteration: number; superseded_at: Date | null }>
+  >`SELECT id, attempt_id, iteration, superseded_at FROM app.result_facts(${[...new Set(ids)]}::uuid[])`;
+  return new Map(
+    rows.map(r => [r.id, { id: r.id, attemptId: r.attempt_id, iteration: r.iteration, supersededAt: r.superseded_at }]),
+  );
+}
+
+/** Of these guidance rows, the ones whose result is current (not superseded) — and of `attemptId`, when given. */
+export async function currentGuidance<T extends { resultId: string }>(
+  rows: T[],
+  attemptId?: string,
+): Promise<Array<T & { result: ResultFacts }>> {
+  const facts = await resultFactsOf(rows.map(r => r.resultId));
+  return rows.flatMap(r => {
+    const result = facts.get(r.resultId);
+    return result && result.supersededAt === null && (attemptId === undefined || result.attemptId === attemptId)
+      ? [{ ...r, result }]
+      : [];
+  });
+}
+
+/** Content-free facts of an attempt the caller is a party of (app.attempt_meta). */
+export interface AttemptMeta {
+  id: string;
+  sessionId: string;
+  authorUserId: string;
+  subjectUserId: string;
+  round: number;
+  status: TargetEmpathyStatus;
+  statusVersion: number;
+  revealedAt: Date | null;
+}
+
+/**
+ * The facts (never the content) of attempts the caller authored or is the subject of, by id — through
+ * app.attempt_meta (work-k5fk.10.7): before the reveal, the subject cannot read the attempt's row at all
+ * (empathy_attempt app_select, P0-2), yet answers a share offer on it, which moves its round.
+ */
+export async function attemptMetaOf(ids: string[], client: DbClient = prisma): Promise<Map<string, AttemptMeta>> {
+  if (ids.length === 0) return new Map();
+  const rows = await client.$queryRaw<
+    Array<{
+      id: string;
+      session_id: string;
+      author_user_id: string;
+      subject_user_id: string;
+      round: number;
+      status: TargetEmpathyStatus;
+      status_version: number;
+      revealed_at: Date | null;
+    }>
+  >`SELECT id, session_id, author_user_id, subject_user_id, round, status::text AS status, status_version, revealed_at
+    FROM app.attempt_meta(${[...new Set(ids)]}::uuid[])`;
+  return new Map(
+    rows.map(r => [
+      r.id,
+      {
+        id: r.id,
+        sessionId: r.session_id,
+        authorUserId: r.author_user_id,
+        subjectUserId: r.subject_user_id,
+        round: r.round,
+        status: r.status,
+        statusVersion: r.status_version,
+        revealedAt: r.revealed_at,
+      },
+    ]),
+  );
+}
+
+/** `rows` with each one's attempt facts attached as `attempt` (rows whose attempt the caller is no party of drop out). */
+export async function withAttemptMeta<T extends { attemptId: string }>(
+  rows: T[],
+  client: DbClient = prisma,
+): Promise<Array<T & { attempt: AttemptMeta }>> {
+  const meta = await attemptMetaOf(
+    rows.map(r => r.attemptId),
+    client,
+  );
+  return rows.flatMap(r => {
+    const attempt = meta.get(r.attemptId);
+    return attempt ? [{ ...r, attempt }] : [];
+  });
+}
+
+/** The first of `rows` (in their order) whose attempt `authorUserId` wrote — by app.attempt_meta, not the row's RLS. */
+export async function byAuthor<T extends { attemptId: string }>(
+  rows: T[],
+  authorUserId: string,
+  client: DbClient = prisma,
+): Promise<T | null> {
+  const meta = await attemptMetaOf(
+    rows.map(r => r.attemptId),
+    client,
+  );
+  return rows.find(r => meta.get(r.attemptId)?.authorUserId === authorUserId) ?? null;
+}
+
+/** One row with its attempt facts attached (null in, or no party of it: null). */
+export async function withOneAttemptMeta<T extends { attemptId: string }>(
+  row: T | null,
+  client: DbClient = prisma,
+): Promise<(T & { attempt: AttemptMeta }) | null> {
+  if (!row) return null;
+  return (await withAttemptMeta([row], client))[0] ?? null;
+}
+
 /** Has the author GRANTED a submission consent on any round of this direction (m12: any round, not only the newest)? */
 export async function grantedSubmissionConsent(
   sessionId: string,

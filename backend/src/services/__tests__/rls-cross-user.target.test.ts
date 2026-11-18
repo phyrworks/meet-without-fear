@@ -312,10 +312,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         await as('mwf_app', bob, `UPDATE conversation SET status = 'RESOLVED' WHERE id = $1 RETURNING id`, [adaMain]),
       ).toEqual([]);
       expect(
-        await code('mwf_app', bob, `INSERT INTO conversation (session_id, user_id, kind, anchor_kind) VALUES ($1, $2, 'SUBCHAT', 'NEEDS_BRAINSTORM')`, [
-          session,
-          ada,
-        ]),
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO conversation (session_id, user_id, kind, anchor_kind) VALUES ($1, $2, 'SUBCHAT', 'NEEDS_BRAINSTORM')`,
+          [session, ada],
+        ),
       ).toBe('rls');
     });
 
@@ -468,6 +470,164 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await count('mwf_ai', ada, 'message', 'true', [], session)).toBeGreaterThan(0);
       expect(await count('mwf_ai', carol, 'message', 'true', [], session)).toBe(0);
       expect(await count('mwf_ai', carol, 'conversation', 'true', [], session)).toBe(0);
+    });
+  });
+
+  describe('empathy (9f)', () => {
+    /** Bob's attempt about Ada, its reconciler result (subject Ada), guidance and share offer (superuser setup). */
+    let bobAttempt: string;
+    let result: string;
+    let offer: string;
+    let adaNeed: string;
+    beforeAll(async () => {
+      [{ id: bobAttempt }] = await run.sql<{ id: string }>(
+        `INSERT INTO empathy_attempt (session_id, author_user_id, subject_user_id, round, content, status)
+         VALUES ($1, $2, $3, 41, 'PROBE_BOB_GUESS', 'AWAITING_SHARING') RETURNING id::text`,
+        [session, bob, ada],
+      );
+      [{ id: result }] = await run.sql<{ id: string }>(
+        `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
+                                        gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
+         VALUES ($1, $2, $3, 1, 50, 's', 'PROBE_GAP', 'MINOR', 'PROCEED', 'r', true) RETURNING id::text`,
+        [bobAttempt, session, ada],
+      );
+      await run.sql(
+        `INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id, guidance_type)
+         VALUES ($1, $2, $3, $4, 'explore_breadth')`,
+        [result, session, bob, ada],
+      );
+      [{ id: offer }] = await run.sql<{ id: string }>(
+        `INSERT INTO context_share_offer (attempt_id, result_id, session_id, subject_user_id, status, suggested_content)
+         VALUES ($1, $2, $3, $4, 'OFFERED', 'PROBE_SUGGESTION') RETURNING id::text`,
+        [bobAttempt, result, session, ada],
+      );
+      [{ id: adaNeed }] = await run.sql<{ id: string }>(
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1, $2, 'PROBE_NEED', 'SAFETY', 0.5)
+         RETURNING id::text`,
+        [session, ada],
+      );
+    });
+
+    it('empathy_attempt: Ada cannot read Bob’s unrevealed attempt about her, only its facts; nobody writes one as Bob', async () => {
+      expect(await count('mwf_app', bob, 'empathy_attempt', 'id = $1', [bobAttempt])).toBe(1);
+      expect(await count('mwf_app', ada, 'empathy_attempt', 'id = $1', [bobAttempt])).toBe(0);
+      expect(await count('mwf_app', carol, 'empathy_attempt')).toBe(0);
+      expect(
+        await as<{ author_user_id: string }>('mwf_app', ada, `SELECT author_user_id::text FROM app.attempt_meta($1)`, [
+          [bobAttempt],
+        ]),
+      ).toEqual([{ author_user_id: bob }]);
+      expect(await as('mwf_app', carol, `SELECT 1 FROM app.attempt_meta($1)`, [[bobAttempt]])).toEqual([]);
+      expect(
+        await code(
+          'mwf_app',
+          ada,
+          `INSERT INTO empathy_attempt (session_id, author_user_id, subject_user_id, round, content) VALUES ($1, $2, $3, 42, 'forged')`,
+          [session, bob, ada],
+        ),
+      ).toBe('rls');
+    });
+
+    it('reconciler_result, reconciler_guidance: the author reads the guidance, never the analysis; Carol neither', async () => {
+      expect(await count('mwf_app', ada, 'reconciler_result', 'id = $1', [result])).toBe(1);
+      expect(await count('mwf_app', bob, 'reconciler_result', 'id = $1', [result])).toBe(0);
+      expect(await count('mwf_app', bob, 'reconciler_guidance', 'result_id = $1', [result])).toBe(1);
+      expect(await count('mwf_app', carol, 'reconciler_guidance')).toBe(0);
+      expect(await as('mwf_app', carol, `SELECT 1 FROM app.result_facts($1)`, [[result]])).toEqual([]);
+    });
+
+    it('context_share_offer: only the subject reads and answers it', async () => {
+      expect(await count('mwf_app', ada, 'context_share_offer', 'id = $1', [offer])).toBe(1);
+      expect(await count('mwf_app', bob, 'context_share_offer', 'id = $1', [offer])).toBe(0);
+      expect(
+        await as('mwf_app', bob, `UPDATE context_share_offer SET status = 'DECLINED' WHERE id = $1 RETURNING id`, [
+          offer,
+        ]),
+      ).toEqual([]);
+    });
+
+    it('empathy_review: the author reads the subject’s review only once its feedback is sent', async () => {
+      await run.sql(`UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = now() WHERE id = $1`, [bobAttempt]);
+      const [{ id: review }] = await run.sql<{ id: string }>(
+        `INSERT INTO empathy_review (attempt_id, session_id, reviewer_user_id, validated) VALUES ($1, $2, $3, false)
+         RETURNING id::text`,
+        [bobAttempt, session, ada],
+      );
+      expect(await count('mwf_app', ada, 'empathy_review', 'id = $1', [review])).toBe(1);
+      expect(await count('mwf_app', bob, 'empathy_review', 'id = $1', [review])).toBe(0);
+      await run.sql(`UPDATE empathy_review SET feedback = 'PROBE_SENT', feedback_sent_at = now() WHERE id = $1`, [
+        review,
+      ]);
+      expect(await count('mwf_app', bob, 'empathy_review', 'id = $1', [review])).toBe(1);
+      expect(await count('mwf_app', carol, 'empathy_review')).toBe(0);
+      expect(
+        await as('mwf_app', bob, `UPDATE empathy_review SET validated = true WHERE id = $1 RETURNING id`, [review]),
+      ).toEqual([]);
+    });
+
+    it('need, consent, need_disposition: Bob neither reads Ada’s nor writes in her name', async () => {
+      await run.sql(
+        `INSERT INTO consent (session_id, user_id, need_id, decision, decided_at) VALUES ($1, $2, $3, 'GRANTED', now())`,
+        [session, ada, adaNeed],
+      );
+      for (const table of ['need', 'consent']) {
+        expect(await count('mwf_app', ada, table, 'user_id = $1', [ada])).toBeGreaterThan(0);
+        expect(await count('mwf_app', bob, table, 'user_id = $1', [ada])).toBe(0);
+      }
+      expect(await as('mwf_app', bob, `UPDATE need SET label = 'x' WHERE id = $1 RETURNING id`, [adaNeed])).toEqual([]);
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO consent (session_id, user_id, need_id, decision) VALUES ($1, $2, $3, 'DENIED')`,
+          [session, ada, adaNeed],
+        ),
+      ).toBe('23514'); // t_consent_owner (BEFORE, ahead of the policy): "consent target is not yours"
+      // A disposition is the partner's of a shared need: Bob's of Ada's, private to Bob.
+      await run.sql(
+        `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'SAFETY', 'PROBE_SHARED')`,
+        [adaNeed, session, ada],
+      );
+      await run.sql(`INSERT INTO need_disposition (session_id, user_id, need_id) VALUES ($1, $2, $3)`, [
+        session,
+        bob,
+        adaNeed,
+      ]);
+      expect(await count('mwf_app', bob, 'need_disposition', 'user_id = $1', [bob])).toBe(1);
+      expect(await count('mwf_app', ada, 'need_disposition', 'user_id = $1', [bob])).toBe(0);
+      expect(
+        await code('mwf_app', ada, `INSERT INTO need_disposition (session_id, user_id, need_id) VALUES ($1, $2, $3)`, [
+          session,
+          bob,
+          adaNeed,
+        ]),
+      ).toBe('rls');
+    });
+
+    it('need_share: Bob reads Ada’s live share, not a revoked one; Carol none', async () => {
+      // (shared in the test above)
+      expect(await count('mwf_app', bob, 'need_share', 'need_id = $1', [adaNeed])).toBe(1);
+      expect(await count('mwf_app', carol, 'need_share')).toBe(0);
+      await run.sql(`UPDATE need_share SET revoked_at = now() WHERE need_id = $1`, [adaNeed]);
+      expect(await count('mwf_app', bob, 'need_share', 'need_id = $1', [adaNeed])).toBe(0);
+      expect(await count('mwf_app', ada, 'need_share', 'need_id = $1', [adaNeed])).toBe(1);
+    });
+
+    it('the content-free definers answer a party of the session only (shares_delivered_to_me, validated_at, first_need_label)', async () => {
+      expect(await as('mwf_app', carol, `SELECT 1 FROM app.shares_delivered_to_me($1)`, [session])).toEqual([]);
+      expect(await as('mwf_app', carol, `SELECT 1 FROM app.validated_at($1)`, [[bobAttempt]])).toEqual([]);
+      // Ada, the subject, learns nothing of Bob's verdicts on his own attempt (it is the author's question)
+      expect(await as('mwf_app', ada, `SELECT 1 FROM app.validated_at($1)`, [[bobAttempt]])).toEqual([]);
+      expect(
+        await as<{ l: string | null }>('mwf_app', carol, `SELECT app.first_need_label($1, $2) AS l`, [session, ada]),
+      ).toEqual([{ l: null }]);
+    });
+
+    it('the AI acting for Carol reads no attempt, result or offer of their session', async () => {
+      expect(await count('mwf_ai', bob, 'empathy_attempt', 'id = $1', [bobAttempt], session)).toBe(1);
+      for (const table of ['empathy_attempt', 'reconciler_result', 'reconciler_guidance', 'context_share_offer']) {
+        expect(await count('mwf_ai', carol, table, 'true', [], session)).toBe(0);
+      }
     });
   });
 });

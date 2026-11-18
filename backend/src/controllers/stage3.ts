@@ -23,6 +23,8 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { decryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { getCurrentUserId } from '../lib/request-context';
 import { confirmNeedsRequestSchema, MessageRole, NeedCategory } from '@meet-without-fear/shared';
 import { notifyPartner, publishMessageAIResponse, publishSessionEvent, publishUserEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
@@ -73,8 +75,17 @@ function buildStage4TransitionContent(firstNeed?: string | null): string {
   ].join('\n\n');
 }
 
-/** The participant's first live confirmed need (their own label, in their own conversation). */
+/**
+ * The participant's first live confirmed need (their own label, in their own conversation). The request that
+ * completes the mutual share writes both participants' lines: the co-participant's need is theirs under RLS
+ * (work-k5fk.10.7), so it comes through app.first_need_label.
+ */
 async function firstNeedText(seat: Seat): Promise<string | null> {
+  if (seat.userId !== getCurrentUserId()) {
+    const [row] = await prisma.$queryRaw<Array<{ label: string | null }>>`
+      SELECT app.first_need_label(${seat.sessionId}::uuid, ${seat.userId}::uuid) AS label`;
+    return row?.label ? decryptColumnValue('need', 'label', row.label) : null;
+  }
   const [first] = await listOwnNeeds(seat, { live: true, confirmed: true });
   return first?.label ?? null;
 }

@@ -15,9 +15,10 @@
  */
 
 import { getNicknameForSessionPartner } from './contacts';
+import { currentGuidance } from './empathy-store';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { decryptRawRows } from '../lib/prisma-encryption-middleware';
+import { decryptColumnValue, decryptRawRows } from '../lib/prisma-encryption-middleware';
 import { type MemoryIntentResult, type RetrievalDepth, getTurnBufferSize } from './memory-intent';
 import { getSessionSummary } from './conversation-summarizer';
 import { getCoParticipants, getParticipant, resolveParticipant, seatOf, type Seat } from './participant-resolver';
@@ -295,6 +296,67 @@ export interface ParticipantContext extends ContextBundle {
   milestoneContext: string | null;
 }
 
+/**
+ * The shares in the participant's session, in share order: the ones they made as the subject (their own offer
+ * rows) and, as an attempt's author, the ones delivered to them — whose offer row is the subject's under RLS, so
+ * the shared text comes through app.shares_delivered_to_me (work-k5fk.10.7; never the offer itself).
+ */
+async function sharedContextsOf(me: Seat) {
+  const [mine, delivered] = await Promise.all([
+    prisma.contextShareOffer.findMany({
+      where: { sessionId: me.sessionId, sharedContent: { not: null }, subjectUserId: me.userId },
+      select: {
+        id: true,
+        subjectUserId: true,
+        status: true,
+        deliveryStatus: true,
+        sharedContent: true,
+        sharedAt: true,
+        deliveredAt: true,
+      },
+    }),
+    prisma.$queryRaw<
+      Array<{
+        id: string;
+        subject_user_id: string;
+        status: string;
+        delivery_status: string;
+        shared_content: string | null;
+        shared_at: Date | null;
+        delivered_at: Date | null;
+      }>
+    >`SELECT id, subject_user_id, status::text AS status, delivery_status::text AS delivery_status, shared_content,
+             shared_at, delivered_at
+      FROM app.shares_delivered_to_me(${me.sessionId}::uuid)`,
+  ]);
+  const rows = [
+    ...mine,
+    ...delivered.map(d => ({
+      id: d.id,
+      subjectUserId: d.subject_user_id,
+      status: d.status as (typeof mine)[number]['status'],
+      deliveryStatus: d.delivery_status as (typeof mine)[number]['deliveryStatus'],
+      sharedContent:
+        d.shared_content === null
+          ? null
+          : decryptColumnValue('context_share_offer', 'shared_content', d.shared_content),
+      sharedAt: d.shared_at,
+      deliveredAt: d.delivered_at,
+    })),
+  ];
+  // orderBy [sharedAt asc, id asc], as the one query was (Postgres sorts NULLs last)
+  const at = (d: Date | null) => (d ? d.getTime() : Number.POSITIVE_INFINITY);
+  return rows.sort((x, y) => at(x.sharedAt) - at(y.sharedAt) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+}
+
+/** When each of the participant's own attempts was first validated (app.validated_at; work-k5fk.10.7). */
+async function validatedAtOf(attemptIds: string[]): Promise<Map<string, Date>> {
+  if (attemptIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<Array<{ attempt_id: string; validated_at: Date }>>`
+    SELECT attempt_id, validated_at FROM app.validated_at(${attemptIds}::uuid[])`;
+  return new Map(rows.map(r => [r.attempt_id, r.validated_at]));
+}
+
 async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
   const [attempts, offers, needs, guidance] = await Promise.all([
     prisma.empathyAttempt.findMany({
@@ -304,6 +366,7 @@ async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
       },
       orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
       select: {
+        id: true,
         authorUserId: true,
         status: true,
         content: true,
@@ -313,41 +376,22 @@ async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
         reviews: { where: { validated: true }, select: { createdAt: true }, orderBy: { createdAt: 'asc' }, take: 1 },
       },
     }),
-    prisma.contextShareOffer.findMany({
-      where: {
-        sessionId: me.sessionId,
-        sharedContent: { not: null },
-        OR: [
-          { subjectUserId: me.userId },
-          { attempt: { authorUserId: me.userId }, deliveryStatus: { in: ['DELIVERED', 'SEEN'] } },
-        ],
-      },
-      orderBy: [{ sharedAt: 'asc' }, { id: 'asc' }],
-      select: {
-        subjectUserId: true,
-        status: true,
-        deliveryStatus: true,
-        sharedContent: true,
-        sharedAt: true,
-        deliveredAt: true,
-      },
-    }),
+    sharedContextsOf(me),
     prisma.$queryRaw<Array<{ user_id: string; category: string; shared_text: string; shared_at: Date }>>`
       SELECT user_id, category::text AS category, shared_text, shared_at
       FROM v_need_shared WHERE session_id = ${me.sessionId}::uuid ORDER BY shared_at, need_id`.then(rows =>
       decryptRawRows(rows, { shared_text: 'need_share.shared_text' }),
     ),
-    prisma.reconcilerGuidance.findMany({
-      where: { sessionId: me.sessionId, authorUserId: me.userId },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        areaHint: true,
-        guidanceType: true,
-        promptSeed: true,
-        result: { select: { iteration: true, supersededAt: true } },
-      },
-    }),
+    // The result is the subject's (R6): its iteration and supersession come through app.result_facts (work-k5fk.10.7).
+    prisma.reconcilerGuidance
+      .findMany({
+        where: { sessionId: me.sessionId, authorUserId: me.userId },
+        orderBy: { createdAt: 'asc' },
+        select: { areaHint: true, guidanceType: true, promptSeed: true, resultId: true },
+      })
+      .then(rows => currentGuidance(rows)),
   ]);
+  const validatedAt = await validatedAtOf(attempts.filter(a => a.authorUserId === me.userId).map(a => a.id));
 
   return {
     empathyAttempts: attempts.map(a => {
@@ -360,7 +404,9 @@ async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
         submittedAt: a.submittedAt,
         deliveredAt: a.deliveredAt,
         revealedAt: a.revealedAt,
-        validatedAt: a.reviews[0]?.createdAt ?? null,
+        // The partner's review of an own attempt is theirs until its feedback is sent (work-k5fk.10.7): the
+        // instant comes through app.validated_at.
+        validatedAt: own ? (validatedAt.get(a.id) ?? null) : (a.reviews[0]?.createdAt ?? null),
       };
     }),
     sharedContexts: offers.map(o => ({
@@ -377,14 +423,12 @@ async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
       sharedText: n.shared_text,
       sharedAt: new Date(n.shared_at),
     })),
-    guidance: guidance
-      .filter(g => g.result.supersededAt === null)
-      .map(g => ({
-        areaHint: g.areaHint,
-        guidanceType: g.guidanceType,
-        promptSeed: g.promptSeed,
-        iteration: g.result.iteration,
-      })),
+    guidance: guidance.map(g => ({
+      areaHint: g.areaHint,
+      guidanceType: g.guidanceType,
+      promptSeed: g.promptSeed,
+      iteration: g.result.iteration,
+    })),
   };
 }
 

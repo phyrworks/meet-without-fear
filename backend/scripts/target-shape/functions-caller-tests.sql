@@ -385,6 +385,8 @@ END $$;
 -- 14. A review by a non-subject is refused (I5). Since work-k5fk.3 (6a) by key, not by the retired t_review_subject:
 -- empathy_review (attempt_id, session_id, reviewer_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).
 DO $$ BEGIN
+  -- as A, so the row is A's own (empathy_review app_own, work-k5fk.10.7) and the key is what refuses it
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
   BEGIN
     INSERT INTO empathy_review (attempt_id, session_id, reviewer_user_id, validated)
     VALUES (current_setting('t.att_a')::uuid, current_setting('t.r_session')::uuid,

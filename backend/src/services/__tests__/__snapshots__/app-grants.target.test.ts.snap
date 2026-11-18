@@ -38,12 +38,13 @@ brain_activity worker_delete FOR DELETE TO worker_access USING (true) CHECK (-)
 brain_activity worker_purge_blobs FOR UPDATE TO worker_access USING (true) CHECK (((input IS NULL) AND (output IS NULL) AND (metadata IS NULL) AND (structured_output IS NULL)))
 brain_activity worker_read FOR SELECT TO worker_access USING (true) CHECK (-)
 consent [rls true, force true]
-consent app_interim FOR ALL TO app_access USING (true) CHECK (true)
+consent app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 consent definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 consent diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 context_share_offer [rls true, force true]
-context_share_offer ai_session FOR ALL TO ai_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
-context_share_offer app_interim FOR ALL TO app_access USING (true) CHECK (true)
+context_share_offer ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+context_share_offer app_select FOR SELECT TO app_access USING (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (-)
+context_share_offer app_update FOR UPDATE TO app_access USING (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 context_share_offer definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 context_share_offer diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 conversation [rls true, force true]
@@ -65,12 +66,16 @@ draft app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.curre
 draft definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 draft diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 empathy_attempt [rls true, force true]
-empathy_attempt ai_session FOR ALL TO ai_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
-empathy_attempt app_interim FOR ALL TO app_access USING (true) CHECK (true)
+empathy_attempt ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+empathy_attempt app_insert FOR INSERT TO app_access USING (-) CHECK ((((author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (status = 'HELD'::empathy_status)))
+empathy_attempt app_select FOR SELECT TO app_access USING ((((author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (revealed_at IS NOT NULL)))) CHECK (-)
 empathy_attempt definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 empathy_attempt diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 empathy_review [rls true, force true]
-empathy_review app_interim FOR ALL TO app_access USING (true) CHECK (true)
+empathy_review app_author_sent FOR SELECT TO app_access USING (((feedback_sent_at IS NOT NULL) AND (EXISTS ( SELECT 1
+   FROM empathy_attempt a
+  WHERE (((a.id)::uuid = (empathy_review.attempt_id)::uuid) AND ((a.author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))) CHECK (-)
+empathy_review app_own FOR ALL TO app_access USING (((reviewer_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((reviewer_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 empathy_review definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 empathy_review diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 feature_state [rls true, force true]
@@ -128,15 +133,15 @@ mood_reading definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 mood_reading diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 mood_reading ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 need [rls true, force true]
-need app_interim FOR ALL TO app_access USING (true) CHECK (true)
+need app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 need definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 need diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 need_disposition [rls true, force true]
-need_disposition app_interim FOR ALL TO app_access USING (true) CHECK (true)
+need_disposition app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 need_disposition definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 need_disposition diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 need_share [rls true, force true]
-need_share app_interim FOR ALL TO app_access USING (true) CHECK (true)
+need_share app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR ((revoked_at IS NULL) AND app.is_member((session_id)::uuid)))) CHECK (-)
 need_share definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 need_share diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 participant [rls true, force true]
@@ -182,12 +187,13 @@ proposal_revision app_interim FOR ALL TO app_access USING (true) CHECK (true)
 proposal_revision diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 reconciler_guidance [rls true, force true]
-reconciler_guidance ai_session FOR ALL TO ai_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
-reconciler_guidance app_interim FOR ALL TO app_access USING (true) CHECK (true)
+reconciler_guidance ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+reconciler_guidance app_select FOR SELECT TO app_access USING ((((author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR ((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))) CHECK (-)
 reconciler_guidance diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reconciler_result [rls true, force true]
-reconciler_result ai_session FOR ALL TO ai_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
-reconciler_result app_interim FOR ALL TO app_access USING (true) CHECK (true)
+reconciler_result ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+reconciler_result app_select FOR SELECT TO app_access USING (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (-)
+reconciler_result definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reconciler_result diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection [rls true, force true]
 reflection app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((linked_session_id IS NULL) OR app.is_member((linked_session_id)::uuid))))
@@ -287,7 +293,7 @@ column public.consent SELECT: session_id, user_id, need_id, decision (mwf_define
 column public.consent UPDATE: decision, revoked_at (mwf_definer)
 column public.context_share_offer INSERT: attempt_id, result_id, session_id, subject_user_id, iteration, status, offer_message, suggested_content, suggested_reason, offered_at (ai_access)
 column public.context_share_offer SELECT: id, attempt_id, result_id, session_id, subject_user_id, iteration, status, suggested_content, delivery_status (ai_access)
-column public.context_share_offer SELECT: id, attempt_id, session_id, subject_user_id, status, delivery_status (mwf_definer)
+column public.context_share_offer SELECT: id, attempt_id, session_id, subject_user_id, status, shared_content, shared_at, delivery_status, delivered_at (mwf_definer)
 column public.context_share_offer UPDATE: delivery_status, delivered_at (ai_access)
 column public.context_share_offer UPDATE: status, delivery_notified_at, seen_notified_at (mwf_definer)
 column public.conversation SELECT: id, session_id, user_id, kind (ai_access)
@@ -298,7 +304,7 @@ column public.draft INSERT: id, session_id, user_id, kind, about_user_id, conten
 column public.empathy_attempt INSERT: session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status (mwf_definer)
 column public.empathy_attempt UPDATE: status, status_version, revealed_at, delivery_status, delivered_at, seen_at (mwf_definer)
 column public.empathy_attempt UPDATE: updated_at (ai_access)
-column public.empathy_review SELECT: id, session_id, reviewer_user_id (mwf_definer)
+column public.empathy_review SELECT: id, attempt_id, session_id, reviewer_user_id, validated, created_at (mwf_definer)
 column public.feature_state SELECT: user_id (mwf_definer)
 column public.follow_up INSERT: session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for, response_deadline_at, summary (worker_access)
 column public.follow_up SELECT: id, scope (mwf_definer)
@@ -316,10 +322,10 @@ column public.message SELECT: conversation_id, seq, session_id, sender_user_id, 
 column public.message SELECT: session_id, created_at (worker_access)
 column public.milestone SELECT: key, self_assertable (mwf_definer)
 column public.mood_reading SELECT: id, session_id, user_id, intensity, recorded_at (mwf_definer)
-column public.need SELECT: id, session_id, user_id, category, superseded_by_need_id, deleted_at (mwf_definer)
+column public.need SELECT: id, session_id, user_id, label, category, confirmed_at, superseded_by_need_id, deleted_at, created_at (mwf_definer)
 column public.need_disposition SELECT: session_id, user_id (mwf_definer)
 column public.need_share INSERT: need_id, session_id, user_id, category, shared_text (mwf_definer)
-column public.need_share SELECT: need_id, revoked_at (mwf_definer)
+column public.need_share SELECT: need_id, session_id, user_id, revoked_at (mwf_definer)
 column public.need_share UPDATE: revoked_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, added_by_user_id, display_name, left_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, display_name, joined_at, left_at (ai_access)
@@ -342,6 +348,7 @@ column public.reconciler_guidance INSERT: result_id, session_id, author_user_id,
 column public.reconciler_guidance SELECT: result_id, area_hint, guidance_type, prompt_seed (ai_access)
 column public.reconciler_result INSERT: attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap, recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, circuit_breaker_tripped (ai_access)
 column public.reconciler_result SELECT: id, attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap, recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, superseded_at, created_at (ai_access)
+column public.reconciler_result SELECT: id, attempt_id, subject_user_id, iteration, superseded_at (mwf_definer)
 column public.reconciler_result UPDATE: superseded_at (ai_access)
 column public.reflection SELECT: id, user_id (mwf_definer)
 column public.regulation_event SELECT: session_id, user_id (mwf_definer)
@@ -378,6 +385,7 @@ routine app.all_ciphertext(text[]): EXECUTE (PUBLIC)
 routine app.all_ciphertext(text[]): EXECUTE (mwf_migrator)
 routine app.anonymize_user_account(uuid): EXECUTE (mwf_definer)
 routine app.anonymize_user_in_session(uuid,uuid): EXECUTE (mwf_definer)
+routine app.attempt_meta(uuid[]): EXECUTE (mwf_definer)
 routine app.choices_unshare(uuid): EXECUTE (mwf_definer)
 routine app.co_participant_presence(uuid,uuid): EXECUTE (mwf_definer)
 routine app.create_user(identity_provider,text,text,text,text): EXECUTE (auth_access)
@@ -393,6 +401,7 @@ routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone)
 routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone): EXECUTE (mwf_definer)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (ai_access)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_definer)
+routine app.first_need_label(uuid,uuid): EXECUTE (mwf_definer)
 routine app.identity_subject(identity_provider): EXECUTE (mwf_definer)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (mwf_definer)
 routine app.invitation_peek(uuid): EXECUTE (mwf_definer)
@@ -418,6 +427,7 @@ routine app.partner_user_id(uuid): EXECUTE (mwf_definer)
 routine app.reach_milestone(uuid,uuid,text,timestamp with time zone): EXECUTE (mwf_definer)
 routine app.resolve_user(identity_provider,text): EXECUTE (auth_access)
 routine app.resolve_user(identity_provider,text): EXECUTE (mwf_definer)
+routine app.result_facts(uuid[]): EXECUTE (mwf_definer)
 routine app.scope_actor_is_member(): EXECUTE (ai_access)
 routine app.scope_actor_is_member(): EXECUTE (mwf_definer)
 routine app.session_abandon_declined(uuid): EXECUTE (mwf_definer)
@@ -433,6 +443,7 @@ routine app.session_set_status(uuid,session_status): EXECUTE (worker_access)
 routine app.session_unseated(uuid): EXECUTE (mwf_definer)
 routine app.share_offers_expire(uuid,uuid[]): EXECUTE (mwf_definer)
 routine app.share_offers_mark_notified(uuid[],boolean): EXECUTE (mwf_definer)
+routine app.shares_delivered_to_me(uuid): EXECUTE (mwf_definer)
 routine app.shares_session_with(uuid): EXECUTE (mwf_definer)
 routine app.t_agreement_parties(): EXECUTE (mwf_migrator)
 routine app.t_consent_owner(): EXECUTE (mwf_migrator)
@@ -449,11 +460,12 @@ routine app.t_message_seq(): EXECUTE (mwf_definer)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_definer)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
-routine app.t_result_live_attempt(): EXECUTE (mwf_migrator)
+routine app.t_result_live_attempt(): EXECUTE (mwf_definer)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
 routine app.t_session_purge(): EXECUTE (mwf_migrator)
 routine app.t_session_scope(): EXECUTE (mwf_migrator)
 routine app.touch_updated_at(): EXECUTE (mwf_migrator)
+routine app.validated_at(uuid[]): EXECUTE (mwf_definer)
 schema app: CREATE (mwf_migrator)
 schema app: USAGE (ai_access)
 schema app: USAGE (auth_access)
@@ -570,6 +582,7 @@ routine owner app.ai_user_id(): mwf_migrator
 routine owner app.all_ciphertext(text[]): mwf_migrator
 routine owner app.anonymize_user_account(uuid): mwf_definer
 routine owner app.anonymize_user_in_session(uuid,uuid): mwf_definer
+routine owner app.attempt_meta(uuid[]): mwf_definer
 routine owner app.choices_unshare(uuid): mwf_definer
 routine owner app.co_participant_presence(uuid,uuid): mwf_definer
 routine owner app.create_user(identity_provider,text,text,text,text): mwf_definer
@@ -578,6 +591,7 @@ routine owner app.deliver_message(uuid,uuid,message_kind,text,uuid,timestamp wit
 routine owner app.empathy_direction_status(): mwf_definer
 routine owner app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone): mwf_definer
 routine owner app.empathy_set_status(uuid,empathy_status,text): mwf_definer
+routine owner app.first_need_label(uuid,uuid): mwf_definer
 routine owner app.identity_subject(identity_provider): mwf_definer
 routine owner app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): mwf_definer
 routine owner app.invitation_peek(uuid): mwf_definer
@@ -597,6 +611,7 @@ routine owner app.participant_presence(uuid,uuid): mwf_definer
 routine owner app.partner_user_id(uuid): mwf_definer
 routine owner app.reach_milestone(uuid,uuid,text,timestamp with time zone): mwf_definer
 routine owner app.resolve_user(identity_provider,text): mwf_definer
+routine owner app.result_facts(uuid[]): mwf_definer
 routine owner app.scope_actor_is_member(): mwf_definer
 routine owner app.session_abandon_declined(uuid): mwf_definer
 routine owner app.session_archive(uuid): mwf_definer
@@ -607,6 +622,7 @@ routine owner app.session_set_status(uuid,session_status): mwf_definer
 routine owner app.session_unseated(uuid): mwf_definer
 routine owner app.share_offers_expire(uuid,uuid[]): mwf_definer
 routine owner app.share_offers_mark_notified(uuid[],boolean): mwf_definer
+routine owner app.shares_delivered_to_me(uuid): mwf_definer
 routine owner app.shares_session_with(uuid): mwf_definer
 routine owner app.t_agreement_parties(): mwf_migrator
 routine owner app.t_consent_owner(): mwf_migrator
@@ -623,11 +639,12 @@ routine owner app.t_message_seq(): mwf_definer
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_definer
 routine owner app.t_participant_cardinality(): mwf_migrator
-routine owner app.t_result_live_attempt(): mwf_migrator
+routine owner app.t_result_live_attempt(): mwf_definer
 routine owner app.t_session_cardinality(): mwf_migrator
 routine owner app.t_session_purge(): mwf_migrator
 routine owner app.t_session_scope(): mwf_migrator
-routine owner app.touch_updated_at(): mwf_migrator"
+routine owner app.touch_updated_at(): mwf_migrator
+routine owner app.validated_at(uuid[]): mwf_definer"
 `;
 
 exports[`mwf_app grants (target) the app_access (mwf_app) privilege matrix is exactly the recorded one 1`] = `
@@ -694,6 +711,7 @@ routine app.ai_user_id(): EXECUTE (app_access)
 routine app.all_ciphertext(text[]): EXECUTE (PUBLIC)
 routine app.anonymize_user_account(uuid): EXECUTE (app_access)
 routine app.anonymize_user_in_session(uuid,uuid): EXECUTE (app_access)
+routine app.attempt_meta(uuid[]): EXECUTE (app_access)
 routine app.choices_unshare(uuid): EXECUTE (app_access)
 routine app.co_participant_presence(uuid,uuid): EXECUTE (app_access)
 routine app.current_user_id(): EXECUTE (app_access)
@@ -701,6 +719,7 @@ routine app.deliver_message(uuid,uuid,message_kind,text,uuid,timestamp with time
 routine app.empathy_direction_status(): EXECUTE (app_access)
 routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone): EXECUTE (app_access)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (app_access)
+routine app.first_need_label(uuid,uuid): EXECUTE (app_access)
 routine app.identity_subject(identity_provider): EXECUTE (app_access)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (app_access)
 routine app.invitation_peek(uuid): EXECUTE (app_access)
@@ -717,6 +736,7 @@ routine app.owns_persona(uuid): EXECUTE (app_access)
 routine app.participant_presence(uuid,uuid): EXECUTE (app_access)
 routine app.partner_user_id(uuid): EXECUTE (app_access)
 routine app.reach_milestone(uuid,uuid,text,timestamp with time zone): EXECUTE (app_access)
+routine app.result_facts(uuid[]): EXECUTE (app_access)
 routine app.session_abandon_declined(uuid): EXECUTE (app_access)
 routine app.session_archive(uuid): EXECUTE (app_access)
 routine app.session_invitee_access(uuid): EXECUTE (app_access)
@@ -725,7 +745,9 @@ routine app.session_set_status(uuid,session_status): EXECUTE (app_access)
 routine app.session_unseated(uuid): EXECUTE (app_access)
 routine app.share_offers_expire(uuid,uuid[]): EXECUTE (app_access)
 routine app.share_offers_mark_notified(uuid[],boolean): EXECUTE (app_access)
+routine app.shares_delivered_to_me(uuid): EXECUTE (app_access)
 routine app.shares_session_with(uuid): EXECUTE (app_access)
+routine app.validated_at(uuid[]): EXECUTE (app_access)
 schema app: USAGE (app_access)
 schema public: USAGE (PUBLIC)
 table app.json_schema: SELECT (app_access)

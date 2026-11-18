@@ -1161,6 +1161,8 @@ GRANT INSERT (session_id, user_id, label, category, evidence, ai_confidence, con
 GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO app_access;
 -- mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
 GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_definer;
+-- mwf_definer: first_need_label (stage3.ts announceStage4: a participant's first confirmed need, once shared)
+GRANT SELECT (label, confirmed_at, created_at) ON need TO mwf_definer;
 -- mwf_definer: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
 GRANT SELECT (session_id, user_id) ON need TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
@@ -1348,6 +1350,8 @@ COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (parti
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
 GRANT SELECT ON reconciler_result TO app_access;
+-- mwf_definer: result_facts (which attempt a result analysed, its iteration and supersession — never the analysis)
+GRANT SELECT (id, attempt_id, subject_user_id, iteration, superseded_at) ON reconciler_result TO mwf_definer;
 -- mwf_ai: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
 -- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL).
@@ -1420,6 +1424,8 @@ GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content
 -- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
 -- offer on the recipient's round, review F3)
 GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
+-- mwf_definer: shares_delivered_to_me (the author's delivered shared text — never the offer)
+GRANT SELECT (shared_content, shared_at, delivered_at) ON context_share_offer TO mwf_definer;
 GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
 -- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
 -- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a
@@ -1793,6 +1799,8 @@ GRANT INSERT (attempt_id, session_id, reviewer_user_id, validated, feedback, fee
 GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO app_access;
 -- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
 GRANT SELECT (id, session_id, reviewer_user_id) ON empathy_review TO mwf_definer;
+-- mwf_definer: validated_at (when the author's attempt was first validated — nothing else of the review)
+GRANT SELECT (attempt_id, validated, created_at) ON empathy_review TO mwf_definer;
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
@@ -1922,6 +1930,8 @@ COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-remov
 GRANT SELECT ON need_share TO app_access;
 -- mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
 GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_definer;
+-- mwf_definer: first_need_label (has the participant shared?)
+GRANT SELECT (session_id, user_id) ON need_share TO mwf_definer;
 GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
 GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
 
