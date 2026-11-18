@@ -14,6 +14,7 @@
  * Requires the target shape and a built target fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  */
+import { withClient } from '../../testing/golden/db';
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 
@@ -299,6 +300,36 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
       expect(await run.as('mwf_migrator', null, `SELECT count(*)::int AS n FROM message`)).toEqual([{ n: 0 }]);
       expect(await run.as('mwf_migrator', null, `SELECT count(*)::int AS n FROM "user"`)).toEqual([{ n: 0 }]);
       expect(await run.as('mwf_migrator', null, `UPDATE session SET topic_frame = NULL RETURNING id`)).toEqual([]);
+    });
+
+    // work-k5fk.10.30 (owner decision: diagnostics, no content). The bot's login is NOLOGIN on a development
+    // cluster, so the superuser takes its role for the statement.
+    it('the operations bot reads statuses and counts of every session, and no content, name, email or key', async () => {
+      const asBot = (text: string) =>
+        withClient(
+          run.fx.target,
+          async c => {
+            await c.query('SET ROLE slam_bot_readonly');
+            return (await c.query(text)).rows;
+          },
+          run.fx.database,
+        );
+      const [all] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM message`);
+      expect(await asBot(`SELECT count(*)::int AS n FROM message`)).toEqual([all]);
+      expect((await asBot(`SELECT status::text, created_at FROM session`)).length).toBeGreaterThan(0);
+      for (const denied of [
+        `SELECT content FROM message`,
+        `SELECT email FROM "user"`,
+        `SELECT first_name FROM "user"`,
+        `SELECT topic_frame FROM session`,
+        `SELECT doc FROM ai_memory`,
+        `SELECT push_token FROM user_device`,
+        `SELECT subject FROM user_identity`,
+        `SELECT wrapped_dek FROM user_key`,
+      ]) {
+        await expect(asBot(denied)).rejects.toMatchObject({ code: '42501' });
+      }
+      await expect(asBot(`UPDATE session SET status = status`)).rejects.toMatchObject({ code: '42501' });
     });
 
     it('the ops dashboard reads every session (SELECT only)', async () => {
