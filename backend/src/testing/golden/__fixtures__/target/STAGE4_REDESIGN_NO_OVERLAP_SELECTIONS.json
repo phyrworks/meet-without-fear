@@ -2,15 +2,15 @@
   "stage": "STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS",
   "database": "mwf_tfx_stage4_redesign_no_overlap_selections",
   "seeded": {
-    "sessionId": "01a1ead5-ac27-7cd1-a60d-4cf2fc2a0397",
-    "invitationId": "01a1ead5-ac2d-7ff4-9557-a1cef970b6ce",
+    "sessionId": "01a1ec2d-502c-7407-9a48-26ec576cfc23",
+    "invitationId": "01a1ec2d-5031-710d-8be2-596b345a4342",
     "userA": {
-      "id": "01a1ead5-ac20-7932-94d7-26cbbc5d0ecf",
+      "id": "01a1ec2d-5024-74df-a64a-6222d392db48",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1ead5-ac24-73e2-962d-d186c293ea58",
+      "id": "01a1ec2d-5028-79b0-9644-330c3ed1997a",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -88,5 +88,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-17T18:47:14.305Z"
+  "builtAt": "2026-11-18T01:02:35.145Z"
 }
