@@ -68,7 +68,11 @@ runs automatically; rehearse it on the local replica first (`docs/deployment/loc
 1. Install the new runtime files into `/opt/mwf` (the release bundle carries them; `release-poll.sh`
    installs them, or copy them by hand): `compose.yaml`, `pg_hba.conf`, `ownership.sql`, `db-tls.sh`,
    `Dockerfile.db`, `db-entrypoint.sh`, `build-db-image.sh`, `deploy.sh`.
-2. `sudo touch /etc/mwf/deploy-paused`, then `sudo /opt/mwf/backup.sh preserved`.
+2. `sudo touch /etc/mwf/deploy-paused`, then `sudo /opt/mwf/backup.sh preserved`. Either `backup.sh` is
+   fine here: an old-shape archive restores the old way whatever its flags — `restore.sh` tells the
+   shapes apart by `app.json_schema` (target) vs `public."User"` (old), refuses an archive with
+   neither or both, and restores the old shape with `--no-owner --no-acl` as `mwf_app` (rehearsed
+   with both dump forms, work-k5fk.10.6 review r2).
 3. `sudo /opt/mwf/db-tls.sh` and `sudo /opt/mwf/build-db-image.sh` (writes `DB_IMAGE`).
 4. Write `/etc/mwf/migrator.env` (mode 0600) and rewrite `application.env`'s URLs with the TLS
    suffix (above). Add `DB_BASE_IMAGE` to `release.env` from `images.env.example`.

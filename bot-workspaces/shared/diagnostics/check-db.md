@@ -21,7 +21,9 @@ First confirm `SELECT current_database(), current_user;` returns `mwf` and `slam
 "diagnostics, no content"; `backend/scripts/target-shape/trailer.sql` T7c). It reads **every row**,
 but **only** columns that hold ids, statuses, kinds, stages, counts, flags and timestamps. Asking for
 anything else — message or empathy content, needs, reflections, memory, names, emails, nicknames,
-push tokens, notes, the key tables, `user_identity` — fails with `permission denied` (42501). That
+push tokens, notes, the key tables, `user_identity`, and a user's private state even as an enum or
+flag (need categories, choices and consent decisions, review verdicts, reconciler judgements, closure
+reasons, regulation events, who knows whom, per-user last-seen times) — fails with `permission denied` (42501). That
 is by design: report counts and states, never content. `SELECT *` always fails; name the columns.
 `count(*)` works on every table it can read.
 
@@ -64,9 +66,9 @@ Names are snake_case; ids are UUIDv7 (they sort by creation time); timestamps ar
 | `conversation` / `message` | Each participant's threads and their lines (key `(conversation_id, seq)`) | `kind`, `status`; `role`, `kind`, `created_at` |
 | `invitation` | Partner invitations | `status`, `expires_at`, `accepted_at`, `declined_at` |
 | `empathy_attempt` / `empathy_review` | Empathy statements (Stage 2) and their review | `status`, `round`, `delivery_status`, `revealed_at` |
-| `reconciler_result` / `context_share_offer` | Reconciler outcomes and share offers | `recommended_action`, `gap_severity`; `status`, `delivery_status` |
-| `need` / `need_share` / `need_disposition` | Stage 3 needs | `category`, `confirmed_at`, `shared_at`, `status` |
-| `proposal` / `proposal_choice` / `agreement` / `session_closure` | Stage 4 | `status`, `kind`, `decision`, `closed_at` |
+| `reconciler_result` / `context_share_offer` | Reconciler runs and share offers | `iteration`, `circuit_breaker_tripped`, `superseded_at`; `status`, `delivery_status` |
+| `need` / `need_share` / `need_disposition` | Stage 3 needs (counts and times only) | `confirmed_at`, `shared_at`, `revoked_at` |
+| `proposal` / `proposal_choice` / `agreement` / `session_closure` | Stage 4 | `status`, `kind`, `closed_at` |
 | `follow_up` / `follow_up_checkin` / `reminder` | Tending after resolution, scheduled jobs | `status`, `scheduled_for`, `opened_at`, `remind_at` |
 | `reflection` / `takeaway` | Inner work (solo) | `status`, `created_at` |
 | `brain_activity` | AI call telemetry | `activity_type`, `call_type`, `status`, token counts, `duration_ms` |

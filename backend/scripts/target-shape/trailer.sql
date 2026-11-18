@@ -2559,6 +2559,12 @@ CREATE POLICY definer_all ON user_preferences TO mwf_definer USING (true) WITH C
 -- content, names, emails, nicknames, push tokens, notes, model names), the mood and regulation intensities, the
 -- reconciler's alignment score, and no column of the key tables (session_key, participant_key, user_key), of
 -- user_identity (sign-in subjects) or of app.json_schema. A new column is invisible to the bot until listed here.
+-- Review 9c r2 (the owner's least privilege): operational facts only, so also none of a user's private state, not
+-- even as an enum or a flag — need / need_share.category, regulation_event (all of it), proposal_choice / consent
+-- .decision, empathy_review.validated, reconciler_result's gap_severity / recommended_action /
+-- sharing_would_help, session_closure.reason, user_memory.category, feature_state.feature; none of the
+-- relationship graph (user_contact, live_session_pair, persona.owner_user_id); and no per-user activity times
+-- (user_device.last_seen_at, conversation_read_state.last_active_at, mood_reading.recorded_at).
 -- Grants are here rather than next to each table: check-schema.sh applies tables.sql to a cluster that need not
 -- have diag_access, and the policy must follow its grant. Plus the migration status the bot reports
 -- (_prisma_migrations, which has no RLS: its bookkeeping columns only, when Prisma created it).
@@ -2584,7 +2590,7 @@ CREATE POLICY diag_read ON ai_memory FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, session_id, reflection_id, participant_user_id, activity_type, call_type, token_count_input, token_count_output, duration_ms, status, created_at, completed_at, updated_at) ON brain_activity TO diag_access;
 CREATE POLICY diag_read ON brain_activity FOR SELECT TO diag_access USING (true);
 -- consent
-GRANT SELECT (id, session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id, decision, decided_at, revoked_at, created_at, updated_at, target_kind) ON consent TO diag_access;
+GRANT SELECT (id, session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id, decided_at, revoked_at, created_at, updated_at, target_kind) ON consent TO diag_access;
 CREATE POLICY diag_read ON consent FOR SELECT TO diag_access USING (true);
 -- context_share_offer
 GRANT SELECT (id, attempt_id, result_id, session_id, subject_user_id, iteration, status, shared_at, declined_at, offered_at, delivery_status, delivered_at, seen_at, delivery_notified_at, seen_notified_at, created_at, updated_at) ON context_share_offer TO diag_access;
@@ -2593,7 +2599,7 @@ CREATE POLICY diag_read ON context_share_offer FOR SELECT TO diag_access USING (
 GRANT SELECT (id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at) ON conversation TO diag_access;
 CREATE POLICY diag_read ON conversation FOR SELECT TO diag_access USING (true);
 -- conversation_read_state
-GRANT SELECT (session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at, created_at, updated_at) ON conversation_read_state TO diag_access;
+GRANT SELECT (session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, archived_at, created_at, updated_at) ON conversation_read_state TO diag_access;
 CREATE POLICY diag_read ON conversation_read_state FOR SELECT TO diag_access USING (true);
 -- draft
 GRANT SELECT (id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at) ON draft TO diag_access;
@@ -2602,10 +2608,10 @@ CREATE POLICY diag_read ON draft FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at) ON empathy_attempt TO diag_access;
 CREATE POLICY diag_read ON empathy_attempt FOR SELECT TO diag_access USING (true);
 -- empathy_review
-GRANT SELECT (id, attempt_id, session_id, reviewer_user_id, validated, feedback_sent_at, created_at, updated_at) ON empathy_review TO diag_access;
+GRANT SELECT (id, attempt_id, session_id, reviewer_user_id, feedback_sent_at, created_at, updated_at) ON empathy_review TO diag_access;
 CREATE POLICY diag_read ON empathy_review FOR SELECT TO diag_access USING (true);
 -- feature_state
-GRANT SELECT (user_id, feature, created_at, updated_at) ON feature_state TO diag_access;
+GRANT SELECT (user_id, created_at, updated_at) ON feature_state TO diag_access;
 CREATE POLICY diag_read ON feature_state FOR SELECT TO diag_access USING (true);
 -- follow_up
 GRANT SELECT (id, session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for, response_deadline_at, opened_at, completed_at, created_at, updated_at) ON follow_up TO diag_access;
@@ -2619,9 +2625,6 @@ CREATE POLICY diag_read ON follow_up_note FOR SELECT TO diag_access USING (true)
 -- invitation
 GRANT SELECT (id, session_id, invited_by_user_id, accepted_by_user_id, status, message_confirmed_at, expires_at, accepted_at, declined_at, created_at, updated_at) ON invitation TO diag_access;
 CREATE POLICY diag_read ON invitation FOR SELECT TO diag_access USING (true);
--- live_session_pair
-GRANT SELECT (user_a, user_b, session_id) ON live_session_pair TO diag_access;
-CREATE POLICY diag_read ON live_session_pair FOR SELECT TO diag_access USING (true);
 -- message
 GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, refining_need_id, source_attempt_id, created_at) ON message TO diag_access;
 CREATE POLICY diag_read ON message FOR SELECT TO diag_access USING (true);
@@ -2629,16 +2632,16 @@ CREATE POLICY diag_read ON message FOR SELECT TO diag_access USING (true);
 GRANT SELECT (key, ordinal, scope, self_assertable, created_at, updated_at) ON milestone TO diag_access;
 CREATE POLICY diag_read ON milestone FOR SELECT TO diag_access USING (true);
 -- mood_reading
-GRANT SELECT (id, session_id, user_id, recorded_at, created_at) ON mood_reading TO diag_access;
+GRANT SELECT (id, session_id, user_id, created_at) ON mood_reading TO diag_access;
 CREATE POLICY diag_read ON mood_reading FOR SELECT TO diag_access USING (true);
 -- need
-GRANT SELECT (id, session_id, user_id, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, created_at, updated_at) ON need TO diag_access;
+GRANT SELECT (id, session_id, user_id, confirmed_at, locked_at, superseded_by_need_id, deleted_at, created_at, updated_at) ON need TO diag_access;
 CREATE POLICY diag_read ON need FOR SELECT TO diag_access USING (true);
 -- need_disposition
 GRANT SELECT (need_id, session_id, user_id, status, is_current, created_at, updated_at) ON need_disposition TO diag_access;
 CREATE POLICY diag_read ON need_disposition FOR SELECT TO diag_access USING (true);
 -- need_share
-GRANT SELECT (need_id, session_id, user_id, category, shared_at, revoked_at, created_at, updated_at) ON need_share TO diag_access;
+GRANT SELECT (need_id, session_id, user_id, shared_at, revoked_at, created_at, updated_at) ON need_share TO diag_access;
 CREATE POLICY diag_read ON need_share FOR SELECT TO diag_access USING (true);
 -- participant
 GRANT SELECT (session_id, user_id, kind, added_by_user_id, joined_at, left_at, created_at, updated_at) ON participant TO diag_access;
@@ -2647,13 +2650,13 @@ CREATE POLICY diag_read ON participant FOR SELECT TO diag_access USING (true);
 GRANT SELECT (session_id, user_id, milestone_key, reached_at, created_at) ON participant_milestone TO diag_access;
 CREATE POLICY diag_read ON participant_milestone FOR SELECT TO diag_access USING (true);
 -- persona
-GRANT SELECT (user_id, kind, owner_user_id, owner_kind, created_at) ON persona TO diag_access;
+GRANT SELECT (user_id, kind, owner_kind, created_at) ON persona TO diag_access;
 CREATE POLICY diag_read ON persona FOR SELECT TO diag_access USING (true);
 -- proposal
 GRANT SELECT (id, session_id, created_by_user_id, source, kind, status, removed_at, removed_by_user_id, shared_at, created_at, updated_at) ON proposal TO diag_access;
 CREATE POLICY diag_read ON proposal FOR SELECT TO diag_access USING (true);
 -- proposal_choice
-GRANT SELECT (proposal_id, session_id, user_id, decision, created_at, updated_at) ON proposal_choice TO diag_access;
+GRANT SELECT (proposal_id, session_id, user_id, created_at, updated_at) ON proposal_choice TO diag_access;
 CREATE POLICY diag_read ON proposal_choice FOR SELECT TO diag_access USING (true);
 -- proposal_need
 GRANT SELECT (proposal_id, need_id, session_id, created_at) ON proposal_need TO diag_access;
@@ -2665,7 +2668,7 @@ CREATE POLICY diag_read ON proposal_revision FOR SELECT TO diag_access USING (tr
 GRANT SELECT (result_id, session_id, author_user_id, subject_user_id, guidance_type, created_at) ON reconciler_guidance TO diag_access;
 CREATE POLICY diag_read ON reconciler_guidance FOR SELECT TO diag_access USING (true);
 -- reconciler_result
-GRANT SELECT (id, attempt_id, session_id, subject_user_id, iteration, gap_severity, recommended_action, sharing_would_help, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
+GRANT SELECT (id, attempt_id, session_id, subject_user_id, iteration, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
 CREATE POLICY diag_read ON reconciler_result FOR SELECT TO diag_access USING (true);
 -- reflection
 GRANT SELECT (id, user_id, status, linked_session_id, linked_at, distilled_at, created_at, updated_at) ON reflection TO diag_access;
@@ -2673,9 +2676,6 @@ CREATE POLICY diag_read ON reflection FOR SELECT TO diag_access USING (true);
 -- reflection_message
 GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO diag_access;
 CREATE POLICY diag_read ON reflection_message FOR SELECT TO diag_access USING (true);
--- regulation_event
-GRANT SELECT (id, session_id, user_id, type, completed_at, created_at) ON regulation_event TO diag_access;
-CREATE POLICY diag_read ON regulation_event FOR SELECT TO diag_access USING (true);
 -- reminder
 GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
 CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
@@ -2683,7 +2683,7 @@ CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, status, topic_frame_confirmed_at, previous_session_id, resolved_at, archived_at, archived_by_user_id, created_at, updated_at) ON session TO diag_access;
 CREATE POLICY diag_read ON session FOR SELECT TO diag_access USING (true);
 -- session_closure
-GRANT SELECT (session_id, kind, reason, closed_by_user_id, check_in_at, closed_at, created_at) ON session_closure TO diag_access;
+GRANT SELECT (session_id, kind, closed_by_user_id, check_in_at, closed_at, created_at) ON session_closure TO diag_access;
 CREATE POLICY diag_read ON session_closure FOR SELECT TO diag_access USING (true);
 -- takeaway
 GRANT SELECT (id, reflection_id, source, type, "position", resolved_at, created_at, updated_at) ON takeaway TO diag_access;
@@ -2694,14 +2694,11 @@ CREATE POLICY diag_read ON takeaway_link FOR SELECT TO diag_access USING (true);
 -- user
 GRANT SELECT (id, kind, deleted_at, created_at, updated_at) ON "user" TO diag_access;
 CREATE POLICY diag_read ON "user" FOR SELECT TO diag_access USING (true);
--- user_contact
-GRANT SELECT (user_id, contact_user_id, created_at, updated_at) ON user_contact TO diag_access;
-CREATE POLICY diag_read ON user_contact FOR SELECT TO diag_access USING (true);
 -- user_device
-GRANT SELECT (id, user_id, platform, biometric_enabled, biometric_enrolled_at, last_seen_at, created_at, updated_at) ON user_device TO diag_access;
+GRANT SELECT (id, user_id, platform, biometric_enabled, biometric_enrolled_at, created_at, updated_at) ON user_device TO diag_access;
 CREATE POLICY diag_read ON user_device FOR SELECT TO diag_access USING (true);
 -- user_memory
-GRANT SELECT (id, user_id, session_id, category, status, source, created_at, updated_at) ON user_memory TO diag_access;
+GRANT SELECT (id, user_id, session_id, status, source, created_at, updated_at) ON user_memory TO diag_access;
 CREATE POLICY diag_read ON user_memory FOR SELECT TO diag_access USING (true);
 -- user_preferences
 GRANT SELECT (user_id, doc_schema_version, created_at, updated_at) ON user_preferences TO diag_access;

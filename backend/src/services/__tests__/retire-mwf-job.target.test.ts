@@ -326,6 +326,10 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
         `SELECT push_token FROM user_device`,
         `SELECT subject FROM user_identity`,
         `SELECT wrapped_dek FROM user_key`,
+        // Review 9c r2: no private state even as an enum, no relationship graph.
+        `SELECT category FROM need`,
+        `SELECT decision FROM proposal_choice`,
+        `SELECT contact_user_id FROM user_contact`,
       ]) {
         await expect(asBot(denied)).rejects.toMatchObject({ code: '42501' });
       }
