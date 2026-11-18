@@ -31,7 +31,7 @@
 import type { PrismaClient } from '../generated/prisma/client';
 import { getAiPrisma, prisma, type DbClient } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
-import type { Seat } from './participant-resolver';
+import { loadSessionParties, type Seat } from './participant-resolver';
 
 export type TargetEmpathyStatus =
   | 'HELD'
@@ -98,6 +98,19 @@ export interface SessionParty {
  * directions are this order.
  */
 export async function sessionParties(sessionId: string, client: PrismaClient = prisma): Promise<SessionParty[]> {
+  if (client === prisma) {
+    // As mwf_app: a partner's "user" and conversation rows are theirs under RLS; their name and MAIN conversation id
+    // come from app.session_parties (work-k5fk.10.7, review F7/F8).
+    const rows = await loadSessionParties([sessionId]);
+    return rows
+      .filter(r => r.kind === 'human' && !r.leftAt)
+      .map(r => ({
+        userId: r.userId,
+        name: r.userName || r.displayName || null,
+        joinedAt: r.joinedAt,
+        mainConversationId: r.mainConversationId,
+      }));
+  }
   const rows = await client.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
     orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
@@ -127,23 +140,25 @@ export async function sessionParties(sessionId: string, client: PrismaClient = p
  * present partner. `name` is always null (the tombstone has none).
  */
 export async function departedCounterpart(me: Seat, client: PrismaClient = prisma): Promise<SessionParty | null> {
-  const rows = await client.participant.findMany({
-    where: { sessionId: me.sessionId, kind: 'human', leftAt: { not: null }, userId: { not: me.userId } },
-    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
-    select: {
-      userId: true,
-      joinedAt: true,
-      conversations: { where: { kind: 'MAIN' }, select: { id: true } },
-    },
-  });
+  const rows =
+    client === prisma
+      ? (await loadSessionParties([me.sessionId]))
+          .filter(r => r.kind === 'human' && r.leftAt && r.userId !== me.userId)
+          .map(r => ({ userId: r.userId, joinedAt: r.joinedAt, mainConversationId: r.mainConversationId }))
+      : (
+          await client.participant.findMany({
+            where: { sessionId: me.sessionId, kind: 'human', leftAt: { not: null }, userId: { not: me.userId } },
+            orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
+            select: {
+              userId: true,
+              joinedAt: true,
+              conversations: { where: { kind: 'MAIN' }, select: { id: true } },
+            },
+          })
+        ).map(r => ({ userId: r.userId, joinedAt: r.joinedAt, mainConversationId: r.conversations[0]?.id ?? null }));
   if (rows.length !== 1) return null;
   const r = rows[0];
-  return {
-    userId: r.userId,
-    name: null,
-    joinedAt: r.joinedAt,
-    mainConversationId: r.conversations[0]?.id ?? null,
-  };
+  return { userId: r.userId, name: null, joinedAt: r.joinedAt, mainConversationId: r.mainConversationId };
 }
 
 /** The party with this user id. */

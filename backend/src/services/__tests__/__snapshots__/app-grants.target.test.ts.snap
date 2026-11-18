@@ -5,7 +5,7 @@ exports[`mwf_app grants (target) every row-level policy, and every table’s RLS
 "user" ai_session FOR SELECT TO ai_access USING ((( SELECT app.scope_actor_is_member() AS scope_actor_is_member) AND (EXISTS ( SELECT 1
    FROM participant p
   WHERE (((p.session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ((p.user_id)::uuid = ("user".id)::uuid)))))) CHECK (-)
-"user" app_select FOR SELECT TO app_access USING ((((id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'ai'::user_kind) OR app.shares_session_with((id)::uuid) OR app.owns_persona((id)::uuid))) CHECK (-)
+"user" app_select FOR SELECT TO app_access USING ((((id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'ai'::user_kind) OR app.owns_persona((id)::uuid))) CHECK (-)
 "user" app_update FOR UPDATE TO app_access USING (((id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 "user" definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 "user" diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -22,6 +22,8 @@ agreement_party diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 agreement_party worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 ai_memory [rls true, force true]
 ai_memory ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+ai_memory app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
+ai_memory app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (((session_id IS NULL) OR app.is_current_member((session_id)::uuid))) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
 ai_memory app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 ai_memory definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 ai_memory diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -40,44 +42,59 @@ brain_activity worker_delete FOR DELETE TO worker_access USING (true) CHECK (-)
 brain_activity worker_purge_blobs FOR UPDATE TO worker_access USING (true) CHECK (((input IS NULL) AND (output IS NULL) AND (metadata IS NULL) AND (structured_output IS NULL)))
 brain_activity worker_read FOR SELECT TO worker_access USING (true) CHECK (-)
 consent [rls true, force true]
+consent app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+consent app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 consent app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 consent definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 consent diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 context_share_offer [rls true, force true]
 context_share_offer ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+context_share_offer app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 context_share_offer app_select FOR SELECT TO app_access USING (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (-)
 context_share_offer app_update FOR UPDATE TO app_access USING (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 context_share_offer definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 context_share_offer diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 conversation [rls true, force true]
 conversation ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+conversation app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+conversation app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 conversation app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
-conversation app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR ((kind = 'MAIN'::conversation_kind) AND app.is_member((session_id)::uuid)))) CHECK (-)
+conversation app_select FOR SELECT TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (-)
 conversation app_update FOR UPDATE TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 conversation definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 conversation diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 conversation ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 conversation_read_state [rls true, force true]
+conversation_read_state app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+conversation_read_state app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 conversation_read_state app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((last_seen_conversation_id IS NULL) OR (EXISTS ( SELECT 1
    FROM conversation c
   WHERE (((c.id)::uuid = (conversation_read_state.last_seen_conversation_id)::uuid) AND ((c.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))))
 conversation_read_state definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 conversation_read_state diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 draft [rls true, force true]
+draft app_active_delete FOR DELETE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (-)
+draft app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+draft app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 draft app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 draft definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 draft diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 empathy_attempt [rls true, force true]
 empathy_attempt ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+empathy_attempt app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 empathy_attempt app_insert FOR INSERT TO app_access USING (-) CHECK ((((author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (status = 'HELD'::empathy_status)))
 empathy_attempt app_select FOR SELECT TO app_access USING ((((author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (((subject_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (revealed_at IS NOT NULL)))) CHECK (-)
 empathy_attempt definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 empathy_attempt diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 empathy_review [rls true, force true]
+empathy_review app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+empathy_review app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 empathy_review app_author_sent FOR SELECT TO app_access USING (((feedback_sent_at IS NOT NULL) AND (EXISTS ( SELECT 1
    FROM empathy_attempt a
   WHERE (((a.id)::uuid = (empathy_review.attempt_id)::uuid) AND ((a.author_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))) CHECK (-)
-empathy_review app_own FOR ALL TO app_access USING (((reviewer_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((reviewer_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
+empathy_review app_own FOR ALL TO app_access USING (((reviewer_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((reviewer_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (EXISTS ( SELECT 1
+   FROM empathy_attempt a
+  WHERE (((a.id)::uuid = (empathy_review.attempt_id)::uuid) AND (a.revealed_at IS NOT NULL))))))
 empathy_review definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 empathy_review diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 feature_state [rls true, force true]
@@ -85,8 +102,10 @@ feature_state app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT a
 feature_state definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 feature_state diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 follow_up [rls true, force true]
+follow_up app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+follow_up app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 follow_up app_insert FOR INSERT TO app_access USING (-) CHECK ((app.is_member((session_id)::uuid) AND ((owner_user_id IS NULL) OR ((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))
-follow_up app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+follow_up app_select FOR SELECT TO app_access USING ((app.is_member((session_id)::uuid) AND ((scope = 'SHARED'::follow_up_scope) OR ((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR opted_in_shared))) CHECK (-)
 follow_up app_update FOR UPDATE TO app_access USING (((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 follow_up definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -94,17 +113,24 @@ follow_up worker_read FOR SELECT TO worker_access USING (true) CHECK (-)
 follow_up worker_session FOR INSERT TO worker_access USING (-) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 follow_up worker_update FOR UPDATE TO worker_access USING (true) CHECK (true)
 follow_up_checkin [rls true, force true]
-follow_up_checkin app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
+follow_up_checkin app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+follow_up_checkin app_insert FOR INSERT TO app_access USING (-) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (EXISTS ( SELECT 1
+   FROM follow_up f
+  WHERE (((f.id)::uuid = (follow_up_checkin.follow_up_id)::uuid) AND ((f.scope = 'SHARED'::follow_up_scope) OR ((f.owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))))
 follow_up_checkin app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM follow_up f
   WHERE (((f.id)::uuid = (follow_up_checkin.follow_up_id)::uuid) AND (f.scope = 'SHARED'::follow_up_scope) AND (f.status = ANY (ARRAY['COMPLETED'::follow_up_status, 'PARTIAL'::follow_up_status])))))))) CHECK (-)
 follow_up_checkin definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up_checkin diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 follow_up_note [rls true, force true]
+follow_up_note app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+follow_up_note app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 follow_up_note app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 follow_up_note definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up_note diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 invitation [rls true, force true]
+invitation app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+invitation app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 invitation app_insert FOR INSERT TO app_access USING (-) CHECK (((invited_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 invitation app_select FOR SELECT TO app_access USING ((((invited_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR ((accepted_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))) CHECK (-)
 invitation app_update FOR UPDATE TO app_access USING (((invited_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((invited_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
@@ -116,6 +142,8 @@ live_session_pair app_select FOR SELECT TO app_access USING (((( SELECT app.curr
 live_session_pair definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 message [rls true, force true]
 message ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+message app_active_delete FOR DELETE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (-)
+message app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 message app_delete FOR DELETE TO app_access USING (((EXISTS ( SELECT 1
    FROM conversation c
   WHERE (((c.id)::uuid = (message.conversation_id)::uuid) AND ((c.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))) AND (((role = 'USER'::message_role) AND (kind = 'CHAT'::message_kind) AND ((sender_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) OR (kind = 'SHARE_SUGGESTION'::message_kind)))) CHECK (-)
@@ -135,15 +163,21 @@ milestone definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 milestone diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 milestone ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 mood_reading [rls true, force true]
+mood_reading app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
 mood_reading app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 mood_reading definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 mood_reading diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 mood_reading ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 need [rls true, force true]
+need app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+need app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 need app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 need definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 need diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 need_disposition [rls true, force true]
+need_disposition app_active_delete FOR DELETE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (-)
+need_disposition app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+need_disposition app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 need_disposition app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 need_disposition definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 need_disposition diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -155,7 +189,7 @@ participant [rls true, force true]
 participant ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
 participant app_insert FOR INSERT TO app_access USING (-) CHECK (((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (added_by_user_id IS NULL) AND app.session_unseated((session_id)::uuid)) OR (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (EXISTS ( SELECT 1
    FROM invitation i
-  WHERE (((i.session_id)::uuid = (participant.session_id)::uuid) AND ((i.invited_by_user_id)::uuid = (participant.added_by_user_id)::uuid) AND ((i.accepted_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))) OR (((added_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (kind <> 'human'::user_kind))))
+  WHERE (((i.session_id)::uuid = (participant.session_id)::uuid) AND ((i.invited_by_user_id)::uuid = (participant.added_by_user_id)::uuid) AND ((i.accepted_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))) OR (((added_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (kind <> 'human'::user_kind) AND app.is_current_member((session_id)::uuid))))
 participant app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR app.is_member((session_id)::uuid))) CHECK (-)
 participant definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 participant diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -165,6 +199,7 @@ participant_key [rls true, force true]
 participant_key definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 participant_milestone [rls true, force true]
 participant_milestone ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+participant_milestone app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 participant_milestone app_insert FOR INSERT TO app_access USING (-) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (EXISTS ( SELECT 1
    FROM milestone m
   WHERE (((m.key)::text = (participant_milestone.milestone_key)::text) AND m.self_assertable)))))
@@ -177,6 +212,8 @@ persona [rls true, force true]
 persona definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 persona diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal [rls true, force true]
+proposal app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+proposal app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 proposal app_insert FOR INSERT TO app_access USING (-) CHECK ((((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid)))
 proposal app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 proposal app_update FOR UPDATE TO app_access USING ((app.is_member((session_id)::uuid) AND (status <> 'CONVERTED_TO_AGREEMENT'::proposal_status) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind)))) CHECK ((app.is_member((session_id)::uuid) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind))))
@@ -184,6 +221,8 @@ proposal definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 proposal diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 proposal_choice [rls true, force true]
+proposal_choice app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+proposal_choice app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 proposal_choice app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 proposal_choice app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM participant_milestone m
@@ -193,11 +232,18 @@ proposal_choice definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 proposal_choice diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_choice worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 proposal_need [rls true, force true]
-proposal_need app_delete FOR DELETE TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
-proposal_need app_insert FOR INSERT TO app_access USING (-) CHECK (app.is_member((session_id)::uuid))
+proposal_need app_active_delete FOR DELETE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (-)
+proposal_need app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
+proposal_need app_delete FOR DELETE TO app_access USING ((app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM proposal p
+  WHERE (((p.id)::uuid = (proposal_need.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind))))))) CHECK (-)
+proposal_need app_insert FOR INSERT TO app_access USING (-) CHECK ((app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM proposal p
+  WHERE (((p.id)::uuid = (proposal_need.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind)))))))
 proposal_need app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 proposal_need diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision [rls true, force true]
+proposal_revision app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 proposal_revision app_insert FOR INSERT TO app_access USING (-) CHECK ((((actor_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM proposal p
   WHERE (((p.id)::uuid = (proposal_revision.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind)))))))
@@ -214,6 +260,8 @@ reconciler_result app_select FOR SELECT TO app_access USING (((subject_user_id):
 reconciler_result definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reconciler_result diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection [rls true, force true]
+reflection app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((linked_session_id IS NULL) OR app.is_current_member((linked_session_id)::uuid)))
+reflection app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (((linked_session_id IS NULL) OR app.is_current_member((linked_session_id)::uuid))) CHECK (((linked_session_id IS NULL) OR app.is_current_member((linked_session_id)::uuid)))
 reflection app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((linked_session_id IS NULL) OR app.is_member((linked_session_id)::uuid))))
 reflection definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reflection diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -227,16 +275,20 @@ reflection_message app_own FOR ALL TO app_access USING ((EXISTS ( SELECT 1
 reflection_message diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection_message ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 regulation_event [rls true, force true]
+regulation_event app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
 regulation_event app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 regulation_event definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reminder [rls true, force true]
-reminder app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
+reminder app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((follow_up_id IS NULL) OR (EXISTS ( SELECT 1
+   FROM follow_up f
+  WHERE ((f.id)::uuid = (reminder.follow_up_id)::uuid))))))
 reminder definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reminder diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reminder worker_all FOR ALL TO worker_access USING (true) CHECK (true)
 session [rls true, force true]
 session ai_session FOR ALL TO ai_access USING ((((id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
-session app_insert FOR INSERT TO app_access USING (-) CHECK (((status = 'CREATED'::session_status) AND ((previous_session_id IS NULL) OR app.is_member((previous_session_id)::uuid))))
+session app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((id)::uuid)) CHECK (app.is_current_member((id)::uuid))
+session app_insert FOR INSERT TO app_access USING (-) CHECK (((status = 'CREATED'::session_status) AND ((previous_session_id IS NULL) OR app.is_current_member((previous_session_id)::uuid))))
 session app_select FOR SELECT TO app_access USING ((app.is_member((id)::uuid) OR ((status = 'CREATED'::session_status) AND app.session_unseated((id)::uuid)))) CHECK (-)
 session app_update FOR UPDATE TO app_access USING (app.is_member((id)::uuid)) CHECK (app.is_member((id)::uuid))
 session definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
@@ -282,6 +334,9 @@ user_identity definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 user_key [rls true, force true]
 user_key definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 user_memory [rls true, force true]
+user_memory app_active_delete FOR DELETE RESTRICTIVE TO app_access USING (((session_id IS NULL) OR app.is_current_member((session_id)::uuid))) CHECK (-)
+user_memory app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
+user_memory app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (((session_id IS NULL) OR app.is_current_member((session_id)::uuid))) CHECK (((session_id IS NULL) OR app.is_current_member((session_id)::uuid)))
 user_memory app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 user_memory definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 user_memory diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -342,12 +397,12 @@ column public.message SELECT: conversation_id, seq, session_id, sender_user_id, 
 column public.message SELECT: session_id, created_at (worker_access)
 column public.milestone SELECT: key, self_assertable (mwf_definer)
 column public.mood_reading SELECT: id, session_id, user_id, intensity, recorded_at (mwf_definer)
-column public.need SELECT: id, session_id, user_id, label, category, confirmed_at, superseded_by_need_id, deleted_at, created_at (mwf_definer)
+column public.need SELECT: id, session_id, user_id, category, confirmed_at, superseded_by_need_id, deleted_at, created_at (mwf_definer)
 column public.need_disposition SELECT: session_id, user_id (mwf_definer)
 column public.need_share INSERT: need_id, session_id, user_id, category, shared_text (mwf_definer)
-column public.need_share SELECT: need_id, session_id, user_id, revoked_at (mwf_definer)
+column public.need_share SELECT: need_id, shared_text, revoked_at (mwf_definer)
 column public.need_share UPDATE: revoked_at (mwf_definer)
-column public.participant SELECT: session_id, user_id, kind, added_by_user_id, display_name, left_at (mwf_definer)
+column public.participant SELECT: session_id, user_id, kind, added_by_user_id, display_name, joined_at, left_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, display_name, joined_at, left_at (ai_access)
 column public.participant SELECT: session_id, user_id, kind, left_at (worker_access)
 column public.participant UPDATE: display_name, left_at (mwf_definer)
@@ -382,7 +437,7 @@ column public.session UPDATE: status, resolved_at, archived_at, archived_by_user
 column public.session UPDATE: updated_at (ai_access)
 column public.session_closure INSERT: session_id, kind, reason, summary, closed_by_user_id, check_in_at, closed_at (worker_access)
 column public.user INSERT: email, first_name, last_name (mwf_definer)
-column public.user SELECT: id, kind, email, deleted_at (mwf_definer)
+column public.user SELECT: id, kind, email, first_name, deleted_at, name (mwf_definer)
 column public.user SELECT: id, kind, first_name, name (ai_access)
 column public.user UPDATE: email, first_name, last_name, deleted_at (mwf_definer)
 column public.user_contact SELECT: user_id, contact_user_id, nickname (mwf_definer)
@@ -426,6 +481,7 @@ routine app.identity_subject(identity_provider): EXECUTE (mwf_definer)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (mwf_definer)
 routine app.invitation_peek(uuid): EXECUTE (mwf_definer)
 routine app.invitation_repoint_drafts(uuid): EXECUTE (mwf_definer)
+routine app.is_current_member(uuid): EXECUTE (mwf_definer)
 routine app.is_member(uuid): EXECUTE (mwf_definer)
 routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
 routine app.json_schema_wellformed(jsonb): EXECUTE (mwf_migrator)
@@ -453,6 +509,7 @@ routine app.scope_actor_is_member(): EXECUTE (mwf_definer)
 routine app.session_abandon_declined(uuid): EXECUTE (mwf_definer)
 routine app.session_archive(uuid): EXECUTE (mwf_definer)
 routine app.session_invitee_access(uuid): EXECUTE (mwf_definer)
+routine app.session_parties(uuid[]): EXECUTE (mwf_definer)
 routine app.session_resume(uuid): EXECUTE (mwf_definer)
 routine app.session_scope(): EXECUTE (ai_access)
 routine app.session_scope(): EXECUTE (mwf_definer)
@@ -480,7 +537,7 @@ routine app.t_message_seq(): EXECUTE (mwf_definer)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_definer)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
-routine app.t_proposal_creator(): EXECUTE (mwf_migrator)
+routine app.t_proposal_app_moves(): EXECUTE (mwf_migrator)
 routine app.t_result_live_attempt(): EXECUTE (mwf_definer)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
 routine app.t_session_purge(): EXECUTE (mwf_migrator)
@@ -617,6 +674,7 @@ routine owner app.identity_subject(identity_provider): mwf_definer
 routine owner app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): mwf_definer
 routine owner app.invitation_peek(uuid): mwf_definer
 routine owner app.invitation_repoint_drafts(uuid): mwf_definer
+routine owner app.is_current_member(uuid): mwf_definer
 routine owner app.is_member(uuid): mwf_definer
 routine owner app.json_schema_wellformed(jsonb): mwf_migrator
 routine owner app.jsonb_envelope_violation(jsonb): mwf_migrator
@@ -637,6 +695,7 @@ routine owner app.scope_actor_is_member(): mwf_definer
 routine owner app.session_abandon_declined(uuid): mwf_definer
 routine owner app.session_archive(uuid): mwf_definer
 routine owner app.session_invitee_access(uuid): mwf_definer
+routine owner app.session_parties(uuid[]): mwf_definer
 routine owner app.session_resume(uuid): mwf_definer
 routine owner app.session_scope(): mwf_migrator
 routine owner app.session_set_status(uuid,session_status): mwf_definer
@@ -660,7 +719,7 @@ routine owner app.t_message_seq(): mwf_definer
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_definer
 routine owner app.t_participant_cardinality(): mwf_migrator
-routine owner app.t_proposal_creator(): mwf_migrator
+routine owner app.t_proposal_app_moves(): mwf_migrator
 routine owner app.t_result_live_attempt(): mwf_definer
 routine owner app.t_session_cardinality(): mwf_migrator
 routine owner app.t_session_purge(): mwf_migrator
@@ -746,6 +805,7 @@ routine app.identity_subject(identity_provider): EXECUTE (app_access)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (app_access)
 routine app.invitation_peek(uuid): EXECUTE (app_access)
 routine app.invitation_repoint_drafts(uuid): EXECUTE (app_access)
+routine app.is_current_member(uuid): EXECUTE (app_access)
 routine app.is_member(uuid): EXECUTE (app_access)
 routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
 routine app.jsonb_envelope_violation(jsonb): EXECUTE (app_access)
@@ -762,6 +822,7 @@ routine app.result_facts(uuid[]): EXECUTE (app_access)
 routine app.session_abandon_declined(uuid): EXECUTE (app_access)
 routine app.session_archive(uuid): EXECUTE (app_access)
 routine app.session_invitee_access(uuid): EXECUTE (app_access)
+routine app.session_parties(uuid[]): EXECUTE (app_access)
 routine app.session_resume(uuid): EXECUTE (app_access)
 routine app.session_set_status(uuid,session_status): EXECUTE (app_access)
 routine app.session_unseated(uuid): EXECUTE (app_access)

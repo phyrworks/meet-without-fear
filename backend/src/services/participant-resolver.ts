@@ -195,3 +195,30 @@ export async function getPartnerUserIdFor(sessionId: string, userId: string): Pr
   if (!me) return null;
   return (await getPartnerParticipant(me))?.userId ?? null;
 }
+
+/** A party of a session the caller is seated in, as `app.session_parties` gives it (work-k5fk.10.7, review F7/F8). */
+export interface SessionPartyRow extends Seat {
+  kind: ParticipantKind;
+  displayName: string | null;
+  joinedAt: Date;
+  leftAt: Date | null;
+  /** The name the app calls them by: first name, else the full name; NULL for a tombstone. */
+  userName: string | null;
+  isTombstone: boolean;
+  mainConversationId: string | null;
+}
+
+/**
+ * Every participant of the given sessions — the caller's own seat included — that the caller is seated in, in join
+ * order. The app's one read of a co-participant's name and MAIN conversation id: "user" and conversation are
+ * own-row tables under RLS, so a Prisma relation include returns null for a partner. As mwf_app (app_access).
+ */
+export async function loadSessionParties(sessionIds: string[]): Promise<SessionPartyRow[]> {
+  if (sessionIds.length === 0) return [];
+  return prisma.$queryRaw<SessionPartyRow[]>`
+    SELECT session_id::text AS "sessionId", user_id::text AS "userId", kind::text AS kind,
+           display_name AS "displayName", joined_at AS "joinedAt", left_at AS "leftAt",
+           user_name AS "userName", is_tombstone AS "isTombstone", main_conversation_id::text AS "mainConversationId"
+    FROM app.session_parties(${sessionIds}::uuid[])
+    ORDER BY joined_at, user_id`;
+}

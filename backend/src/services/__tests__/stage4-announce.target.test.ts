@@ -9,6 +9,7 @@
  * On a NEEDS_CONFIRMED clone, as mwf_app with identity binding on; Ably is mocked at the module boundary.
  * Requires: npx tsx src/testing/golden/cli.ts build NEEDS_CONFIRMED
  */
+import { decryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
@@ -56,6 +57,17 @@ describeTarget('Stage 4 transition lines: the partner’s label never reaches a 
        ORDER BY created_at, id`,
       [ids.session, userId],
     );
+  // The line names the first need the participant SHARED, in its shared wording (app.first_need_label, review F1).
+  const firstShared = async (userId: string) => {
+    const [row] = await run.sql<{ shared_text: string }>(
+      `SELECT s.shared_text FROM need n JOIN need_share s ON s.need_id = n.id AND s.revoked_at IS NULL
+       WHERE n.session_id = $1 AND n.user_id = $2 AND n.deleted_at IS NULL AND n.superseded_by_need_id IS NULL
+         AND n.confirmed_at IS NOT NULL
+       ORDER BY n.created_at, n.id LIMIT 1`,
+      [ids.session, userId],
+    );
+    return decryptColumnValue('need_share', 'shared_text', row.shared_text) as string;
+  };
   const user = (id: string, email: string) => ({ id, email });
 
   it('both lines are written, the requester’s response and the partner’s payload carry no partner label', async () => {
@@ -83,7 +95,8 @@ describeTarget('Stage 4 transition lines: the partner’s label never reaches a 
       [ids.session],
     );
     const lineOf = (u: string) => lines.find(l => l.user_id === u)?.content ?? '';
-    expect(lineOf(ids.adaUser)).toContain(`Let's start with one of yours: ${adaNeeds[0].label}.`);
+    const adaShared = await firstShared(ids.adaUser);
+    expect(lineOf(ids.adaUser)).toContain(`Let's start with one of yours: ${adaShared}.`);
     expect(lineOf(ids.bobUser)).toContain(`Let's start with one of yours: ${bobNeeds[0].label}.`);
 
     // Bob's own client: his HTTP response never carries Ada's label.

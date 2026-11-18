@@ -8,7 +8,7 @@ import { SessionStatus, StageStatus, Stage } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPgSqlState } from '../middleware/errors';
 import { generateSessionStatusSummary, departedParticipantUsers, FORMER_PARTICIPANT_NAME } from '../utils/session';
-import { getPartnerParticipant } from '../services/participant-resolver';
+import { getPartnerParticipant, loadSessionParties } from '../services/participant-resolver';
 import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
 import { createInvitationUrl } from '../utils/urls';
@@ -308,11 +308,11 @@ export async function createSession(req: Request, res: Response): Promise<void> 
     // name they last went by in a session the two shared
     // (participant.display_name — never the other user's own row, spec §7).
     if (personId) {
-      const existingUser = await prisma.user.findFirst({
-        where: { id: personId, deletedAt: null, kind: 'human' },
-        select: { id: true },
-      });
-      if (!existingUser) {
+      // A live human the inviter shares a session with: "user" shows the app only its own row, so the database
+      // answers yes or no (work-k5fk.10.7, review F7).
+      const [{ known }] = await prisma.$queryRaw<Array<{ known: boolean }>>`
+        SELECT app.shares_session_with(${personId}::uuid) AS known`;
+      if (!known) {
         errorResponse(res, 'NOT_FOUND', 'Person not found', 404);
         return;
       }
@@ -741,13 +741,6 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
             id: true,
             status: true,
             updatedAt: true,
-            participants: {
-              where: { kind: 'human', userId: { not: user.id } },
-              select: {
-                userId: true,
-                user: { select: { id: true, name: true, firstName: true, deletedAt: true } },
-              },
-            },
           },
         },
       },
@@ -759,14 +752,21 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
       connectedSince: Date;
       sessions: Array<{ id: string; status: string; updatedAt: Date }>;
     };
+    // The other humans and their names: a partner's "user" row is theirs under RLS, so app.session_parties gives
+    // the name the app calls them by and whether they are a tombstone (work-k5fk.10.7, review F7).
+    const others = new Map<string, Awaited<ReturnType<typeof loadSessionParties>>>();
+    for (const o of await loadSessionParties(mine.map(p => p.session.id))) {
+      if (o.kind !== 'human' || o.userId === user.id) continue;
+      others.set(o.sessionId, [...(others.get(o.sessionId) ?? []), o]);
+    }
     const byPerson = new Map<string, Person>();
     for (const p of mine) {
-      for (const o of p.session.participants) {
-        if (!o.userId || !o.user || o.user.deletedAt) continue;
+      for (const o of others.get(p.session.id) ?? []) {
+        if (o.isTombstone) continue;
         const entry = byPerson.get(o.userId) ?? {
           userId: o.userId,
-          firstName: o.user.firstName,
-          name: o.user.name,
+          firstName: o.userName,
+          name: o.userName,
           connectedSince: p.joinedAt,
           sessions: [],
         };

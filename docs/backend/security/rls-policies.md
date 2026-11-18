@@ -37,11 +37,19 @@ describe production.
   definer answers (trailer.sql T4): `app.invitation_peek` / `app.invitation_answer` (the invitee before
   joining), `app.attempt_meta` (an unrevealed attempt's author and status, for its subject's share
   offer), `app.result_facts` (the author's current guidance), `app.participant_presence` /
-  `app.co_participant_presence` (a co-participant's read state and activity), `app.actor_name_for`
-  (a push names its actor), `app.shares_delivered_to_me`, `app.validated_at`, `app.first_need_label`.
-  Deviations from §6, each in its policy's COMMENT: `"user"` also shows co-participants (their names),
-  `conversation` also shows each co-participant's MAIN row (the delivery address), `empathy_review`
-  also shows the author a review once sent.
+  `app.co_participant_presence` (a co-participant's shared-frame seen instant, and activity only as
+  their privacy preference allows — never their mood or read state), `app.session_parties` (the
+  parties of the caller's sessions: the name the app calls each by, a tombstone flag, the MAIN
+  conversation id — `"user"` and `conversation` are own-row, so no partner's email, last name,
+  deletion instant or `next_seq`), `app.actor_name_for` (a push names its actor),
+  `app.shares_delivered_to_me`, `app.validated_at`, `app.first_need_label` (the shared wording of the
+  partner's first shared need only). A participant who left keeps reading but writes nothing: every
+  session-scoped table carries `app_active_*` RESTRICTIVE policies on `app.is_current_member`
+  (review r1 F4). `t_proposal_app_moves` holds what a proposal UPDATE may not do (re-assign its
+  creator, convert it to an agreement, attribute a removal to someone else). Deviations from §6,
+  each in its policy's COMMENT: `empathy_review` also shows the author a review once sent (and is
+  written only once the attempt is revealed); `follow_up` shows a partner's INDIVIDUAL entry only once
+  it is opted in to sharing.
 - `ai_access` — `ai_session`: rows of the session in `app.session_scope` only, and only while the acting
   user (`app.current_user_id()`, bound on the AI connection too) is a participant of it
   (`app.scope_actor_is_member`); with no scope or no such actor, none. `"user"`: that session's

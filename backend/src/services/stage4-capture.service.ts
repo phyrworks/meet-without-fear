@@ -807,7 +807,7 @@ async function applyOperation(
       kind: operation.kind ?? proposal.kind,
       // The creator moves only when the edit makes the proposal the actor's own commitment; it is never
       // re-assigned from the model's output (work-k5fk.10.9: the database refuses any other change of
-      // created_by_user_id, t_proposal_creator).
+      // created_by_user_id, t_proposal_app_moves).
       ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? creatorColumns(ctx, ctx.actor.userId) : {}),
       status: Stage4ProposalStatus.ACTIVE,
     },

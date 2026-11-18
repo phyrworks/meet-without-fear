@@ -684,8 +684,8 @@ COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_na
 COMMENT ON CONSTRAINT user_tombstone ON "user" IS 'A human is deleted exactly when its email is the scrubbed deleted+<id>@invalid: a live account cannot hold such an address, a tombstone cannot keep a real one.';
 COMMENT ON CONSTRAINT user_ai_constant ON "user" IS 'The AI principal is never deleted and has no name: its row is a constant the baseline seeds (app.ai_user_id()).';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
--- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user) and its partner's
--- names; the profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
+-- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user; RLS: its own row, the AI and its personas — a partner's name comes from app.session_parties, review F7)
+-- The profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
 -- (work-bp5m): a first login creates the row through mwf_auth's app.create_user, so no request can write an email or
 -- re-bind an account (the work-jv9y takeover needed mwf_app's UPDATE (clerk_id, email)); the tombstone is
 -- app.anonymize_user_account.
@@ -693,7 +693,8 @@ GRANT SELECT ON "user" TO app_access;
 GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO app_access;
 -- mwf_definer: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
 -- the persona scrub)
-GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_definer;
+-- participant_presence, session_parties (review F7: the name a co-participant is called by)
+GRANT SELECT (id, kind, email, deleted_at, first_name, name) ON "user" TO mwf_definer;
 GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_definer;
 GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
@@ -899,7 +900,7 @@ COMMENT ON COLUMN participant.added_by_user_id IS 'Who brought this participant 
 COMMENT ON CONSTRAINT participant_check ON participant IS 'Only a human can be the initiator: the AI or a persona always has an adder.';
 COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
 COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
-COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to user.name (v_participant).';
+COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to the user''s first name, else user.name (v_participant, app.session_parties; review F7).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
 -- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
@@ -912,6 +913,8 @@ GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_definer;
 GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
 -- mwf_definer: invitation_peek (the inviter's display name, as the invitee sees it)
 GRANT SELECT (display_name) ON participant TO mwf_definer;
+-- mwf_definer: session_parties (review F7: the parties of the caller's sessions, in join order)
+GRANT SELECT (joined_at) ON participant TO mwf_definer;
 -- mwf_definer: anonymize_user_in_session step 2
 GRANT UPDATE (display_name, left_at) ON participant TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts), brain-service
@@ -1161,8 +1164,8 @@ GRANT INSERT (session_id, user_id, label, category, evidence, ai_confidence, con
 GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO app_access;
 -- mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
 GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_definer;
--- mwf_definer: first_need_label (stage3.ts announceStage4: a participant's first confirmed need, once shared)
-GRANT SELECT (label, confirmed_at, created_at) ON need TO mwf_definer;
+-- mwf_definer: first_need_label (stage3.ts announceStage4: the order of a participant's confirmed needs)
+GRANT SELECT (confirmed_at, created_at) ON need TO mwf_definer;
 -- mwf_definer: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
 GRANT SELECT (session_id, user_id) ON need TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
@@ -1286,7 +1289,7 @@ GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_se
   ON conversation_read_state TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
--- mwf_definer: participant_presence (v_participant: a co-participant's read state and last activity)
+-- mwf_definer: participant_presence (v_participant: the caller's own read state; a co-participant's shared-frame instant and last activity, review F2)
 GRANT SELECT (last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at)
   ON conversation_read_state TO mwf_definer;
 GRANT DELETE ON conversation_read_state TO mwf_definer;
@@ -1580,7 +1583,7 @@ GRANT SELECT ON mood_reading TO app_access;
 GRANT INSERT (session_id, user_id, intensity, context, recorded_at, created_at) ON mood_reading TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
--- mwf_definer: participant_presence (v_participant: a co-participant's latest mood)
+-- mwf_definer: participant_presence (v_participant: the caller's own latest mood — never a co-participant's, review F2)
 GRANT SELECT (id, intensity, recorded_at) ON mood_reading TO mwf_definer;
 GRANT DELETE ON mood_reading TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
@@ -1930,8 +1933,8 @@ COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-remov
 GRANT SELECT ON need_share TO app_access;
 -- mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
 GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_definer;
--- mwf_definer: first_need_label (has the participant shared?)
-GRANT SELECT (session_id, user_id) ON need_share TO mwf_definer;
+-- mwf_definer: first_need_label (the wording of the participant's first shared need)
+GRANT SELECT (shared_text) ON need_share TO mwf_definer;
 GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
 GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
 

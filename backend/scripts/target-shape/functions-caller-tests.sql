@@ -1585,6 +1585,19 @@ UPDATE empathy_attempt SET status = 'HELD', revealed_at = NULL WHERE id = curren
 SET SESSION AUTHORIZATION mwf_ai;
 DO $$ BEGIN
   PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  -- 32-0 (review F6). the AI's scope is not enough: it acts for a participant of the session, or moves nothing
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'READY');
+    RAISE EXCEPTION 'TEST FAILED: the AI acting for no one moved a round';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 32-0 the AI acting for no one moves no round: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-00000000dead', true);
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'READY');
+    RAISE EXCEPTION 'TEST FAILED: the AI acting for a non-participant moved a round';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 32-0 the AI acting for a non-participant moves no round: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
   -- 32a. the AI never resubmits a round (SUPERSEDED writes the author's next round) nor reviews a revealed one
   BEGIN
     PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'SUPERSEDED', 'AI WROTE THIS');

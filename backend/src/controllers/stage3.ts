@@ -53,6 +53,7 @@ import {
 } from '../services/needs-share';
 import {
   getPartnerParticipant,
+  loadSessionParties,
   resolveParticipant,
   seatOf,
   type ResolvedParticipant,
@@ -77,14 +78,15 @@ function buildStage4TransitionContent(firstNeed?: string | null): string {
 
 /**
  * The participant's first live confirmed need (their own label, in their own conversation). The request that
- * completes the mutual share writes both participants' lines: the co-participant's need is theirs under RLS
- * (work-k5fk.10.7), so it comes through app.first_need_label.
+ * completes the mutual share writes both participants' lines: for the co-participant it is the wording they
+ * shared of their first shared need — what this request's user may already read — through app.first_need_label,
+ * never a need they kept private (work-k5fk.10.7 review F1).
  */
 async function firstNeedText(seat: Seat): Promise<string | null> {
   if (seat.userId !== getCurrentUserId()) {
     const [row] = await prisma.$queryRaw<Array<{ label: string | null }>>`
       SELECT app.first_need_label(${seat.sessionId}::uuid, ${seat.userId}::uuid) AS label`;
-    return row?.label ? decryptColumnValue('need', 'label', row.label) : null;
+    return row?.label ? decryptColumnValue('need_share', 'shared_text', row.label) : null;
   }
   const [first] = await listOwnNeeds(seat, { live: true, confirmed: true });
   return first?.label ?? null;
@@ -141,13 +143,11 @@ function needEditErrorResponse(res: Response, error: unknown): boolean {
  * present human's MAIN conversation (job), and the stage-completed events.
  */
 async function announceStage4(sessionId: string, triggeredBy: { userId: string }): Promise<void> {
-  const humans = await prisma.participant.findMany({
-    where: { sessionId, kind: 'human', leftAt: null },
-    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
-    select: { sessionId: true, userId: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
-  });
+  // The partner's MAIN conversation id comes from app.session_parties: their conversation row is theirs under RLS
+  // (work-k5fk.10.7, review F8).
+  const humans = (await loadSessionParties([sessionId])).filter(p => p.kind === 'human' && !p.leftAt);
   for (const h of humans) {
-    const conversationId = h.conversations[0]?.id;
+    const conversationId = h.mainConversationId;
     if (!conversationId) continue;
     const message = await createFacilitatorMessage({
       conversationId,
