@@ -22,8 +22,9 @@ DECLARE
 BEGIN
   SELECT string_agg(r, ', ' ORDER BY r) INTO missing
   FROM unnest(ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access', 'clinician_access',
-                    'mwf_definer',
-                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician']) AS r
+                    'diag_access', 'mwf_definer',
+                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician',
+                    'slam_bot_readonly']) AS r
   WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = r);
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'target_shape_baseline: database role(s) % do not exist', missing

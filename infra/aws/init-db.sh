@@ -38,8 +38,11 @@ GRANT clinician_access TO mwf_clinician WITH INHERIT TRUE, SET FALSE;
 -- ... OWNER TO), which needs SET ROLE mwf_definer; no inheritance.
 GRANT mwf_definer TO mwf_migrator WITH INHERIT FALSE, SET TRUE;
 CREATE ROLE slam_bot_readonly LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'readonly_password';
+-- The bot's one capability (work-k5fk.10.30: diagnostics, no content; its grants and policies are the baseline's T7c).
+CREATE ROLE diag_access NOLOGIN;
+GRANT diag_access TO slam_bot_readonly WITH INHERIT TRUE, SET FALSE;
 CREATE EXTENSION IF NOT EXISTS vector;
 -- Ownership (mwf_migrator owns the database and schema public; work-k5fk.10.6, design note §6 layer 1),
--- the database's ACL (CONNECT for the capabilities and slam_bot_readonly only) and pgaudit: ownership.sql,
+-- the database's ACL (CONNECT for the capabilities only) and pgaudit: ownership.sql,
 -- which the entrypoint runs next (20-mwf-ownership.sql) and an existing cluster runs at the cutover.
 SQL

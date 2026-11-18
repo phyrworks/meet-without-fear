@@ -2170,14 +2170,14 @@ GRANT SELECT ON v_reflection_theme TO app_access;
 -- creates a temporary object, and one shadowing a catalog name is an attack surface: caller test 13); each ACTIVE
 -- capability gets CONNECT, which its one login inherits — never the login itself, so a login added later reaches the
 -- database only through its capability. clinician_access (reserved, Q18) and mwf_definer (nobody logs in) get none.
--- The owner (mwf_migrator) and superusers connect by ownership / attribute. A role outside this list that must
--- connect gets its own explicit grant from the infrastructure (slam_bot_readonly: infra/aws/init-db.sh).
+-- The owner (mwf_migrator) and superusers connect by ownership / attribute. The operations bot connects through
+-- diag_access (slam_bot_readonly, work-k5fk.10.30); no other role may (step 20 refuses any other grantee).
 -- A database's ACL is not copied by CREATE DATABASE … TEMPLATE, so a clone (the golden runs) starts with PostgreSQL's
 -- default again; the database this migration runs in is the one that counts.
 DO $$
 BEGIN
   EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
-  EXECUTE format('GRANT CONNECT ON DATABASE %I TO app_access, ai_access, worker_access, ops_access, auth_access',
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO app_access, ai_access, worker_access, ops_access, auth_access, diag_access',
                  current_database());
 END
 $$;
@@ -2201,7 +2201,10 @@ END
 $$;
 
 -- T7b. Row-level security: ENABLE + FORCE on every table (§6 layer 3, owner decision Q8), so the owner mwf_migrator
--- is held to the policies too and, holding none, reads and writes no row: it runs DDL only. Referential actions and
+-- is held to the policies too and, holding none, reads and writes no row by default. That is a default, not a
+-- control: as the owner it may ALTER TABLE … NO FORCE / DISABLE ROW LEVEL SECURITY, and it may SET ROLE mwf_definer
+-- (definer_all). What holds the migrator is that only the deploy step logs in as it (pg_hba.conf) and pgaudit
+-- logs every statement it runs (infra/aws/ownership.sql). Referential actions and
 -- checks (a cascade, a RESTRICT, a unique probe) are not row reads: PostgreSQL runs them as the owner with RLS off.
 -- Superusers bypass RLS (break-glass only, §6). _prisma_migrations is Prisma's own bookkeeping, written by
 -- `migrate deploy` as the migrator around this script and granted to nobody: it is the one table left out.
@@ -2548,6 +2551,162 @@ CREATE POLICY app_interim ON user_preferences TO app_access USING (true) WITH CH
 COMMENT ON POLICY app_interim ON user_preferences IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
 CREATE POLICY definer_all ON user_preferences TO mwf_definer USING (true) WITH CHECK (true);
 
+-- T7c. Diagnostics (work-k5fk.10.30; owner decision 2026-11-17: "diagnostics, no content"). diag_access is the
+-- operations bot's capability (login slam_bot_readonly, its only member; infra/aws/roles.sql). It reads, on every
+-- row (diag_read, USING (true)), only the columns that carry ids, statuses, kinds, stages, counts, flags and
+-- timestamps — chosen by type: uuid7, ts_ms, the integer types, boolean, the enums, milestone_key, schema_version.
+-- Never: any text / ciphertext / jsonb / array / bytea column (message, empathy, need, reflection and memory
+-- content, names, emails, nicknames, push tokens, notes, model names), the mood and regulation intensities, the
+-- reconciler's alignment score, and no column of the key tables (session_key, participant_key, user_key), of
+-- user_identity (sign-in subjects) or of app.json_schema. A new column is invisible to the bot until listed here.
+-- Grants are here rather than next to each table: check-schema.sh applies tables.sql to a cluster that need not
+-- have diag_access, and the policy must follow its grant. Plus the migration status the bot reports
+-- (_prisma_migrations, which has no RLS: its bookkeeping columns only, when Prisma created it).
+DO $$
+BEGIN
+  IF pg_catalog.to_regclass('public._prisma_migrations') IS NOT NULL THEN
+    GRANT SELECT (id, migration_name, started_at, finished_at, rolled_back_at, applied_steps_count)
+      ON public._prisma_migrations TO diag_access;
+  END IF;
+END
+$$;
+
+-- agreement
+GRANT SELECT (id, session_id, proposal_id, type, status, follow_up_at, completed_at, created_at, updated_at) ON agreement TO diag_access;
+CREATE POLICY diag_read ON agreement FOR SELECT TO diag_access USING (true);
+-- agreement_party
+GRANT SELECT (agreement_id, session_id, user_id, agreed_at, created_at) ON agreement_party TO diag_access;
+CREATE POLICY diag_read ON agreement_party FOR SELECT TO diag_access USING (true);
+-- ai_memory
+GRANT SELECT (id, session_id, user_id, kind, doc_schema_version, created_at, updated_at) ON ai_memory TO diag_access;
+CREATE POLICY diag_read ON ai_memory FOR SELECT TO diag_access USING (true);
+-- brain_activity
+GRANT SELECT (id, session_id, reflection_id, participant_user_id, activity_type, call_type, token_count_input, token_count_output, duration_ms, status, created_at, completed_at, updated_at) ON brain_activity TO diag_access;
+CREATE POLICY diag_read ON brain_activity FOR SELECT TO diag_access USING (true);
+-- consent
+GRANT SELECT (id, session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id, decision, decided_at, revoked_at, created_at, updated_at, target_kind) ON consent TO diag_access;
+CREATE POLICY diag_read ON consent FOR SELECT TO diag_access USING (true);
+-- context_share_offer
+GRANT SELECT (id, attempt_id, result_id, session_id, subject_user_id, iteration, status, shared_at, declined_at, offered_at, delivery_status, delivered_at, seen_at, delivery_notified_at, seen_notified_at, created_at, updated_at) ON context_share_offer TO diag_access;
+CREATE POLICY diag_read ON context_share_offer FOR SELECT TO diag_access USING (true);
+-- conversation
+GRANT SELECT (id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at) ON conversation TO diag_access;
+CREATE POLICY diag_read ON conversation FOR SELECT TO diag_access USING (true);
+-- conversation_read_state
+GRANT SELECT (session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at, created_at, updated_at) ON conversation_read_state TO diag_access;
+CREATE POLICY diag_read ON conversation_read_state FOR SELECT TO diag_access USING (true);
+-- draft
+GRANT SELECT (id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at) ON draft TO diag_access;
+CREATE POLICY diag_read ON draft FOR SELECT TO diag_access USING (true);
+-- empathy_attempt
+GRANT SELECT (id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at) ON empathy_attempt TO diag_access;
+CREATE POLICY diag_read ON empathy_attempt FOR SELECT TO diag_access USING (true);
+-- empathy_review
+GRANT SELECT (id, attempt_id, session_id, reviewer_user_id, validated, feedback_sent_at, created_at, updated_at) ON empathy_review TO diag_access;
+CREATE POLICY diag_read ON empathy_review FOR SELECT TO diag_access USING (true);
+-- feature_state
+GRANT SELECT (user_id, feature, created_at, updated_at) ON feature_state TO diag_access;
+CREATE POLICY diag_read ON feature_state FOR SELECT TO diag_access USING (true);
+-- follow_up
+GRANT SELECT (id, session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for, response_deadline_at, opened_at, completed_at, created_at, updated_at) ON follow_up TO diag_access;
+CREATE POLICY diag_read ON follow_up FOR SELECT TO diag_access USING (true);
+-- follow_up_checkin
+GRANT SELECT (id, follow_up_id, session_id, user_id, next_action, continue_choice, submitted_at, created_at) ON follow_up_checkin TO diag_access;
+CREATE POLICY diag_read ON follow_up_checkin FOR SELECT TO diag_access USING (true);
+-- follow_up_note
+GRANT SELECT (id, session_id, user_id, carry_forward, carried_into_checkin_id, created_at, updated_at) ON follow_up_note TO diag_access;
+CREATE POLICY diag_read ON follow_up_note FOR SELECT TO diag_access USING (true);
+-- invitation
+GRANT SELECT (id, session_id, invited_by_user_id, accepted_by_user_id, status, message_confirmed_at, expires_at, accepted_at, declined_at, created_at, updated_at) ON invitation TO diag_access;
+CREATE POLICY diag_read ON invitation FOR SELECT TO diag_access USING (true);
+-- live_session_pair
+GRANT SELECT (user_a, user_b, session_id) ON live_session_pair TO diag_access;
+CREATE POLICY diag_read ON live_session_pair FOR SELECT TO diag_access USING (true);
+-- message
+GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, refining_need_id, source_attempt_id, created_at) ON message TO diag_access;
+CREATE POLICY diag_read ON message FOR SELECT TO diag_access USING (true);
+-- milestone
+GRANT SELECT (key, ordinal, scope, self_assertable, created_at, updated_at) ON milestone TO diag_access;
+CREATE POLICY diag_read ON milestone FOR SELECT TO diag_access USING (true);
+-- mood_reading
+GRANT SELECT (id, session_id, user_id, recorded_at, created_at) ON mood_reading TO diag_access;
+CREATE POLICY diag_read ON mood_reading FOR SELECT TO diag_access USING (true);
+-- need
+GRANT SELECT (id, session_id, user_id, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, created_at, updated_at) ON need TO diag_access;
+CREATE POLICY diag_read ON need FOR SELECT TO diag_access USING (true);
+-- need_disposition
+GRANT SELECT (need_id, session_id, user_id, status, is_current, created_at, updated_at) ON need_disposition TO diag_access;
+CREATE POLICY diag_read ON need_disposition FOR SELECT TO diag_access USING (true);
+-- need_share
+GRANT SELECT (need_id, session_id, user_id, category, shared_at, revoked_at, created_at, updated_at) ON need_share TO diag_access;
+CREATE POLICY diag_read ON need_share FOR SELECT TO diag_access USING (true);
+-- participant
+GRANT SELECT (session_id, user_id, kind, added_by_user_id, joined_at, left_at, created_at, updated_at) ON participant TO diag_access;
+CREATE POLICY diag_read ON participant FOR SELECT TO diag_access USING (true);
+-- participant_milestone
+GRANT SELECT (session_id, user_id, milestone_key, reached_at, created_at) ON participant_milestone TO diag_access;
+CREATE POLICY diag_read ON participant_milestone FOR SELECT TO diag_access USING (true);
+-- persona
+GRANT SELECT (user_id, kind, owner_user_id, owner_kind, created_at) ON persona TO diag_access;
+CREATE POLICY diag_read ON persona FOR SELECT TO diag_access USING (true);
+-- proposal
+GRANT SELECT (id, session_id, created_by_user_id, source, kind, status, removed_at, removed_by_user_id, shared_at, created_at, updated_at) ON proposal TO diag_access;
+CREATE POLICY diag_read ON proposal FOR SELECT TO diag_access USING (true);
+-- proposal_choice
+GRANT SELECT (proposal_id, session_id, user_id, decision, created_at, updated_at) ON proposal_choice TO diag_access;
+CREATE POLICY diag_read ON proposal_choice FOR SELECT TO diag_access USING (true);
+-- proposal_need
+GRANT SELECT (proposal_id, need_id, session_id, created_at) ON proposal_need TO diag_access;
+CREATE POLICY diag_read ON proposal_need FOR SELECT TO diag_access USING (true);
+-- proposal_revision
+GRANT SELECT (id, proposal_id, session_id, actor_user_id, action, reason, created_at) ON proposal_revision TO diag_access;
+CREATE POLICY diag_read ON proposal_revision FOR SELECT TO diag_access USING (true);
+-- reconciler_guidance
+GRANT SELECT (result_id, session_id, author_user_id, subject_user_id, guidance_type, created_at) ON reconciler_guidance TO diag_access;
+CREATE POLICY diag_read ON reconciler_guidance FOR SELECT TO diag_access USING (true);
+-- reconciler_result
+GRANT SELECT (id, attempt_id, session_id, subject_user_id, iteration, gap_severity, recommended_action, sharing_would_help, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
+CREATE POLICY diag_read ON reconciler_result FOR SELECT TO diag_access USING (true);
+-- reflection
+GRANT SELECT (id, user_id, status, linked_session_id, linked_at, distilled_at, created_at, updated_at) ON reflection TO diag_access;
+CREATE POLICY diag_read ON reflection FOR SELECT TO diag_access USING (true);
+-- reflection_message
+GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO diag_access;
+CREATE POLICY diag_read ON reflection_message FOR SELECT TO diag_access USING (true);
+-- regulation_event
+GRANT SELECT (id, session_id, user_id, type, completed_at, created_at) ON regulation_event TO diag_access;
+CREATE POLICY diag_read ON regulation_event FOR SELECT TO diag_access USING (true);
+-- reminder
+GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
+CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
+-- session
+GRANT SELECT (id, status, topic_frame_confirmed_at, previous_session_id, resolved_at, archived_at, archived_by_user_id, created_at, updated_at) ON session TO diag_access;
+CREATE POLICY diag_read ON session FOR SELECT TO diag_access USING (true);
+-- session_closure
+GRANT SELECT (session_id, kind, reason, closed_by_user_id, check_in_at, closed_at, created_at) ON session_closure TO diag_access;
+CREATE POLICY diag_read ON session_closure FOR SELECT TO diag_access USING (true);
+-- takeaway
+GRANT SELECT (id, reflection_id, source, type, "position", resolved_at, created_at, updated_at) ON takeaway TO diag_access;
+CREATE POLICY diag_read ON takeaway FOR SELECT TO diag_access USING (true);
+-- takeaway_link
+GRANT SELECT (source_id, target_id, link_type, created_at) ON takeaway_link TO diag_access;
+CREATE POLICY diag_read ON takeaway_link FOR SELECT TO diag_access USING (true);
+-- user
+GRANT SELECT (id, kind, deleted_at, created_at, updated_at) ON "user" TO diag_access;
+CREATE POLICY diag_read ON "user" FOR SELECT TO diag_access USING (true);
+-- user_contact
+GRANT SELECT (user_id, contact_user_id, created_at, updated_at) ON user_contact TO diag_access;
+CREATE POLICY diag_read ON user_contact FOR SELECT TO diag_access USING (true);
+-- user_device
+GRANT SELECT (id, user_id, platform, biometric_enabled, biometric_enrolled_at, last_seen_at, created_at, updated_at) ON user_device TO diag_access;
+CREATE POLICY diag_read ON user_device FOR SELECT TO diag_access USING (true);
+-- user_memory
+GRANT SELECT (id, user_id, session_id, category, status, source, created_at, updated_at) ON user_memory TO diag_access;
+CREATE POLICY diag_read ON user_memory FOR SELECT TO diag_access USING (true);
+-- user_preferences
+GRANT SELECT (user_id, doc_schema_version, created_at, updated_at) ON user_preferences TO diag_access;
+CREATE POLICY diag_read ON user_preferences FOR SELECT TO diag_access USING (true);
+
 -- ---------------------------------------------------------------------------
 -- T8. Catalog assertions (plan step 20). The tables are empty (OD7 baseline),
 -- so the TS-7 invariant re-checks over migrated rows are gone: every
@@ -2689,11 +2848,13 @@ BEGIN
   SELECT count(*) INTO n FROM pg_trigger WHERE tgname = 'touch_updated_at';
   IF n <> 34 THEN RAISE EXCEPTION 'step 20: % touch_updated_at triggers, expected 34', n; END IF;
 
-  -- Views are security_invoker.
-  SELECT string_agg(c.relname, ', ') INTO bad
+  -- Views are security_invoker, in every schema that is not PostgreSQL's own (review 9c F4), and there is no
+  -- materialized view: it stores rows its readers get with no row-level security at all.
+  SELECT string_agg(c.oid::regclass::text, ', ') INTO bad
   FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace
-  WHERE s.nspname = 'public' AND c.relkind = 'v' AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false);
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: view(s) without security_invoker: %', bad; END IF;
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_(toast|temp_|toast_temp_)'
+    AND ((c.relkind = 'v' AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false)) OR c.relkind = 'm');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: view(s) without security_invoker, or materialized view(s): %', bad; END IF;
 
   -- Every SECURITY DEFINER function and every trigger function in schema app
   -- pins search_path with pg_temp last (C1/I4: no temp-object shadowing).
@@ -2715,9 +2876,13 @@ BEGIN
   -- job_access are retired (work-k5fk.10.5, §7 row 9b). Roles are cluster-level (infra/aws/roles.sql, init-db.sh), so
   -- these read the cluster as the migration finds it and refuse a baseline over a cluster that drifted.
   DECLARE
-    v_logins CONSTANT text[] := ARRAY['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician'];
+    -- slam_bot_readonly / diag_access: the operations bot (work-k5fk.10.30, T7c).
+    v_logins CONSTANT text[] := ARRAY['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician',
+                                      'slam_bot_readonly'];
     v_caps   CONSTANT text[] := ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access',
-                                      'clinician_access'];
+                                      'clinician_access', 'diag_access'];
+    -- LOGIN or not: the bot logs in where it is deployed (production), and exists NOLOGIN elsewhere (roles.sql).
+    v_either CONSTANT text[] := ARRAY['slam_bot_readonly'];
     -- Reserved (review 9a F4): NOLOGIN until the clinician portal (Q18) uses it. mwf_ai and mwf_worker log in since
     -- §7 row 9b gave them their call sites.
     v_reserved CONSTANT text[] := ARRAY['mwf_clinician'];
@@ -2777,7 +2942,7 @@ BEGIN
            (SELECT string_agg(r.rolname, '+' ORDER BY r.rolname) FROM pg_roles r
             WHERE r.oid <> lr.oid AND pg_has_role(lr.oid, r.oid, 'MEMBER')), 'nothing'), ', ' ORDER BY l.login) INTO bad
   FROM unnest(v_logins, v_caps) AS l(login, capability) JOIN pg_roles lr ON lr.rolname = l.login
-  WHERE lr.rolcanlogin = (l.login = ANY (v_reserved))
+  WHERE (lr.rolcanlogin = (l.login = ANY (v_reserved)) AND NOT l.login = ANY (v_either))
      OR lr.rolsuper OR lr.rolbypassrls OR lr.rolcreaterole OR lr.rolcreatedb OR lr.rolreplication
      OR ARRAY(SELECT r.rolname::text FROM pg_roles r WHERE r.oid <> lr.oid AND pg_has_role(lr.oid, r.oid, 'MEMBER'))
         IS DISTINCT FROM ARRAY[l.capability::text]
@@ -2819,13 +2984,18 @@ BEGIN
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION 'step 20: role(s) that may CREATE in the database or schema public/app, or whose database ACL entry is not exactly CONNECT for an active capability and nothing otherwise: %', bad;
   END IF;
-  -- PUBLIC (grantee 0) holds nothing on the database: no CONNECT, no TEMPORARY (T7a). An unset ACL is PostgreSQL's
-  -- default, which grants both.
-  SELECT CASE WHEN d.datacl IS NULL THEN 'the default ACL (CONNECT, TEMPORARY)'
-              ELSE (SELECT string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type)
-                    FROM aclexplode(d.datacl) a WHERE a.grantee = 0) END
+  -- And nobody else (review 9c F4): the database's ACL names only its owner and the active capabilities — not
+  -- PUBLIC (grantee 0: no CONNECT, no TEMPORARY), no login, no other role. An unset ACL is PostgreSQL's default,
+  -- which grants PUBLIC both.
+  SELECT CASE WHEN d.datacl IS NULL THEN 'PUBLIC: the default ACL (CONNECT, TEMPORARY)'
+              ELSE (SELECT string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+                                      || ' ' || a.privilege_type, ', ' ORDER BY 1)
+                    FROM aclexplode(d.datacl) a
+                    WHERE a.grantee <> d.datdba
+                      AND NOT (pg_get_userbyid(a.grantee) = ANY (v_caps) AND NOT pg_get_userbyid(a.grantee) = ANY (v_reserved_caps)
+                               AND a.privilege_type = 'CONNECT')) END
   INTO bad FROM pg_database d WHERE d.datname = current_database();
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: PUBLIC may still use the database: %', bad; END IF;
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: database ACL entries beyond the owner and the capabilities'' CONNECT: %', bad; END IF;
 
   -- Review 9a F3: no runtime login or capability may EXECUTE app.next_message_seq (the counter; t_message_seq is its
   -- one caller) or any trigger function (EXECUTE is checked only at CREATE TRIGGER; a definer trigger function
@@ -2958,17 +3128,28 @@ BEGIN
   -- (the owner is held to the policies too) — all but _prisma_migrations, Prisma's bookkeeping, which no runtime role
   -- or capability may hold any privilege on.
   SELECT string_agg(c.oid::regclass::text, ', ' ORDER BY c.oid::regclass::text) INTO bad
-  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname IN ('public', 'app') AND c.relkind IN ('r', 'p') AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
-    AND NOT (n.nspname = 'public' AND c.relname = '_prisma_migrations');
+  FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_(toast|temp_|toast_temp_)' AND c.relkind IN ('r', 'p', 'f')
+    AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
+    AND NOT (s.nspname = 'public' AND c.relname = '_prisma_migrations');
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: table(s) without row-level security enabled and forced: %', bad; END IF;
+  -- _prisma_migrations has no RLS: only diag_access may read it, and only its bookkeeping columns (T7c).
   SELECT string_agg(DISTINCT r.rolname, ', ') INTO bad
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
   WHERE n.nspname = 'public' AND c.relname = '_prisma_migrations'
     AND r.rolname IN (SELECT unnest(v_logins || v_caps) UNION ALL SELECT 'mwf_definer')
     AND (has_table_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
-         OR has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'));
+         OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE, REFERENCES')
+         OR (NOT pg_has_role(r.oid, 'diag_access', 'USAGE') AND has_any_column_privilege(r.oid, c.oid, 'SELECT'))
+         OR has_column_privilege(r.oid, c.oid, 'checksum', 'SELECT') OR has_column_privilege(r.oid, c.oid, 'logs', 'SELECT'));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) with a privilege on _prisma_migrations (it has no RLS): %', bad; END IF;
+  -- TRUNCATE ignores row-level security: no runtime login, capability or mwf_definer holds it anywhere (review 9c F4).
+  SELECT string_agg(DISTINCT r.rolname || ' ' || c.oid::regclass::text, ', ') INTO bad
+  FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace CROSS JOIN pg_roles r
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_(toast|temp_|toast_temp_)' AND c.relkind IN ('r', 'p', 'f')
+    AND r.rolname IN (SELECT unnest(v_logins || v_caps) UNION ALL SELECT 'mwf_definer')
+    AND has_table_privilege(r.oid, c.oid, 'TRUNCATE');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) that may TRUNCATE (RLS does not apply to it): %', bad; END IF;
   -- Every command a capability or mwf_definer holds on a table (table- or column-level grant) is covered by a
   -- permissive policy naming that role for that command or ALL: under FORCE a grant with no policy is dead, and a
   -- grant added later must come with its policy (capability:table:command).
@@ -2978,7 +3159,8 @@ BEGIN
     FROM pg_roles r CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     CROSS JOIN (VALUES ('SELECT', 'r'), ('INSERT', 'a'), ('UPDATE', 'w'), ('DELETE', 'd')) e(cmd, code)
     WHERE r.rolname IN (SELECT unnest(v_caps) UNION ALL SELECT 'mwf_definer')
-      AND n.nspname IN ('public', 'app') AND c.relkind IN ('r', 'p')
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_|toast_temp_)'
+      AND c.relkind IN ('r', 'p', 'f') AND NOT (n.nspname = 'public' AND c.relname = '_prisma_migrations')
       AND (EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type = e.cmd)
            OR EXISTS (SELECT 1 FROM pg_attribute att, aclexplode(att.attacl) a
                       WHERE att.attrelid = c.oid AND a.grantee = r.oid AND a.privilege_type = e.cmd))

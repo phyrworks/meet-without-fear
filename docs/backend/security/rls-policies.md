@@ -19,7 +19,12 @@ describe production.
 
 - **Every table** in `public` / `app` has `ENABLE` + `FORCE ROW LEVEL SECURITY`, except Prisma's
   `_prisma_migrations` (granted to nobody). The owner `mwf_migrator` is held to the policies too
-  and has none: it runs DDL and reads no row. Superusers bypass RLS (break-glass only).
+  and has none, so by default it reads no row — a default, not a control: as owner it can lift FORCE
+  or `SET ROLE mwf_definer`. What holds it is `pg_hba.conf` (deploy step only) and pgaudit (every
+  statement logged). Superusers bypass RLS (break-glass only).
+- `diag_access` (the bot, `slam_bot_readonly`) — `diag_read`: every row, but SELECT only on id,
+  status, kind, stage, count, flag and timestamp columns (T7c). No content, names, emails, keys or
+  push tokens (work-k5fk.10.30).
 - **Policies target capability roles** (`app_access`, `ai_access`, `worker_access`, `ops_access`,
   `mwf_definer`), never logins. Step 20 refuses a baseline where a capability holds a command on a
   table without a policy covering it, or a policy names PUBLIC / a login.

@@ -43,6 +43,12 @@
 --   mwf_auth       auth_access        sign-in lookup and first-login creation (functions only)
 --   mwf_clinician  clinician_access   RESERVED for the clinician portal: NOLOGIN, no password, no
 --                                     grants until the two-person consent model exists (Q18)
+--   slam_bot_readonly diag_access     the operations bot's diagnostics (work-k5fk.10.30, owner
+--                                     decision 2026-11-17: "diagnostics, no content"): SELECT on
+--                                     ids, statuses, stages, counts, timestamps and job state only
+--                                     (trailer T7c). Created here NOLOGIN when missing and no
+--                                     -v readonly_password is given (a development cluster has no
+--                                     bot); production's was created by init-db.sh with its password.
 --
 -- Retired (work-k5fk.10.5, §7 row 9b): mwf_job and its interim capability
 -- job_access — once the AI's writer, the two-party writer and the definer owner
@@ -51,8 +57,11 @@
 --   mwf_migrator  owner of the database, schema public and every table, view,
 --                 type and invoker function; runs migrations, nothing else
 --                 (ownership.sql hands it the database at the cutover, §7 row
---                 9c / work-k5fk.10.6; deploy.sh migrates as it). Held to the
---                 policies too (FORCE ROW LEVEL SECURITY): it reads no row.
+--                 9c / work-k5fk.10.6; deploy.sh migrates as it). FORCE ROW
+--                 LEVEL SECURITY gives it no row by default, but as the owner it
+--                 can lift that (NO FORCE, SET ROLE mwf_definer): the controls
+--                 are pg_hba.conf (the deploy step only) and pgaudit (every
+--                 statement it runs is logged; ownership.sql).
 --   mwf_definer   NOLOGIN owner of every SECURITY DEFINER function; nobody
 --                 logs in as it. mwf_migrator may SET ROLE to it (no
 --                 inheritance) so a migration can hand a definer over.
@@ -69,6 +78,8 @@
 \if :{?worker_password} \else \set missing worker_password \endif
 \if :{?ops_password} \else \set missing ops_password \endif
 \if :{?auth_password} \else \set missing auth_password \endif
+-- Optional: readonly_password, used only when slam_bot_readonly does not exist yet.
+\if :{?readonly_password} \else \set readonly_password '' \endif
 \if :{?missing}
 \echo 'roles.sql: -v ' :missing '=... is required (each of migrator_password, app_password, ai_password, worker_password, ops_password, auth_password); nothing was changed'
 DO $$ BEGIN RAISE EXCEPTION 'roles.sql: a required -v password variable is missing (see the line above)'; END $$;
@@ -118,16 +129,25 @@ SELECT format('ALTER ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATE
 FROM (VALUES ('mwf_clinician')) AS r(name)
 \gexec
 
+-- The operations bot (diag_access). LOGIN with -v readonly_password, NOLOGIN without one; an existing role keeps
+-- its LOGIN state and password. Attributes re-asserted (no SUPERUSER / BYPASSRLS: under FORCE ROW LEVEL SECURITY
+-- its diag_read policies are the only rows it reaches).
+SELECT CASE WHEN :'readonly_password' = '' THEN 'CREATE ROLE slam_bot_readonly NOLOGIN'
+            ELSE format('CREATE ROLE slam_bot_readonly LOGIN PASSWORD %L', :'readonly_password') END
+WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'slam_bot_readonly')
+\gexec
+ALTER ROLE slam_bot_readonly NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
+
 -- The NOLOGIN roles: the capabilities and the definer owner.
 SELECT format('CREATE ROLE %I NOLOGIN', r.name)
 FROM (VALUES ('app_access'), ('ai_access'), ('worker_access'), ('ops_access'), ('auth_access'),
-             ('clinician_access'), ('mwf_definer')) AS r(name)
+             ('clinician_access'), ('diag_access'), ('mwf_definer')) AS r(name)
 WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = r.name)
 \gexec
 
 SELECT format('ALTER ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION', r.name)
 FROM (VALUES ('app_access'), ('ai_access'), ('worker_access'), ('ops_access'), ('auth_access'),
-             ('clinician_access'), ('mwf_definer')) AS r(name)
+             ('clinician_access'), ('diag_access'), ('mwf_definer')) AS r(name)
 \gexec
 
 -- Each login's one capability. Issued unconditionally: on PG16+ re-granting an
@@ -140,7 +160,8 @@ FROM (VALUES
   ('mwf_worker',    'worker_access'),
   ('mwf_ops',       'ops_access'),
   ('mwf_auth',      'auth_access'),
-  ('mwf_clinician', 'clinician_access')
+  ('mwf_clinician', 'clinician_access'),
+  ('slam_bot_readonly', 'diag_access')
 ) AS m(login, capability)
 \gexec
 
@@ -151,6 +172,8 @@ COMMENT ON ROLE ops_access IS 'Capability (NOLOGIN): the ops dashboard, SELECT o
 COMMENT ON ROLE auth_access IS 'Capability (NOLOGIN): sign-in lookup and first-login creation, through functions only. Login mwf_auth.';
 COMMENT ON ROLE clinician_access IS 'Capability (NOLOGIN), reserved: therapists / counselors. Login mwf_clinician. No grants until the two-person consent model exists (design note Q18).';
 COMMENT ON ROLE mwf_definer IS 'NOLOGIN owner of every SECURITY DEFINER function (design note §6 layer 4). Nobody logs in as it; mwf_migrator may SET ROLE to it to hand a function over.';
+COMMENT ON ROLE diag_access IS 'Capability (NOLOGIN): the operations bot''s diagnostics — ids, statuses, stages, counts, timestamps, job state; no content, names, emails, keys or push tokens (trailer T7c). Login slam_bot_readonly. work-k5fk.10.30.';
+COMMENT ON ROLE slam_bot_readonly IS 'Login: the operations bot (SSH tunnel, read-only). Member of diag_access only; NOLOGIN on a cluster without the bot.';
 COMMENT ON ROLE mwf_app IS 'Login: the API''s request path. Member of app_access only.';
 COMMENT ON ROLE mwf_ai IS 'Login: the AI (AI_DATABASE_URL), one session per transaction (app.session_scope). Member of ai_access only.';
 COMMENT ON ROLE mwf_worker IS 'Login: background jobs and notification delivery (WORKER_DATABASE_URL). Member of worker_access only.';

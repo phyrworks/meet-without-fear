@@ -293,7 +293,7 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
       expect(await run.as('mwf_ai', null, `SELECT count(*)::int AS n FROM participant`, [], OTHER)).toEqual([{ n: 0 }]);
     });
 
-    it('the owner mwf_migrator reads and writes no row (FORCE): it runs DDL only', async () => {
+    it('the owner mwf_migrator reads and writes no row by default (FORCE; pgaudit, not RLS, is what holds it)', async () => {
       const [{ n }] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM message`);
       expect(n).toBeGreaterThan(0);
       expect(await run.as('mwf_migrator', null, `SELECT count(*)::int AS n FROM message`)).toEqual([{ n: 0 }]);
