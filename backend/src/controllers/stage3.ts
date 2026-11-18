@@ -159,11 +159,16 @@ async function announceStage4(sessionId: string, triggeredBy: { userId: string }
       currentStage: 4,
       userId: triggeredBy.userId,
       triggeredByUserId: triggeredBy.userId,
-      message: { id: message.id, content: message.content, timestamp: message.createdAt, forUserId: h.userId },
     };
     if (h.userId === triggeredBy.userId) {
-      await publishSessionEvent(sessionId, 'partner.stage_completed', eventData);
+      await publishSessionEvent(sessionId, 'partner.stage_completed', {
+        ...eventData,
+        message: { id: message.id, content: message.content, timestamp: message.createdAt, forUserId: h.userId },
+      });
     } else {
+      // The partner's line names their own need: it never leaves this process (work-k5fk.10.36). The session
+      // channel reaches every device of the session (forUserId is a client-side filter), so the partner's event
+      // carries no message; their client refetches its messages on partner.stage_completed.
       await notifyPartner(sessionId, h.userId, 'partner.stage_completed', eventData);
     }
   }
