@@ -289,4 +289,185 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('ok');
     });
   });
+
+  describe('thread (9e)', () => {
+    const mainOf = async (user: string) =>
+      (
+        await run.sql<{ id: string }>(
+          `SELECT id::text FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
+          [session, user],
+        )
+      )[0].id;
+
+    it('conversation: Bob sees Ada’s MAIN conversation row (its address) but not her sub-chat, and cannot change it', async () => {
+      const adaMain = await mainOf(ada);
+      const [{ id: sub }] = await run.sql<{ id: string }>(
+        `INSERT INTO conversation (session_id, user_id, kind, anchor_kind) VALUES ($1, $2, 'SUBCHAT', 'NEEDS_BRAINSTORM') RETURNING id::text`,
+        [session, ada],
+      );
+      expect(await count('mwf_app', bob, 'conversation', 'id = $1', [adaMain])).toBe(1);
+      expect(await count('mwf_app', bob, 'conversation', 'id = $1', [sub])).toBe(0);
+      expect(await count('mwf_app', carol, 'conversation')).toBe(0);
+      expect(
+        await as('mwf_app', bob, `UPDATE conversation SET status = 'RESOLVED' WHERE id = $1 RETURNING id`, [adaMain]),
+      ).toEqual([]);
+      expect(
+        await code('mwf_app', bob, `INSERT INTO conversation (session_id, user_id, kind, anchor_kind) VALUES ($1, $2, 'SUBCHAT', 'NEEDS_BRAINSTORM')`, [
+          session,
+          ada,
+        ]),
+      ).toBe('rls');
+    });
+
+    it('message: Bob reads none of Ada’s conversation and writes nothing into it', async () => {
+      const adaMain = await mainOf(ada);
+      expect(await count('mwf_app', ada, 'message', 'conversation_id = $1', [adaMain])).toBeGreaterThan(0);
+      expect(await count('mwf_app', bob, 'message', 'conversation_id = $1', [adaMain])).toBe(0);
+      expect(await count('mwf_app', carol, 'message')).toBe(0);
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO message (conversation_id, session_id, sender_user_id, role, kind, content) VALUES ($1, $2, $3, 'USER', 'CHAT', 'x')`,
+          [adaMain, session, bob],
+        ),
+      ).toBe('42501');
+      expect(
+        await as('mwf_app', bob, `DELETE FROM message WHERE conversation_id = $1 RETURNING seq`, [adaMain]),
+      ).toEqual([]);
+    });
+
+    it('conversation_read_state: Bob neither reads nor moves Ada’s; nobody points theirs at another’s conversation (work-k5fk.10.21)', async () => {
+      const adaMain = await mainOf(ada);
+      const bobMain = await mainOf(bob);
+      expect(await count('mwf_app', bob, 'conversation_read_state', 'user_id = $1', [ada])).toBe(0);
+      expect(
+        await as(
+          'mwf_app',
+          bob,
+          `UPDATE conversation_read_state SET last_viewed_at = now() WHERE user_id = $1 RETURNING user_id`,
+          [ada],
+        ),
+      ).toEqual([]);
+      const [{ seq }] = await run.sql<{ seq: number }>(
+        `SELECT max(seq)::int AS seq FROM message WHERE conversation_id = $1`,
+        [bobMain],
+      );
+      // Ada's own read state may not name Bob's conversation (the FK alone pinned only the session)
+      expect(
+        await code(
+          'mwf_app',
+          ada,
+          `UPDATE conversation_read_state SET last_seen_conversation_id = $2, last_seen_seq = $3 WHERE user_id = $1`,
+          [ada, bobMain, seq],
+        ),
+      ).toBe('rls');
+      void adaMain;
+    });
+
+    it('draft: Bob neither reads nor deletes Ada’s drafts, nor writes one in her name', async () => {
+      await run.sql(
+        `INSERT INTO draft (session_id, user_id, kind, about_user_id, content) VALUES ($1, $2, 'EMPATHY', $3, 'ada draft')
+         ON CONFLICT DO NOTHING`,
+        [session, ada, bob],
+      );
+      expect(await count('mwf_app', ada, 'draft', 'user_id = $1', [ada])).toBeGreaterThan(0);
+      expect(await count('mwf_app', bob, 'draft', 'user_id = $1', [ada])).toBe(0);
+      expect(await as('mwf_app', bob, `DELETE FROM draft WHERE user_id = $1 RETURNING id`, [ada])).toEqual([]);
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO draft (session_id, user_id, kind, about_user_id, content) VALUES ($1, $2, 'EMPATHY', $3, 'forged')`,
+          [session, ada, bob],
+        ),
+      ).toBe('rls');
+    });
+
+    it('reflection, reflection_message, takeaway, takeaway_link: Bob reads and writes none of Ada’s inner work', async () => {
+      const [{ id: r }] = await run.sql<{ id: string }>(
+        `INSERT INTO reflection (user_id) VALUES ($1) RETURNING id::text`,
+        [ada],
+      );
+      await run.sql(`INSERT INTO reflection_message (reflection_id, role, content) VALUES ($1, 'USER', 'private')`, [
+        r,
+      ]);
+      const [{ id: t1 }] = await run.sql<{ id: string }>(
+        `INSERT INTO takeaway (reflection_id, content) VALUES ($1, 'one') RETURNING id::text`,
+        [r],
+      );
+      const [{ id: t2 }] = await run.sql<{ id: string }>(
+        `INSERT INTO takeaway (reflection_id, content) VALUES ($1, 'two') RETURNING id::text`,
+        [r],
+      );
+      await run.sql(`INSERT INTO takeaway_link (source_id, target_id, link_type) VALUES ($1, $2, 'USER_MANUAL')`, [
+        t1,
+        t2,
+      ]);
+      expect(await count('mwf_app', ada, 'takeaway_link', 'source_id = $1', [t1])).toBe(1);
+      for (const [table, where] of [
+        ['reflection', 'id = $1'],
+        ['reflection_message', 'reflection_id = $1'],
+        ['takeaway', 'reflection_id = $1'],
+      ] as const) {
+        expect(await count('mwf_app', ada, table, where, [r])).toBeGreaterThan(0);
+        expect(await count('mwf_app', bob, table, where, [r])).toBe(0);
+      }
+      expect(await count('mwf_app', bob, 'takeaway_link', 'source_id = $1', [t1])).toBe(0);
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO reflection_message (reflection_id, role, content) VALUES ($1, 'USER', 'x')`,
+          [r],
+        ),
+      ).toBe('rls');
+      expect(await code('mwf_app', bob, `INSERT INTO takeaway (reflection_id, content) VALUES ($1, 'x')`, [r])).toBe(
+        'rls',
+      );
+      // Bob links from his own takeaway to Ada's: refused (both ends are the caller's)
+      const [{ id: br }] = await run.sql<{ id: string }>(
+        `INSERT INTO reflection (user_id) VALUES ($1) RETURNING id::text`,
+        [bob],
+      );
+      const [{ id: bt }] = await run.sql<{ id: string }>(
+        `INSERT INTO takeaway (reflection_id, content) VALUES ($1, 'mine') RETURNING id::text`,
+        [br],
+      );
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO takeaway_link (source_id, target_id, link_type) VALUES ($1, $2, 'USER_MANUAL')`,
+          [bt, t1],
+        ),
+      ).toBe('rls');
+      // …nor links his reflection to a session he is not in
+      expect(
+        await code('mwf_app', carol, `INSERT INTO reflection (user_id, linked_session_id) VALUES ($1, $2)`, [
+          carol,
+          session,
+        ]),
+      ).toBe('rls');
+    });
+
+    it.each([
+      ['mood_reading', `INSERT INTO mood_reading (session_id, user_id, intensity) VALUES ($1, $2, 5)`],
+      [
+        'regulation_event',
+        `INSERT INTO regulation_event (session_id, user_id, type) VALUES ($1, $2, 'BREATHING_EXERCISE')`,
+      ],
+    ])('%s: Bob neither reads Ada’s nor records one for her', async (table, insert) => {
+      await run.sql(insert, [session, ada]);
+      expect(await count('mwf_app', ada, table, 'user_id = $1', [ada])).toBeGreaterThan(0);
+      expect(await count('mwf_app', bob, table, 'user_id = $1', [ada])).toBe(0);
+      expect(await code('mwf_app', bob, insert, [session, ada])).toBe('rls');
+    });
+
+    it('the AI acting for Carol reads none of their chat, even scoped to their session', async () => {
+      expect(await count('mwf_ai', ada, 'message', 'true', [], session)).toBeGreaterThan(0);
+      expect(await count('mwf_ai', carol, 'message', 'true', [], session)).toBe(0);
+      expect(await count('mwf_ai', carol, 'conversation', 'true', [], session)).toBe(0);
+    });
+  });
 });

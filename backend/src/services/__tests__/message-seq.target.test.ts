@@ -204,9 +204,9 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       const start = await nextSeqOf(ids.adaConv);
       const clients = await Promise.all([
         clientAs('mwf_app', ids.ada),
-        clientAs('mwf_ai', null),
+        clientAs('mwf_ai', ids.ada),
         clientAs('mwf_app', ids.ada),
-        clientAs('mwf_ai', null),
+        clientAs('mwf_ai', ids.ada),
       ]);
       try {
         // Hold the conversation's lock in one transaction so the others queue behind it.
@@ -233,7 +233,7 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
 
     it('a rolled-back insert burns no number', async () => {
       const start = await nextSeqOf(ids.bobConv);
-      const c = await clientAs('mwf_ai', null);
+      const c = await clientAs('mwf_ai', ids.ada);
       try {
         await c.query('BEGIN');
         expect((await aiLine(c, ids.bobConv, 'rolled back')).rows[0].seq).toBe(start);
@@ -250,7 +250,7 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       const b = await nextSeqOf(ids.bobConv);
       await run.as(
         'mwf_ai',
-        null,
+        ids.ada,
         `INSERT INTO message (conversation_id, session_id, role, content) VALUES ($1, $2, 'AI', 'x')`,
         [ids.bobConv, ids.session],
         ids.session,

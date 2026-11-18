@@ -47,17 +47,21 @@ context_share_offer app_interim FOR ALL TO app_access USING (true) CHECK (true)
 context_share_offer definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 context_share_offer diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 conversation [rls true, force true]
-conversation ai_session FOR ALL TO ai_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
-conversation app_interim FOR ALL TO app_access USING (true) CHECK (true)
+conversation ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+conversation app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
+conversation app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR ((kind = 'MAIN'::conversation_kind) AND app.is_member((session_id)::uuid)))) CHECK (-)
+conversation app_update FOR UPDATE TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 conversation definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 conversation diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 conversation ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 conversation_read_state [rls true, force true]
-conversation_read_state app_interim FOR ALL TO app_access USING (true) CHECK (true)
+conversation_read_state app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((last_seen_conversation_id IS NULL) OR (EXISTS ( SELECT 1
+   FROM conversation c
+  WHERE (((c.id)::uuid = (conversation_read_state.last_seen_conversation_id)::uuid) AND ((c.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))))
 conversation_read_state definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 conversation_read_state diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 draft [rls true, force true]
-draft app_interim FOR ALL TO app_access USING (true) CHECK (true)
+draft app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 draft definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 draft diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 empathy_attempt [rls true, force true]
@@ -99,8 +103,16 @@ live_session_pair [rls true, force true]
 live_session_pair app_select FOR SELECT TO app_access USING (((( SELECT app.current_user_id() AS current_user_id) = (user_a)::uuid) OR (( SELECT app.current_user_id() AS current_user_id) = (user_b)::uuid))) CHECK (-)
 live_session_pair definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 message [rls true, force true]
-message ai_session FOR ALL TO ai_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
-message app_interim FOR ALL TO app_access USING (true) CHECK (true)
+message ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
+message app_delete FOR DELETE TO app_access USING (((EXISTS ( SELECT 1
+   FROM conversation c
+  WHERE (((c.id)::uuid = (message.conversation_id)::uuid) AND ((c.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))) AND (((role = 'USER'::message_role) AND (kind = 'CHAT'::message_kind) AND ((sender_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) OR (kind = 'SHARE_SUGGESTION'::message_kind)))) CHECK (-)
+message app_insert FOR INSERT TO app_access USING (-) CHECK (((role = 'USER'::message_role) AND ((sender_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (kind = ANY (ARRAY['CHAT'::message_kind, 'EMPATHY_STATEMENT'::message_kind])) AND (EXISTS ( SELECT 1
+   FROM conversation c
+  WHERE (((c.id)::uuid = (message.conversation_id)::uuid) AND ((c.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))))
+message app_select FOR SELECT TO app_access USING ((((sender_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (EXISTS ( SELECT 1
+   FROM conversation c
+  WHERE (((c.id)::uuid = (message.conversation_id)::uuid) AND ((c.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))) CHECK (-)
 message definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 message diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 message ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
@@ -111,7 +123,7 @@ milestone definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 milestone diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 milestone ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 mood_reading [rls true, force true]
-mood_reading app_interim FOR ALL TO app_access USING (true) CHECK (true)
+mood_reading app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 mood_reading definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 mood_reading diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 mood_reading ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
@@ -178,16 +190,20 @@ reconciler_result ai_session FOR ALL TO ai_access USING (((session_id)::uuid = (
 reconciler_result app_interim FOR ALL TO app_access USING (true) CHECK (true)
 reconciler_result diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection [rls true, force true]
-reflection app_interim FOR ALL TO app_access USING (true) CHECK (true)
+reflection app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND ((linked_session_id IS NULL) OR app.is_member((linked_session_id)::uuid))))
 reflection definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reflection diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 reflection_message [rls true, force true]
-reflection_message app_interim FOR ALL TO app_access USING (true) CHECK (true)
+reflection_message app_own FOR ALL TO app_access USING ((EXISTS ( SELECT 1
+   FROM reflection r
+  WHERE (((r.id)::uuid = (reflection_message.reflection_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))) CHECK ((EXISTS ( SELECT 1
+   FROM reflection r
+  WHERE (((r.id)::uuid = (reflection_message.reflection_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))
 reflection_message diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 reflection_message ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 regulation_event [rls true, force true]
-regulation_event app_interim FOR ALL TO app_access USING (true) CHECK (true)
+regulation_event app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 regulation_event definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 reminder [rls true, force true]
 reminder app_interim FOR ALL TO app_access USING (true) CHECK (true)
@@ -210,10 +226,23 @@ session_closure diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 session_closure worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 session_key [rls true, force true]
 takeaway [rls true, force true]
-takeaway app_interim FOR ALL TO app_access USING (true) CHECK (true)
+takeaway app_own FOR ALL TO app_access USING ((EXISTS ( SELECT 1
+   FROM reflection r
+  WHERE (((r.id)::uuid = (takeaway.reflection_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))) CHECK ((EXISTS ( SELECT 1
+   FROM reflection r
+  WHERE (((r.id)::uuid = (takeaway.reflection_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))
 takeaway diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 takeaway_link [rls true, force true]
-takeaway_link app_interim FOR ALL TO app_access USING (true) CHECK (true)
+takeaway_link app_own FOR ALL TO app_access USING ((EXISTS ( SELECT 1
+   FROM (takeaway t
+     JOIN reflection r ON (((r.id)::uuid = (t.reflection_id)::uuid)))
+  WHERE (((t.id)::uuid = (takeaway_link.source_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))) CHECK (((EXISTS ( SELECT 1
+   FROM (takeaway t
+     JOIN reflection r ON (((r.id)::uuid = (t.reflection_id)::uuid)))
+  WHERE (((t.id)::uuid = (takeaway_link.source_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))) AND (EXISTS ( SELECT 1
+   FROM (takeaway t
+     JOIN reflection r ON (((r.id)::uuid = (t.reflection_id)::uuid)))
+  WHERE (((t.id)::uuid = (takeaway_link.target_id)::uuid) AND ((r.user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))))
 takeaway_link diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 user_contact [rls true, force true]
 user_contact app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
@@ -282,8 +311,8 @@ column public.invitation SELECT: session_id, invited_by_user_id (ops_access)
 column public.invitation UPDATE: accepted_by_user_id, status, accepted_at, declined_at, decline_reason (mwf_definer)
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, dedupe_key, refining_need_id, source_attempt_id, created_at (ai_access)
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (mwf_definer)
-column public.message SELECT: conversation_id, seq, kind, source_attempt_id, created_at (mwf_definer)
 column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (ai_access)
+column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, source_attempt_id, created_at (mwf_definer)
 column public.message SELECT: session_id, created_at (worker_access)
 column public.milestone SELECT: key, self_assertable (mwf_definer)
 column public.mood_reading SELECT: id, session_id, user_id, intensity, recorded_at (mwf_definer)
@@ -350,6 +379,7 @@ routine app.all_ciphertext(text[]): EXECUTE (mwf_migrator)
 routine app.anonymize_user_account(uuid): EXECUTE (mwf_definer)
 routine app.anonymize_user_in_session(uuid,uuid): EXECUTE (mwf_definer)
 routine app.choices_unshare(uuid): EXECUTE (mwf_definer)
+routine app.co_participant_presence(uuid,uuid): EXECUTE (mwf_definer)
 routine app.create_user(identity_provider,text,text,text,text): EXECUTE (auth_access)
 routine app.create_user(identity_provider,text,text,text,text): EXECUTE (mwf_definer)
 routine app.current_user_id(): EXECUTE (auth_access)
@@ -541,6 +571,7 @@ routine owner app.all_ciphertext(text[]): mwf_migrator
 routine owner app.anonymize_user_account(uuid): mwf_definer
 routine owner app.anonymize_user_in_session(uuid,uuid): mwf_definer
 routine owner app.choices_unshare(uuid): mwf_definer
+routine owner app.co_participant_presence(uuid,uuid): mwf_definer
 routine owner app.create_user(identity_provider,text,text,text,text): mwf_definer
 routine owner app.current_user_id(): mwf_migrator
 routine owner app.deliver_message(uuid,uuid,message_kind,text,uuid,timestamp with time zone): mwf_definer
@@ -664,6 +695,7 @@ routine app.all_ciphertext(text[]): EXECUTE (PUBLIC)
 routine app.anonymize_user_account(uuid): EXECUTE (app_access)
 routine app.anonymize_user_in_session(uuid,uuid): EXECUTE (app_access)
 routine app.choices_unshare(uuid): EXECUTE (app_access)
+routine app.co_participant_presence(uuid,uuid): EXECUTE (app_access)
 routine app.current_user_id(): EXECUTE (app_access)
 routine app.deliver_message(uuid,uuid,message_kind,text,uuid,timestamp with time zone): EXECUTE (app_access)
 routine app.empathy_direction_status(): EXECUTE (app_access)

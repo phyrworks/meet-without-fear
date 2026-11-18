@@ -1539,6 +1539,21 @@ DO $$ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b another session''s scope, no AI write: %', SQLERRM;
   END;
   PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e6', true);
+  -- work-k5fk.10.7: in its scope, the AI acting for no one — or for someone outside it (C) — writes no line
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'no actor');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote a line acting for no one';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b-0 the AI acting for no one writes no line: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'outsider');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote a line acting for a non-participant';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b-1 the AI acting for a non-participant writes no line: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
   INSERT INTO message (conversation_id, session_id, role, kind, content)
   VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'in scope');
   RAISE NOTICE 'PASS 31c the AI writes its line in its scope';

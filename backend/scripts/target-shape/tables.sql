@@ -1223,6 +1223,8 @@ GRANT DELETE ON message TO app_access;
 -- mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe; deliver_message: the delivered copy with
 -- its instant, RETURNING seq, created_at
 GRANT SELECT (conversation_id, source_attempt_id, kind, seq, created_at) ON message TO mwf_definer;
+-- mwf_definer: co_participant_presence (a co-participant's last turn: the instant of their latest USER CHAT line)
+GRANT SELECT (session_id, sender_user_id, role) ON message TO mwf_definer;
 GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at) ON message TO mwf_definer;
 -- mwf_ai: message-store createFacilitatorMessage / createFacilitatorMessageOnce: the AI / SYSTEM line (sender_user_id
 -- is sent as NULL; t_session_scope refuses any other role), a once-only line's dedupe_key (work-fdc1, sql_message_once),

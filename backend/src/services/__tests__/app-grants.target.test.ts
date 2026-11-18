@@ -131,11 +131,14 @@ describeTarget('mwf_app grants (target)', () => {
           r => r[0].id,
           (e: { code?: string }) => e.code ?? String(e),
         );
+    /** 'ok' (deleted), 'no row' (not the caller's to delete: RLS app_delete leaves it out, work-k5fk.10.7), or the SQLSTATE. */
     const del = (user: string | null, id: string) =>
-      run.as('mwf_app', user, `DELETE FROM message WHERE conversation_id || ':' || seq = $1`, [id]).then(
-        () => 'ok',
-        (e: { code?: string }) => e.code ?? String(e),
-      );
+      run
+        .as('mwf_app', user, `DELETE FROM message WHERE conversation_id || ':' || seq = $1 RETURNING 1 AS x`, [id])
+        .then(
+          r => (r.length ? 'ok' : 'no row'),
+          (e: { code?: string }) => e.code ?? String(e),
+        );
 
     it('INSERT: own USER CHAT / EMPATHY_STATEMENT only; never an AI/SYSTEM row or a delivered kind', async () => {
       expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
@@ -159,7 +162,7 @@ describeTarget('mwf_app grants (target)', () => {
         `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'CHAT', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
         [adaConv],
       );
-      expect(await del(ids.adaUser, ai.id)).toBe('42501');
+      expect(await del(ids.adaUser, ai.id)).toBe('no row');
       const [suggestion] = await run.sql<{ id: string }>(
         `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
         [adaConv],
@@ -168,10 +171,10 @@ describeTarget('mwf_app grants (target)', () => {
         `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
         [bobConv],
       );
-      expect(await del(ids.adaUser, bobsSuggestion.id)).toBe('42501');
+      expect(await del(ids.adaUser, bobsSuggestion.id)).toBe('no row');
       expect(await del(ids.adaUser, suggestion.id)).toBe('ok');
       const bobTurn = await insert(ids.bobUser, bobConv, ids.bobUser, 'USER', 'CHAT');
-      expect(await del(ids.adaUser, bobTurn)).toBe('42501');
+      expect(await del(ids.adaUser, bobTurn)).toBe('no row');
     });
 
     it('work-k5fk.10.22: the row checks bind every member of app_access, not only the login named mwf_app', async () => {
@@ -210,8 +213,8 @@ describeTarget('mwf_app grants (target)', () => {
       expect(n).toBe(0);
     });
 
-    it('FINDING: with no identity bound, whose conversation it is cannot be checked — only the row shape', async () => {
-      expect(await insert(null, bobConv, ids.bobUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
+    it('work-k5fk.10.7 (closes the FINDING that no identity left only the row shape): with no identity bound, nothing is written', async () => {
+      expect(await insert(null, bobConv, ids.bobUser, 'USER', 'CHAT')).toBe('42501');
       expect(await insert(null, bobConv, ids.bobUser, 'AI', 'CHAT')).toBe('42501');
     });
   });

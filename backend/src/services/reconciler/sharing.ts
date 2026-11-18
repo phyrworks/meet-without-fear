@@ -975,10 +975,11 @@ export async function getSharedContentDeliveryStatus(
   // (services/shared-context-view.ts). Seen only once the offer was delivered
   // and the instant reaches the delivery: a view of an older frame in the
   // window between consent and delivery must not mark the newer share seen.
-  const readState = await prisma.conversationReadState.findUnique({
-    where: { sessionId_userId: { sessionId, userId: offer.attempt.authorUserId } },
-    select: { lastViewedShareTabAt: true },
-  });
+  // The author's read state is theirs under RLS (work-k5fk.10.7): the instant comes through
+  // app.participant_presence (behind v_participant), a participant of the session's read.
+  const [presence] = await prisma.$queryRaw<Array<{ last_viewed_share_tab_at: Date | null }>>`
+    SELECT last_viewed_share_tab_at FROM app.participant_presence(${sessionId}::uuid, ${offer.attempt.authorUserId}::uuid)`;
+  const readState = presence ? { lastViewedShareTabAt: presence.last_viewed_share_tab_at } : null;
   const deliveredAt = offer.deliveryStatus === 'PENDING' ? null : (offer.deliveredAt ?? offer.sharedAt);
   const seen = !!deliveredAt && !!readState?.lastViewedShareTabAt && readState.lastViewedShareTabAt >= deliveredAt;
   return {

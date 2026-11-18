@@ -237,12 +237,14 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     const { createFacilitatorMessage } = await import('../message-store');
     const { withSessionScope } = await import('../../lib/request-context');
     // The AI's line names its session (app.session_scope; work-k5fk.10.5).
-    await withSessionScope(s.sessionId, () =>
-      createFacilitatorMessage({
-        conversationId: conv.id,
-        content: 'That is a real shift.',
-        createdAt: saved.draft.updatedAt,
-      }),
+    await actingAs(s.adaParticipant.userId, () =>
+      withSessionScope(s.sessionId, () =>
+        createFacilitatorMessage({
+          conversationId: conv.id,
+          content: 'That is a real shift.',
+          createdAt: saved.draft.updatedAt,
+        }),
+      ),
     );
     expect(await reopenedAtOf(s.sessionId, s.adaParticipant)).toBeNull();
     expect((await draftOf(s.sessionId)).awaitingRevision).toBe(false);

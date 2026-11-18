@@ -230,7 +230,8 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
       run.as('mwf_ai', null, insert, [conv, session], '01a1e6a2-0000-7000-8000-000000000000'),
     ).rejects.toMatchObject({ code: '42501' });
     // The session's own scope: written.
-    const rows = await run.as<{ seq: number }>('mwf_ai', null, insert, [conv, session], session);
+    // The session's own scope, acting for a participant of it (work-k5fk.10.7): written.
+    const rows = await run.as<{ seq: number }>('mwf_ai', adaUser, insert, [conv, session], session);
     expect(rows).toHaveLength(1);
     // An AI write never carries a participant's line, even in scope.
     await expect(

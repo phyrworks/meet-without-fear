@@ -479,6 +479,35 @@ COMMENT ON FUNCTION app.actor_name_for(uuid) IS 'The recipient''s own name for t
 REVOKE EXECUTE ON FUNCTION app.actor_name_for(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.actor_name_for(uuid) TO app_access;
 
+-- A co-participant's presence for the session view (participant-resolver getCoParticipantPresence;
+-- session-state.ts): whether they show their activity, when they last viewed the session and were last active, and
+-- when they last took a turn — instants only, never content. Their read state, preferences and messages are own-row
+-- under RLS (work-k5fk.10.7), so a participant of the same session reads them here. When they hide their activity
+-- (user_preferences.doc.privacy.showActivityStatus false) the two activity instants are NULL: the caller shows none.
+CREATE FUNCTION app.co_participant_presence(session uuid, "user" uuid)
+  RETURNS TABLE (shows boolean, last_viewed_at public.ts_ms, last_active_at public.ts_ms, last_turn_at public.ts_ms)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT v.shows, r.last_viewed_at,
+           CASE WHEN v.shows IS DISTINCT FROM false THEN r.last_active_at END,
+           CASE WHEN v.shows IS DISTINCT FROM false THEN
+             (SELECT max(m.created_at) FROM public.message m
+              WHERE m.session_id = p.session_id AND m.sender_user_id = p.user_id AND m.role = 'USER' AND m.kind = 'CHAT')
+           END
+    FROM public.participant p
+    LEFT JOIN public.conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
+    LEFT JOIN public.user_preferences up ON up.user_id = p.user_id
+    CROSS JOIN LATERAL (SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows) v
+    WHERE p.session_id = co_participant_presence.session AND p.user_id = co_participant_presence."user"
+      AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = co_participant_presence.session AND me.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.co_participant_presence(uuid, uuid) IS 'A co-participant''s presence instants (last viewed, last active and last turn — the latter two NULL when they hide their activity) and whether they show it, for a caller seated in the same session. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): participant-resolver getCoParticipantPresence (session-state.ts).
+REVOKE EXECUTE ON FUNCTION app.co_participant_presence(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.co_participant_presence(uuid, uuid) TO app_access;
+
 -- requireSessionAccess for a caller with no participant row (middleware/auth.ts): 'missing' when the session does
 -- not exist, 'invited' when it has an invitation the caller did not send that is PENDING and unexpired, or that
 -- the caller accepted (the acceptance timing gap; Phase 3 §7 W6 schedules its removal), else 'denied'. Under RLS a
@@ -1439,6 +1468,7 @@ ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_invitee_access(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.co_participant_presence(uuid, uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.actor_name_for(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_repoint_drafts(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.participant_presence(uuid, uuid) OWNER TO mwf_definer;
@@ -2575,22 +2605,28 @@ CREATE POLICY definer_all ON context_share_offer TO mwf_definer USING (true) WIT
 
 -- conversation: ai_access S, app_access SIU, mwf_definer SUD, ops_access S
 ALTER TABLE conversation ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON conversation TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON conversation IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON conversation TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON conversation FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (kind = 'MAIN' AND app.is_member(session_id)));
+COMMENT ON POLICY app_select ON conversation IS 'The caller''s own conversations, and the MAIN conversation row of each co-participant (no content: the address a delivery to them goes to — participant-resolver mainConversationId, app.deliver_message''s target, as v_participant shows it). Their sub-chats and every message stay theirs (design note §6 says user_id = me; the MAIN arm is the delivery path''s need; work-k5fk.10.7).';
+CREATE POLICY app_insert ON conversation FOR INSERT TO app_access WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_insert ON conversation IS 'The caller''s own conversation (their MAIN at create / accept, a sub-chat; work-k5fk.10.7).';
+CREATE POLICY app_update ON conversation FOR UPDATE TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON conversation IS 'The caller''s own conversation (status, resolved_at; work-k5fk.10.7).';
+CREATE POLICY ai_session ON conversation TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY ops_read ON conversation FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON conversation TO mwf_definer USING (true) WITH CHECK (true);
 
 -- conversation_read_state: app_access SIU, mwf_definer SD
 ALTER TABLE conversation_read_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON conversation_read_state TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON conversation_read_state IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON conversation_read_state TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()) AND (last_seen_conversation_id IS NULL OR EXISTS (SELECT 1 FROM conversation c WHERE c.id = conversation_read_state.last_seen_conversation_id AND c.user_id = (SELECT app.current_user_id()))));
+COMMENT ON POLICY app_own ON conversation_read_state IS 'The caller''s own rows: their read state (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON conversation_read_state TO mwf_definer USING (true) WITH CHECK (true);
 
 -- draft: app_access SIUD, mwf_definer SD
 ALTER TABLE draft ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON draft TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON draft IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON draft TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON draft IS 'The caller''s own rows: their drafts (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON draft TO mwf_definer USING (true) WITH CHECK (true);
 
 -- empathy_attempt: ai_access SU, app_access SI, mwf_definer SIUD
@@ -2658,9 +2694,16 @@ CREATE POLICY definer_all ON live_session_pair TO mwf_definer USING (true) WITH 
 
 -- message: ai_access SI, app_access SID, mwf_definer SI, ops_access S, worker_access S
 ALTER TABLE message ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON message TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON message IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON message TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON message FOR SELECT TO app_access USING (sender_user_id = (SELECT app.current_user_id()) OR EXISTS (SELECT 1 FROM conversation c WHERE c.id = message.conversation_id AND c.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_select ON message IS 'The lines of the caller''s own conversations, and the caller''s own lines (design note §6, Q9; work-k5fk.10.7).';
+CREATE POLICY app_insert ON message FOR INSERT TO app_access
+  WITH CHECK (role = 'USER' AND sender_user_id = (SELECT app.current_user_id()) AND kind IN ('CHAT', 'EMPATHY_STATEMENT') AND EXISTS (SELECT 1 FROM conversation c WHERE c.id = message.conversation_id AND c.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_insert ON message IS 'The caller''s own USER turn (CHAT) and own copy of their empathy statement, in their own conversation; every other line is a definer''s or the AI''s (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_delete ON message FOR DELETE TO app_access
+  USING (EXISTS (SELECT 1 FROM conversation c WHERE c.id = message.conversation_id AND c.user_id = (SELECT app.current_user_id())) AND ((role = 'USER' AND kind = 'CHAT' AND sender_user_id = (SELECT app.current_user_id())) OR kind = 'SHARE_SUGGESTION'));
+COMMENT ON POLICY app_delete ON message IS 'In the caller''s own conversation: their failed USER turn, or a share suggestion (declined or accepted; work-k5fk.10.7).';
+CREATE POLICY ai_session ON message TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY worker_all ON message TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY ops_read ON message FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON message TO mwf_definer USING (true) WITH CHECK (true);
@@ -2674,8 +2717,8 @@ CREATE POLICY definer_all ON milestone TO mwf_definer USING (true) WITH CHECK (t
 
 -- mood_reading: app_access SI, mwf_definer SD, ops_access S
 ALTER TABLE mood_reading ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON mood_reading TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON mood_reading IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON mood_reading TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON mood_reading IS 'The caller''s own rows: their mood readings (design note §6; work-k5fk.10.7).';
 CREATE POLICY ops_read ON mood_reading FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON mood_reading TO mwf_definer USING (true) WITH CHECK (true);
 
@@ -2775,21 +2818,21 @@ CREATE POLICY ai_session ON reconciler_result TO ai_access USING (session_id = (
 
 -- reflection: app_access SIU, mwf_definer SD, ops_access S
 ALTER TABLE reflection ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reflection TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reflection IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON reflection TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()) AND (linked_session_id IS NULL OR app.is_member(linked_session_id)));
+COMMENT ON POLICY app_own ON reflection IS 'The caller''s own rows: their inner work (a linked session is one of the callers) (design note §6; work-k5fk.10.7).';
 CREATE POLICY ops_read ON reflection FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON reflection TO mwf_definer USING (true) WITH CHECK (true);
 
 -- reflection_message: app_access SI, ops_access S
 ALTER TABLE reflection_message ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reflection_message TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reflection_message IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON reflection_message TO app_access USING (EXISTS (SELECT 1 FROM reflection r WHERE r.id = reflection_message.reflection_id AND r.user_id = (SELECT app.current_user_id()))) WITH CHECK (EXISTS (SELECT 1 FROM reflection r WHERE r.id = reflection_message.reflection_id AND r.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_own ON reflection_message IS 'The messages of the caller''s own reflections (design note §6; work-k5fk.10.7).';
 CREATE POLICY ops_read ON reflection_message FOR SELECT TO ops_access USING (true);
 
 -- regulation_event: app_access SI, mwf_definer SD
 ALTER TABLE regulation_event ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON regulation_event TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON regulation_event IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON regulation_event TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON regulation_event IS 'The caller''s own rows: their regulation exercises (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON regulation_event TO mwf_definer USING (true) WITH CHECK (true);
 
 -- reminder: app_access SID, mwf_definer SD, worker_access SU
@@ -2829,13 +2872,13 @@ ALTER TABLE session_key ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 
 -- takeaway: app_access SIUD
 ALTER TABLE takeaway ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON takeaway TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON takeaway IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON takeaway TO app_access USING (EXISTS (SELECT 1 FROM reflection r WHERE r.id = takeaway.reflection_id AND r.user_id = (SELECT app.current_user_id()))) WITH CHECK (EXISTS (SELECT 1 FROM reflection r WHERE r.id = takeaway.reflection_id AND r.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_own ON takeaway IS 'The takeaways of the caller''s own reflections (design note §6; work-k5fk.10.7).';
 
 -- takeaway_link: app_access SID
 ALTER TABLE takeaway_link ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON takeaway_link TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON takeaway_link IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON takeaway_link TO app_access USING (EXISTS (SELECT 1 FROM takeaway t JOIN reflection r ON r.id = t.reflection_id WHERE t.id = takeaway_link.source_id AND r.user_id = (SELECT app.current_user_id()))) WITH CHECK (EXISTS (SELECT 1 FROM takeaway t JOIN reflection r ON r.id = t.reflection_id WHERE t.id = takeaway_link.source_id AND r.user_id = (SELECT app.current_user_id())) AND EXISTS (SELECT 1 FROM takeaway t JOIN reflection r ON r.id = t.reflection_id WHERE t.id = takeaway_link.target_id AND r.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_own ON takeaway_link IS 'Links from the caller''s own takeaways, and only to their own (design note §6; work-k5fk.10.7).';
 
 -- user: ai_access S, app_access SU, mwf_definer SIU, ops_access S
 ALTER TABLE "user" ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;

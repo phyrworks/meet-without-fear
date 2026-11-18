@@ -67,7 +67,8 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
       await getAiPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
       WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_user_id IS NULL OR sender_user_id IS NOT NULL)`;
     const [session] = await rows<{ id: string }>('SELECT session_id::text AS id FROM message LIMIT 1');
-    const ok = await withSessionScope(session.id, count);
+    // (acting for a participant of the scope: work-k5fk.10.7)
+    const ok = await actingAs(harness.actors.userA.id, () => withSessionScope(session.id, count));
     expect(ok[0].n).toBeGreaterThan(0);
   });
 
@@ -82,8 +83,12 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
     expect(await sessions()).toEqual([]);
     const [s] = await rows<{ id: string }>('SELECT session_id::text AS id FROM message LIMIT 1');
     const other = '00000000-0000-7000-8000-000000000000';
-    expect(await withSessionScope(s.id, sessions)).toEqual([{ session_id: s.id }]);
-    expect(await withSessionScope(other, sessions)).toEqual([]);
+    // The AI acts for a participant of its scope (work-k5fk.10.7: app.scope_actor_is_member) …
+    const ada = harness.actors.userA.id;
+    expect(await actingAs(ada, () => withSessionScope(s.id, sessions))).toEqual([{ session_id: s.id }]);
+    expect(await actingAs(ada, () => withSessionScope(other, sessions))).toEqual([]);
+    // … and reads nothing of its scope acting for no one.
+    expect(await withSessionScope(s.id, sessions)).toEqual([]);
   });
 
   it('the empathy-draft write is atomic: concurrent writes leave one row, the last write wins', async () => {

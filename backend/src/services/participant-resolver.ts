@@ -159,10 +159,11 @@ export interface CoParticipantPresence {
  * The presence facts the session view shows about a co-participant — the
  * ONE read of another participant's read state and turn times outside the
  * context builder, as one statement returning instants only (never content).
- * TS-16 NOTE: under owner-only RLS on conversation_read_state,
- * user_preferences and message this must become a SECURITY DEFINER function
- * (owned by mwf_definer, identity-bound), as the v_participant note in the
- * trailer says; its result shape is already that function's.
+ * Under owner-only RLS on conversation_read_state, user_preferences and
+ * message (work-k5fk.10.7) it is the definer app.co_participant_presence
+ * (owned by mwf_definer, identity-bound: a participant of the same session),
+ * which also withholds the activity instants of a co-participant who hides
+ * their activity.
  */
 export async function getCoParticipantPresence(co: Seat): Promise<CoParticipantPresence> {
   const rows = await prisma.$queryRaw<
@@ -173,15 +174,8 @@ export async function getCoParticipantPresence(co: Seat): Promise<CoParticipantP
       last_turn_at: Date | null;
     }>
   >`
-    SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows,
-           r.last_viewed_at, r.last_active_at,
-           (SELECT max(m.created_at) FROM message m
-             WHERE m.session_id = p.session_id AND m.sender_user_id = p.user_id
-               AND m.role = 'USER' AND m.kind = 'CHAT') AS last_turn_at
-    FROM participant p
-    LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
-    LEFT JOIN user_preferences up ON up.user_id = p.user_id
-    WHERE p.session_id = ${co.sessionId}::uuid AND p.user_id = ${co.userId}::uuid`;
+    SELECT shows, last_viewed_at, last_active_at, last_turn_at
+    FROM app.co_participant_presence(${co.sessionId}::uuid, ${co.userId}::uuid)`;
   const r = rows[0];
   return {
     showsActivity: r?.shows ?? true,
