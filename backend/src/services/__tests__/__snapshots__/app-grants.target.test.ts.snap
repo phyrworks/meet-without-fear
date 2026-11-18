@@ -480,6 +480,7 @@ routine app.t_message_seq(): EXECUTE (mwf_definer)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_definer)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
+routine app.t_proposal_creator(): EXECUTE (mwf_migrator)
 routine app.t_result_live_attempt(): EXECUTE (mwf_definer)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
 routine app.t_session_purge(): EXECUTE (mwf_migrator)
@@ -659,6 +660,7 @@ routine owner app.t_message_seq(): mwf_definer
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_definer
 routine owner app.t_participant_cardinality(): mwf_migrator
+routine owner app.t_proposal_creator(): mwf_migrator
 routine owner app.t_result_live_attempt(): mwf_definer
 routine owner app.t_session_cardinality(): mwf_migrator
 routine owner app.t_session_purge(): mwf_migrator

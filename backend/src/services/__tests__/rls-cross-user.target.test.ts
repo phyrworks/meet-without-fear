@@ -688,7 +688,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toEqual([]);
       expect(
         await code('mwf_app', ada, `UPDATE proposal SET created_by_user_id = $2 WHERE id = $1`, [commitment, bob]),
-      ).toBe('rls');
+      ).toBe('42501'); // t_proposal_creator, before the policy (work-k5fk.10.9)
       expect(
         await code(
           'mwf_app',
@@ -729,6 +729,36 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toEqual([]);
       expect(await count('mwf_app', carol, 'proposal_need')).toBe(0);
       expect(await count('mwf_app', carol, 'proposal_revision')).toBe(0);
+    });
+
+    it('a shared proposal’s creator is fixed: Bob reassigns it to nobody, but may make it his own commitment (work-k5fk.10.9)', async () => {
+      const [{ id: shared }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, kind, description)
+         VALUES ($1, $2, 'SHARED_PROPOSAL', 'PROBE_SHARED_PROPOSAL') RETURNING id::text`,
+        [session, ada],
+      );
+      const reassign = `UPDATE proposal SET created_by_user_id = $2 WHERE id = $1`;
+      // to Ada's partner Bob (himself), keeping it shared: refused
+      expect(await code('mwf_app', bob, reassign, [shared, bob])).toBe('42501');
+      // to Ada, after an AI-suggested (creatorless) start: refused too
+      await run.sql(`UPDATE proposal SET created_by_user_id = NULL WHERE id = $1`, [shared]);
+      expect(await code('mwf_app', bob, reassign, [shared, ada])).toBe('42501');
+      expect(await code('mwf_app', bob, reassign, [shared, bob])).toBe('42501');
+      expect(await run.sql(`SELECT created_by_user_id FROM proposal WHERE id = $1`, [shared])).toEqual([
+        { created_by_user_id: null },
+      ]);
+      // Bob turning it into his own commitment (Stage 4 capture's one creator move): allowed
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `UPDATE proposal SET created_by_user_id = $2, kind = 'INDIVIDUAL_COMMITMENT' WHERE id = $1`,
+          [shared, bob],
+        ),
+      ).toBe('ok');
+      expect(
+        await run.sql(`SELECT created_by_user_id::text, kind::text FROM proposal WHERE id = $1`, [shared]),
+      ).toEqual([{ created_by_user_id: bob, kind: 'INDIVIDUAL_COMMITMENT' }]);
     });
 
     it('proposal_choice: Bob’s choice is his until he shares it; nobody chooses for him', async () => {

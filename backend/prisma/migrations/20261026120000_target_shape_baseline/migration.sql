@@ -4762,6 +4762,37 @@ COMMENT ON FUNCTION app.t_session_purge() IS 'The worker deletes only ARCHIVED s
 CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
   FOR EACH ROW EXECUTE FUNCTION app.t_session_purge();
 
+-- T-proposal-creator (work-k5fk.10.9, owner decision 2026-11-18): a proposal's creator is fixed for the app. The
+-- one move mwf_app may make is the edit that turns a proposal into the editor's own individual commitment (Stage 4
+-- capture): created_by_user_id becomes the acting user AND kind becomes INDIVIDUAL_COMMITMENT in the same UPDATE.
+-- Any other change — a re-assignment from the model's output, to the partner or to oneself — is refused. A row
+-- policy cannot compare OLD with NEW, hence a trigger. Exempt, as t_session_scope: any current_user that is not a
+-- member of app_access (the worker's conversion, every definer body) and any that holds the database owner's
+-- privileges.
+CREATE FUNCTION app.t_proposal_creator() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NOT pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      RETURN NEW;
+    END IF;
+    IF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id
+       AND NOT (NEW.created_by_user_id = app.current_user_id()
+                AND NEW.kind = 'INDIVIDUAL_COMMITMENT' AND OLD.kind IS DISTINCT FROM 'INDIVIDUAL_COMMITMENT') THEN
+      RAISE EXCEPTION 'a proposal''s creator changes only when it becomes the editor''s own commitment'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_proposal_creator() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_proposal_creator() IS 'mwf_app changes proposal.created_by_user_id only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT. work-k5fk.10.9.';
+CREATE TRIGGER t_proposal_creator BEFORE UPDATE OF created_by_user_id ON public.proposal
+  FOR EACH ROW EXECUTE FUNCTION app.t_proposal_creator();
+
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
 -- message with no ids (N-4).
