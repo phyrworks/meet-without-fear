@@ -46,7 +46,9 @@ describe production.
   participant's Stage 4 transition line is written from their own request
   (`services/stage4-transition.ts`). A participant who left keeps reading but writes nothing: every
   session-scoped table carries `app_active_*` RESTRICTIVE policies on `app.is_current_member`
-  (review r1 F4). `t_proposal_app_moves` holds what a proposal UPDATE may not do (re-assign its
+  (review r1 F4), and the identity-bound write definers refuse a leaver too (r2 N1). Own-row tables
+  whose session link is optional (reflection, ai_memory, user_memory) stay their owner's: only a new
+  link needs present membership (`t_session_link_moves`, r2 N2). `t_proposal_app_moves` holds what a proposal UPDATE may not do (re-assign its
   creator, convert it to an agreement, attribute a removal to someone else). Deviations from §6,
   each in its policy's COMMENT: `empathy_review` also shows the author a review once sent (and is
   written only once the attempt is revealed); `follow_up` shows a partner's INDIVIDUAL entry only once
