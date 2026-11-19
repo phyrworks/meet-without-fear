@@ -61,8 +61,6 @@ model Session {
   agreements      Agreement[]
   closure         SessionClosure?
   followUps       FollowUp[]
-  userMemories    UserMemory[]
-  reflections     Reflection[]
   brainActivities BrainActivity[]
   livePairs       LiveSessionPair[]
 
@@ -123,6 +121,8 @@ model Participant {
   followUpCheckins        FollowUpCheckin[]
   followUpNotes           FollowUpNote[]
   brainActivities         BrainActivity[]
+  linkedReflections       Reflection[]
+  userMemories            UserMemory[]
 
   @@id([sessionId, userId])
   @@index([sessionId, addedByUserId])
@@ -163,7 +163,7 @@ model Conversation {
   updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant    Participant @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
-  anchorProposal Proposal?   @relation(fields: [anchorProposalId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  anchorProposal Proposal?   @relation(fields: [anchorProposalId, sessionId], references: [id, sessionId], onDelete: SetNull, onUpdate: NoAction)
 
   messages Message[]
 
@@ -252,9 +252,9 @@ model Draft {
   attempt          EmpathyAttempt?    @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   shareOffer       ContextShareOffer? @relation(fields: [shareOfferId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   invitation       Invitation?        @relation(fields: [invitationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  attemptPin       EmpathyAttempt?    @relation("DraftAttemptPin", fields: [attemptId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
-  invitationPin    Invitation?        @relation("DraftInvitationPin", fields: [invitationId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
-  shareOfferPin    ContextShareOffer? @relation("DraftShareOfferPin", fields: [shareOfferId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  attemptPin       EmpathyAttempt?    @relation("DraftAttemptPin", fields: [attemptId, sessionId, userId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
+  invitationPin    Invitation?        @relation("DraftInvitationPin", fields: [invitationId, sessionId, userId], references: [id, sessionId, invitedByUserId], onDelete: Cascade, onUpdate: NoAction)
+  shareOfferPin    ContextShareOffer? @relation("DraftShareOfferPin", fields: [shareOfferId, sessionId, userId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([attemptId])
   @@index([shareOfferId])
@@ -364,6 +364,7 @@ model Invitation {
   draftInvitationPins  Draft[]     @relation("DraftInvitationPin")
 
   @@unique([id, sessionId])
+  @@unique([id, sessionId, invitedByUserId])
   @@index([sessionId])
   @@index([status, expiresAt])
   @@index([acceptedByUserId])
@@ -430,7 +431,7 @@ model EmpathyAttempt {
 
   authorParticipant  Participant      @relation("EmpathyAttemptAuthor", fields: [sessionId, authorUserId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
   subjectParticipant Participant      @relation("EmpathyAttemptSubject", fields: [sessionId, subjectUserId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
-  supersedesAttempt  EmpathyAttempt?  @relation("EmpathyAttemptSupersession", fields: [supersedesAttemptId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  supersedesAttempt  EmpathyAttempt?  @relation("EmpathyAttemptSupersession", fields: [supersedesAttemptId, sessionId, authorUserId, subjectUserId], references: [id, sessionId, authorUserId, subjectUserId], onDelete: SetNull, onUpdate: NoAction)
   supersededBy       EmpathyAttempt[] @relation("EmpathyAttemptSupersession")
 
   deliveredMessages            Message[]
@@ -447,6 +448,7 @@ model EmpathyAttempt {
 
   @@unique([id, sessionId])
   @@unique([id, sessionId, subjectUserId])
+  @@unique([id, sessionId, authorUserId, subjectUserId])
   @@unique([sessionId, authorUserId, subjectUserId, round])
   @@index([supersedesAttemptId])
   @@index([sessionId, subjectUserId, revealedAt])
@@ -514,6 +516,7 @@ model ReconcilerResult {
 
   @@unique([id, sessionId])
   @@unique([id, sessionId, subjectUserId])
+  @@unique([id, attemptId])
   @@unique([attemptId, iteration])
   @@index([sessionId, subjectUserId])
   @@map("reconciler_result")
@@ -571,10 +574,11 @@ model ContextShareOffer {
   consents              Consent[]
   consentShareOfferPins Consent[]        @relation("ConsentShareOfferPin")
   attemptPin            EmpathyAttempt   @relation("ContextShareOfferAttemptPin", fields: [attemptId, sessionId, subjectUserId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
-  resultPin             ReconcilerResult @relation("ContextShareOfferResultPin", fields: [resultId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  resultPin             ReconcilerResult @relation("ContextShareOfferResultPin", fields: [resultId, attemptId], references: [id, attemptId], onDelete: Cascade, onUpdate: NoAction)
   draftShareOfferPins   Draft[]          @relation("DraftShareOfferPin")
 
   @@unique([id, sessionId])
+  @@unique([id, sessionId, subjectUserId])
   @@unique([attemptId, iteration])
   @@index([resultId])
   @@index([sessionId, subjectUserId, status])
@@ -894,8 +898,8 @@ model FollowUp {
   updatedAt          DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   session          Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  agreement        Agreement?   @relation(fields: [agreementId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  proposal         Proposal?    @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agreement        Agreement?   @relation(fields: [agreementId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  proposal         Proposal?    @relation(fields: [proposalId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
   ownerParticipant Participant? @relation(fields: [sessionId, ownerUserId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   checkins                    FollowUpCheckin[]
@@ -929,6 +933,7 @@ model FollowUpCheckin {
   followUpPin  FollowUp       @relation("FollowUpCheckinFollowUpPin", fields: [followUpId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([followUpId, sessionId, userId])
+  @@unique([id, sessionId, userId])
   @@index([sessionId, userId, submittedAt])
   @@map("follow_up_checkin")
 }
@@ -944,7 +949,7 @@ model FollowUpNote {
   updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant        Participant      @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
-  carriedIntoCheckin FollowUpCheckin? @relation(fields: [carriedIntoCheckinId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  carriedIntoCheckin FollowUpCheckin? @relation(fields: [carriedIntoCheckinId, sessionId, userId], references: [id, sessionId, userId], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([carriedIntoCheckinId])
   @@index([sessionId, userId, createdAt])
@@ -991,8 +996,8 @@ model Reflection {
   createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  user          User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  linkedSession Session? @relation(fields: [linkedSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  user              User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  linkedParticipant Participant? @relation(fields: [linkedSessionId, userId], references: [sessionId, userId], onDelete: SetNull, onUpdate: NoAction)
 
   messages        ReflectionMessage[]
   takeaways       Takeaway[]
@@ -1187,8 +1192,8 @@ model UserMemory {
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  user    User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  participant Participant? @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([userId, status])
   @@index([sessionId])

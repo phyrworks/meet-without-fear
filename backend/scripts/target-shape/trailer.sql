@@ -4032,7 +4032,12 @@ BEGIN
   SELECT string_agg(w.want, '; ') INTO bad
   FROM (VALUES ('message', 'need', '{refining_need_id}'),
                ('message', 'empathy_attempt', '{source_attempt_id}'),
-               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}')) x(rel, ref, cols),
+               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}'),
+               -- work-k5fk.9 (C1, C2, C5, C6)
+               ('conversation', 'proposal', '{anchor_proposal_id}'),
+               ('empathy_attempt', 'empathy_attempt', '{supersedes_attempt_id}'),
+               ('follow_up_note', 'follow_up_checkin', '{carried_into_checkin_id}'),
+               ('reflection', 'participant', '{linked_session_id}')) x(rel, ref, cols),
        LATERAL (SELECT x.rel || ' -> ' || x.ref || ' ON DELETE SET NULL ' || x.cols AS want) w
   WHERE NOT EXISTS (
     SELECT 1 FROM pg_constraint c

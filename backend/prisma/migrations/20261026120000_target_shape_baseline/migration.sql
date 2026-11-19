@@ -148,7 +148,7 @@ REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 142 named objects, all lower-case; 155 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 143 named objects, all lower-case; 155 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -1187,7 +1187,7 @@ CREATE TABLE conversation (
     user_id uuid7 NOT NULL,
     kind conversation_kind NOT NULL DEFAULT 'MAIN',
     anchor_kind subchat_anchor,
-    anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
+    anchor_proposal_id uuid7,
     status conversation_status NOT NULL DEFAULT 'ACTIVE',
     resolved_at ts_ms,
     next_seq ordinal_no NOT NULL DEFAULT 1,
@@ -1199,7 +1199,10 @@ CREATE TABLE conversation (
     CHECK (kind = 'SUBCHAT' OR anchor_proposal_id IS NULL),
     -- work-k5fk.3: the target of message's (conversation_id, session_id)
     UNIQUE (id, session_id),
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C1): a sub-chat refines a proposal of its own session; deleting the proposal nulls the anchor
+    -- alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (anchor_proposal_id, session_id) REFERENCES proposal (id, session_id) ON DELETE SET NULL (anchor_proposal_id)
 );
 CREATE INDEX ON conversation (session_id, user_id, kind, status);
 CREATE INDEX ON conversation (anchor_proposal_id);
@@ -1236,7 +1239,7 @@ CREATE TABLE empathy_attempt (
     author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
     round ordinal_no NOT NULL DEFAULT 1,
-    supersedes_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
+    supersedes_attempt_id uuid7,
     content ciphertext NOT NULL,
     status empathy_status NOT NULL DEFAULT 'HELD',
     status_version integer NOT NULL DEFAULT 0,
@@ -1256,8 +1259,14 @@ CREATE TABLE empathy_attempt (
     -- t_same_session); the UNIQUEs are what reviews, results, offers, drafts, consents and messages pin to
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, subject_user_id),
+    -- work-k5fk.9 (C2, C9): the whole direction — what a superseding round and a reconciler result pin to
+    UNIQUE (id, session_id, author_user_id, subject_user_id),
     FOREIGN KEY (session_id, author_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C2): a round supersedes a round of the same direction (same session, author and subject);
+    -- deleting it nulls the link alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (supersedes_attempt_id, session_id, author_user_id, subject_user_id)
+      REFERENCES empathy_attempt (id, session_id, author_user_id, subject_user_id) ON DELETE SET NULL (supersedes_attempt_id),
     -- work-k5fk.9 (D4): the delivery group (delivery_status, delivered_at, seen_at) agrees with itself; the same three
     -- CHECKs as context_share_offer's. PENDING → SEEN directly leaves delivered_at NULL (app.empathy_mark_delivery).
     CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
@@ -1508,6 +1517,8 @@ CREATE TABLE reconciler_result (
     -- work-k5fk.3: the result's subject is its attempt's subject, by key (the subject half of t_result_live_attempt)
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, subject_user_id),
+    -- work-k5fk.9 (C10): what an offer's result key pins to (the offer cites a result of its own attempt)
+    UNIQUE (id, attempt_id),
     FOREIGN KEY (attempt_id, session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
@@ -1579,10 +1590,13 @@ CREATE TABLE context_share_offer (
     -- §1.2 context_share_offer [P18a]
     CHECK ((status = 'ACCEPTED') = (shared_at IS NOT NULL)),
     CHECK ((status = 'DECLINED') = (declined_at IS NOT NULL)),
-    -- work-k5fk.3: the offer goes to its attempt's subject, about a result of the same session
+    -- work-k5fk.3: the offer goes to its attempt's subject; work-k5fk.9 (C10): about a result of that same attempt
+    -- (not another attempt's, nor another round's), so of the same session too
     UNIQUE (id, session_id),
+    -- work-k5fk.9 (C11): what a SHARE_CONTEXT draft pins to (its owner is the offer's subject)
+    UNIQUE (id, session_id, subject_user_id),
     FOREIGN KEY (attempt_id, session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
-    FOREIGN KEY (result_id, session_id) REFERENCES reconciler_result (id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (result_id, attempt_id) REFERENCES reconciler_result (id, attempt_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     -- work-k5fk.9 (D4): the delivery group agrees with itself (the same three CHECKs as empathy_attempt's)
     CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
@@ -1819,6 +1833,8 @@ CREATE TABLE invitation (
       status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND accepted_by_user_id IS NOT NULL)),
     -- work-k5fk.3: the inviter is a participant of the invitation's session; drafts pin to (id, session_id)
     UNIQUE (id, session_id),
+    -- work-k5fk.9 (C11): what an EMPATHY draft written before the partner joins pins to (its owner is the inviter)
+    UNIQUE (id, session_id, invited_by_user_id),
     FOREIGN KEY (session_id, invited_by_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON invitation (session_id);
@@ -1875,12 +1891,17 @@ CREATE TABLE draft (
     -- first" after the partner joined, until the next draft write (the AI's
     -- proposal or the author's save) clears it.
     CHECK (reopened_at IS NULL OR kind = 'EMPATHY'),
-    -- work-k5fk.3: owner, about, attempt, share offer and invitation are all of the draft's one session
+    -- work-k5fk.3: owner, about, attempt, share offer and invitation are all of the draft's one session.
+    -- work-k5fk.9 (C11): and the owner is the arc's party: the subject of the attempt their feedback answers, the
+    -- subject of the offer they share on, the inviter of the invitation they write about; never about themselves.
+    CHECK (about_user_id <> user_id),
     FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, about_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
-    FOREIGN KEY (attempt_id, session_id) REFERENCES empathy_attempt (id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (share_offer_id, session_id) REFERENCES context_share_offer (id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (invitation_id, session_id) REFERENCES invitation (id, session_id) ON DELETE CASCADE
+    FOREIGN KEY (attempt_id, session_id, user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
+    FOREIGN KEY (share_offer_id, session_id, user_id) REFERENCES context_share_offer (id, session_id, subject_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (invitation_id, session_id, user_id) REFERENCES invitation (id, session_id, invited_by_user_id)
+      ON DELETE CASCADE
 );
 CREATE INDEX ON draft (session_id, about_user_id);
 CREATE INDEX ON draft (attempt_id);
@@ -1888,6 +1909,7 @@ CREATE INDEX ON draft (share_offer_id);
 CREATE INDEX ON draft (invitation_id);
 -- + sql_draft_one_per_point (sql-only.sql)
 COMMENT ON TABLE draft IS 'A participant''s working text for one sharing point (empathy statement, validation feedback, shared context) before any consent.';
+COMMENT ON CONSTRAINT draft_check3 ON draft IS 'Nobody writes an EMPATHY draft about themselves (work-k5fk.9, C11).';
 COMMENT ON COLUMN draft.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN draft.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN draft.about_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, about_user_id) references participant (session_id, user_id).';
@@ -2333,8 +2355,8 @@ GRANT INSERT (session_id, kind, reason, summary, closed_by_user_id, check_in_at,
 CREATE TABLE follow_up (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
-    agreement_id uuid7 REFERENCES agreement ON DELETE CASCADE,
-    proposal_id uuid7 REFERENCES proposal ON DELETE CASCADE,
+    agreement_id uuid7,
+    proposal_id uuid7,
     type follow_up_type NOT NULL,
     scope follow_up_scope NOT NULL DEFAULT 'SHARED',
     owner_user_id uuid7,
@@ -2353,7 +2375,10 @@ CREATE TABLE follow_up (
     CHECK (num_nonnulls(agreement_id, proposal_id) <= 1),
     -- work-k5fk.3: the owner is a participant of the follow-up's session; check-ins pin to (id, session_id)
     UNIQUE (id, session_id),
-    FOREIGN KEY (session_id, owner_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, owner_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C4): the agreement or commitment checked on is of the follow-up's own session
+    FOREIGN KEY (agreement_id, session_id) REFERENCES agreement (id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (proposal_id, session_id) REFERENCES proposal (id, session_id) ON DELETE CASCADE
 );
 CREATE INDEX ON follow_up (session_id, status);
 CREATE INDEX ON follow_up (agreement_id);
@@ -2396,6 +2421,8 @@ CREATE TABLE follow_up_checkin (
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (follow_up_id, session_id, user_id),
+    -- work-k5fk.9 (C5): what follow_up_note's carried-into key pins to (a note goes into its owner's own check-in)
+    UNIQUE (id, session_id, user_id),
     -- §1.5 follow_up_checkin
     CHECK (jsonb_typeof(payload) = 'object'),
     -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
@@ -2424,11 +2451,15 @@ CREATE TABLE follow_up_note (
     user_id uuid7 NOT NULL,
     content ciphertext NOT NULL,
     carry_forward boolean NOT NULL DEFAULT false,
-    carried_into_checkin_id uuid7 REFERENCES follow_up_checkin ON DELETE SET NULL,
+    carried_into_checkin_id uuid7,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C5): a note is carried only into its owner's own check-in of the same session; deleting the
+    -- check-in nulls the link alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (carried_into_checkin_id, session_id, user_id) REFERENCES follow_up_checkin (id, session_id, user_id)
+      ON DELETE SET NULL (carried_into_checkin_id)
 );
 CREATE INDEX ON follow_up_note (session_id, user_id, created_at);
 CREATE INDEX ON follow_up_note (carried_into_checkin_id);
@@ -2485,7 +2516,7 @@ CREATE TABLE reflection (
     status reflection_status NOT NULL DEFAULT 'ACTIVE',
     summary ciphertext,
     summary_doc jsonb,
-    linked_session_id uuid7 REFERENCES session ON DELETE SET NULL,
+    linked_session_id uuid7,
     linked_at ts_ms,
     context_snapshot ciphertext,
     distilled_at ts_ms,
@@ -2493,14 +2524,18 @@ CREATE TABLE reflection (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.6 reflection, takeaway_link [P31]
-    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
+    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object'),
     -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
+    -- work-k5fk.9 (C6): the linked session is one the owner is a participant of, for every role (the app_access RLS
+    -- WITH CHECK says so for mwf_app only); deleting the participant (the session cascade) nulls the link alone
+    -- (PG15 SET NULL (col); step 20 pins the column list). An FK out of reflection, never into it.
+    FOREIGN KEY (linked_session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE SET NULL (linked_session_id)
 );
 CREATE INDEX ON reflection (user_id, updated_at);
 CREATE INDEX ON reflection (linked_session_id);
 CREATE INDEX ON reflection (user_id, theme);
 COMMENT ON TABLE reflection IS 'A private Inner Work reflection thread, outside any session (user-scoped); optionally linked to a session.';
-COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way.';
+COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way. One its owner is a participant of: (linked_session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN reflection.distilled_at IS 'When takeaways were last distilled from the thread.';
 COMMENT ON COLUMN reflection.theme IS 'Free LLM text ("a single word or short phrase", e.g. anxiety), not a taxonomy; v_reflection_theme groups by the exact string.';
 COMMENT ON COLUMN reflection.title IS 'encrypted (user): the reflection''s title, typed (max 200) or AI-generated (3-6 words).';
@@ -2635,19 +2670,22 @@ GRANT DELETE ON user_preferences TO mwf_definer;
 CREATE TABLE user_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    session_id uuid7 REFERENCES session ON DELETE CASCADE,
+    session_id uuid7,
     content ciphertext NOT NULL,
     category memory_category NOT NULL,
     status memory_status NOT NULL DEFAULT 'ACTIVE',
     source memory_source NOT NULL DEFAULT 'USER_APPROVED',
     suggested_text ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- work-k5fk.9 (C7): a memory scoped to a session is scoped to one its owner is a participant of
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON user_memory (user_id, status);
 CREATE INDEX ON user_memory (session_id);
 COMMENT ON TABLE user_memory IS '"Things to always remember": standing instructions the user approved or wrote, optionally scoped to a session.';
-COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies everywhere; set for one scoped to a session.';
+COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies everywhere; set for one scoped to a session its owner is a participant of ((session_id, user_id) references participant).';
 COMMENT ON COLUMN user_memory.content IS 'encrypted (user): the standing instruction (2 to 500 characters).';
 COMMENT ON COLUMN user_memory.suggested_text IS 'encrypted (user): the AI''s original text when the user edited it before approving, or the pre-edit text.';
 -- mwf_app: the caller's memories (controllers/memories.ts, memory-service.ts), including deleting one.
@@ -6931,7 +6969,12 @@ BEGIN
   SELECT string_agg(w.want, '; ') INTO bad
   FROM (VALUES ('message', 'need', '{refining_need_id}'),
                ('message', 'empathy_attempt', '{source_attempt_id}'),
-               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}')) x(rel, ref, cols),
+               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}'),
+               -- work-k5fk.9 (C1, C2, C5, C6)
+               ('conversation', 'proposal', '{anchor_proposal_id}'),
+               ('empathy_attempt', 'empathy_attempt', '{supersedes_attempt_id}'),
+               ('follow_up_note', 'follow_up_checkin', '{carried_into_checkin_id}'),
+               ('reflection', 'participant', '{linked_session_id}')) x(rel, ref, cols),
        LATERAL (SELECT x.rel || ' -> ' || x.ref || ' ON DELETE SET NULL ' || x.cols AS want) w
   WHERE NOT EXISTS (
     SELECT 1 FROM pg_constraint c

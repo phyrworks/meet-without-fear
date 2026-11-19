@@ -1,7 +1,7 @@
 ---
 title: Type review, November 2026
 description: Decision log for the owner's 2026-11-10 DDL review (work-gevt). Covers every text, text[], *_type, *_kind and *_label column of the target shape, the domains, and what is left open.
-updated: "2026-11-10"
+updated: "2026-11-19"
 ---
 # Type review, November 2026 (work-gevt)
 
@@ -194,3 +194,15 @@ Audited and clean: `coalesce(<ts_ms col>, ${date})` (`empathy-store.ts:383,386`)
 | Q8 | `context_share_offer.subject_participant_id`, `reconciler_guidance.*_participant_id` and `agreement.session_id` are copies with no trigger | Add composite FKs or triggers like `t_result_live_attempt`, or drop the copies where RLS allows |
 | Q9 | `need_disposition.note` has no writer | Drop it, or wire it |
 | Q10 | The spec says "3-5 word" `topic_frame`; the prompt says ≤ 20 words | Spec text is stale; fixing it is a doc change |
+
+## 9. Resolved by the step-10 sweep (work-k5fk.9, 2026-11-19)
+
+Branch `phoenix/sweep-10`, bead work-k5fk.9 (owner and orchestrator decisions of 2026-11-18).
+
+| Item | What changed | Resolves |
+|---|---|---|
+| D2 | `ordinal_no` domain (`integer`, `>= 1`) on `message.seq`, `conversation.next_seq`, `conversation_read_state.last_seen_seq`, `empathy_attempt.round`, `reconciler_result.iteration`, `context_share_offer.iteration`, `draft.version` | — |
+| D3 | `kek_id` domain (1–2048 characters, no whitespace or control) on the three `key_id` columns. Still no `wrapped_dek` domain: W13 fixes its format | §4 |
+| D4 | The same three delivery-group CHECKs on `empathy_attempt` and `context_share_offer` | — |
+| C1, C2, C4–C7, C10, C11 | Composite FKs: a sub-chat's proposal, a superseded round, a follow-up's agreement or proposal, a carried note's check-in, a reflection's linked session, a session-scoped memory, an offer's result, and each draft arm are of the same session and, where the rule says so, the same person | Q8 (the copies were already pinned by key in work-k5fk.3) |
+
