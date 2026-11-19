@@ -123,6 +123,7 @@ model Participant {
   brainActivities         BrainActivity[]
   linkedReflections       Reflection[]
   userMemories            UserMemory[]
+  reminders               Reminder[]
 
   @@id([sessionId, userId])
   @@index([sessionId, addedByUserId])
@@ -960,6 +961,7 @@ model Reminder {
   id         String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   userId     String           @map("user_id") @db.Uuid
   followUpId String?          @map("follow_up_id") @db.Uuid
+  sessionId  String?          @map("session_id") @db.Uuid
   scope      ReminderScope    @default(PRIVATE)
   remindAt   DateTime         @map("remind_at") @db.Timestamptz(3)
   cadence    ReminderCadence?
@@ -968,11 +970,13 @@ model Reminder {
   createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  followUp FollowUp? @relation(fields: [followUpId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  followUp    FollowUp?    @relation(fields: [followUpId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  participant Participant? @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([userId, remindAt])
   @@index([followUpId])
+  @@index([sessionId, userId])
   @@map("reminder")
 }
 

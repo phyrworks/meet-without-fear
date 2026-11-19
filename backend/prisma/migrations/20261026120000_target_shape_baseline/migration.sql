@@ -148,7 +148,7 @@ REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 147 named objects, all lower-case; 156 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 148 named objects, all lower-case; 157 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -2498,26 +2498,39 @@ GRANT DELETE ON follow_up_note TO mwf_definer;
 CREATE TABLE reminder (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    follow_up_id uuid7 REFERENCES follow_up ON DELETE CASCADE,
+    follow_up_id uuid7,
+    session_id uuid7,
     scope reminder_scope NOT NULL DEFAULT 'PRIVATE',
     remind_at ts_ms NOT NULL,
     cadence reminder_cadence,
     note ciphertext,
     status reminder_status NOT NULL DEFAULT 'SCHEDULED',
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- work-k5fk.9 (C8; review F14): a reminder on a follow-up is its owner's, in that follow-up's session, for every
+    -- role (the app_access RLS already says so for mwf_app). session_id is set exactly with follow_up_id: MATCH
+    -- SIMPLE skips a key with a NULL in it, so the CHECK is what makes both keys hold.
+    CHECK ((follow_up_id IS NULL) = (session_id IS NULL)),
+    FOREIGN KEY (follow_up_id, session_id) REFERENCES follow_up (id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON reminder (user_id, remind_at);
+CREATE INDEX ON reminder (session_id, user_id);
 CREATE INDEX ON reminder (follow_up_id);
 -- + sql_reminder_due (sql-only.sql)
 COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to a follow-up; the job delivers due ones.';
 COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
+COMMENT ON COLUMN reminder.session_id IS 'The session of the follow-up the reminder is on, NULL with follow_up_id (work-k5fk.9, C8): (follow_up_id, session_id) references follow_up and (session_id, user_id) participant, so the owner sits in that session.';
+COMMENT ON CONSTRAINT reminder_check ON reminder IS 'session_id is set exactly when follow_up_id is (work-k5fk.9, C8).';
+COMMENT ON INDEX reminder_session_id_user_id_idx IS 'The FK index of (session_id, user_id) (the participant cascade).';
 COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 1000); the app sends a fixed label today.';
 -- mwf_app: the caller's own reminder at check-in; delivery and the next instant are the worker's. DELETE:
 -- session-deletion.ts deleteSessionForUser — the leaver's own reminders on the session's follow-ups go with the leave
 -- (the caller's rows: the request moved off mwf_job in work-k5fk.10.5; RLS, §7 rows 9d–9g, binds user_id).
 GRANT SELECT ON reminder TO app_access;
-GRANT INSERT (user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at) ON reminder TO app_access;
+GRANT INSERT (user_id, follow_up_id, session_id, scope, remind_at, cadence, note, status, created_at, updated_at)
+  ON reminder TO app_access;
 GRANT DELETE ON reminder TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON reminder TO mwf_definer;
@@ -6492,7 +6505,7 @@ CREATE POLICY diag_read ON reflection FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO diag_access;
 CREATE POLICY diag_read ON reflection_message FOR SELECT TO diag_access USING (true);
 -- reminder
-GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
+GRANT SELECT (id, user_id, follow_up_id, session_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
 CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
 -- session
 GRANT SELECT (id, status, topic_frame_confirmed_at, previous_session_id, resolved_at, archived_at, archived_by_user_id, created_at, updated_at) ON session TO diag_access;
@@ -6607,7 +6620,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
-  IF n <> 156 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 156', n; END IF;
+  IF n <> 157 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 157', n; END IF;
 
   -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 41 text
   -- columns typed ciphertext and 5 text[] columns CHECKed by

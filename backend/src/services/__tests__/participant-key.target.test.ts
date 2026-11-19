@@ -89,6 +89,7 @@ const CHILD_TABLES = [
   'reconciler_guidance',
   'reconciler_result',
   'regulation_event',
+  'reminder',
   'session_closure',
   'user_memory',
 ];
@@ -379,6 +380,10 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         `INSERT INTO user_memory (user_id, session_id, content, category) VALUES ($2, $1, 'scoped', 'PREFERENCE')`,
         seat,
       );
+      await run.sql(
+        `INSERT INTO reminder (user_id, follow_up_id, session_id, remind_at) VALUES ($2, $3, $1, now() + interval '1 day')`,
+        [...seat, followUp],
+      );
       await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [
         proposalA,
         shared,
@@ -570,12 +575,13 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         SELECT c.relname AS t FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attname = 'session_id' AND NOT a.attnotnull`);
-      // work-k5fk.9 (C7): not user_memory, whose user_id is the owner whether or not the memory is scoped to a session.
+      // work-k5fk.9 (C7, C8): not user_memory or reminder, whose user_id is the owner whether or not the row is of a
+      // session (reminder's CHECK ties its session_id to follow_up_id instead).
       const keys = fks.filter(
         f =>
           f.refTable === 'participant' &&
           f.table !== 'participant' &&
-          f.table !== 'user_memory' &&
+          !['user_memory', 'reminder'].includes(f.table) &&
           nullable.some(n => n.t === f.table),
       );
       expect([...new Set(keys.map(k => k.table))].sort()).toEqual(['ai_memory', 'brain_activity']);

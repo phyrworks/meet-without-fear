@@ -264,8 +264,8 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       );
       await one(
         'reminder',
-        `INSERT INTO reminder (user_id, follow_up_id, remind_at, note) VALUES ($1, $2, now() + interval '1 day', $3) RETURNING id`,
-        [adaUser, individual, SEEDED_PRIVATE],
+        `INSERT INTO reminder (user_id, follow_up_id, session_id, remind_at, note) VALUES ($1, $2, $4, now() + interval '1 day', $3) RETURNING id`,
+        [adaUser, individual, SEEDED_PRIVATE, session],
       );
     },
     h.fixture.database,

@@ -3528,7 +3528,7 @@ CREATE POLICY diag_read ON reflection FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO diag_access;
 CREATE POLICY diag_read ON reflection_message FOR SELECT TO diag_access USING (true);
 -- reminder
-GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
+GRANT SELECT (id, user_id, follow_up_id, session_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
 CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
 -- session
 GRANT SELECT (id, status, topic_frame_confirmed_at, previous_session_id, resolved_at, archived_at, archived_by_user_id, created_at, updated_at) ON session TO diag_access;

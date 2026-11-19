@@ -61,9 +61,9 @@ const INCLUDE = '-- @@include sql-only.sql';
  * 155 since work-k5fk.4: message.id and conversation_read_state.last_seen_message_id
  * went (-2), conversation_read_state.last_seen_conversation_id came (+1); message's
  * key is (conversation_id, seq) and seq is an integer.
- * 156 since work-k5fk.9 (C9): reconciler_result.author_user_id came (+1).
+ * 156 since work-k5fk.9 (C9): reconciler_result.author_user_id came (+1); 157 (C8): reminder.session_id (+1).
  */
-export const UUID7_COLUMNS = 156;
+export const UUID7_COLUMNS = 157;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**

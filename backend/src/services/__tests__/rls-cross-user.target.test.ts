@@ -1226,10 +1226,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
 
     it('F14: Bob’s reminder may point only at a follow-up of a session he is in', async () => {
       expect(
-        await code('mwf_app', bob, `INSERT INTO reminder (user_id, remind_at, follow_up_id) VALUES ($1, now(), $2)`, [
+        await code(
+          'mwf_app',
           bob,
-          otherFollowUp,
-        ]),
+          `INSERT INTO reminder (user_id, remind_at, follow_up_id, session_id) VALUES ($1, now(), $2, $3)`,
+          [bob, otherFollowUp, other],
+        ),
       ).toBe('rls');
       const [{ id: ours }] = await run.sql<{ id: string }>(
         `INSERT INTO follow_up (session_id, type, scope, status) VALUES ($1, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED', 'OPEN')
@@ -1237,10 +1239,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [session],
       );
       expect(
-        await code('mwf_app', bob, `INSERT INTO reminder (user_id, remind_at, follow_up_id) VALUES ($1, now(), $2)`, [
+        await code(
+          'mwf_app',
           bob,
-          ours,
-        ]),
+          `INSERT INTO reminder (user_id, remind_at, follow_up_id, session_id) VALUES ($1, now(), $2, $3)`,
+          [bob, ours, session],
+        ),
       ).toBe('ok');
     });
   });
