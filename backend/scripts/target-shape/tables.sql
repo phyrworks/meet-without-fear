@@ -651,6 +651,9 @@ CREATE TYPE memory_source AS ENUM ('USER_APPROVED', 'USER_CREATED', 'USER_EDITED
 COMMENT ON TYPE memory_source IS 'How a user memory came to be: an AI suggestion the user approved, created by the user, or edited by the user.';
 CREATE TYPE device_platform AS ENUM ('ios', 'android', 'web');
 COMMENT ON TYPE device_platform IS 'The platform a user device registered from.';
+-- work-k5fk.9 (V1): who delivers to a push token; a new provider is a new label, not a token-format guess
+CREATE TYPE push_provider AS ENUM ('expo');
+COMMENT ON TYPE push_provider IS 'The push service a device''s token belongs to: expo (Expo push, today the only one). The token''s format is the provider''s; the app checks it (push.ts, Expo.isExpoPushToken), the database only bounds it (work-k5fk.9, V1).';
 CREATE TYPE wellbeing_feature AS ENUM ('meditation', 'gratitude', 'needs_assessment', 'people');
 COMMENT ON TYPE wellbeing_feature IS 'The wellbeing features that keep a feature_state document (shared/src/dto/feature-state.ts FEATURES).';
 CREATE TYPE activity_type AS ENUM ('LLM_CALL', 'EMBEDDING', 'RETRIEVAL', 'TOOL_USE');
@@ -2477,32 +2480,42 @@ GRANT DELETE ON takeaway_link TO app_access;
 CREATE TABLE user_device (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    push_token text,
+    push_token text CHECK (char_length(push_token) BETWEEN 1 AND 512),
+    push_provider push_provider,
     platform device_platform,
     biometric_enabled boolean NOT NULL DEFAULT false,
     biometric_enrolled_at ts_ms,
     last_seen_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- work-k5fk.9 (V1): a token always names its provider, and a cleared token clears it
+    CHECK ((push_token IS NULL) = (push_provider IS NULL))
 );
 CREATE INDEX ON user_device (user_id);
 -- + sql_user_device_token (sql-only.sql)
 COMMENT ON TABLE user_device IS 'A device a user registered: its push token and biometric enrolment.';
-COMMENT ON COLUMN user_device.push_token IS 'The Expo push token of this install; NULL until registered.';
+COMMENT ON COLUMN user_device.push_token IS 'The push token of this install, in its provider''s format (push_provider); NULL until registered or once cleared. At most 512 characters; no format CHECK (the app validates it for its provider).';
+COMMENT ON COLUMN user_device.push_provider IS 'The push service push_token belongs to (work-k5fk.9, V1); set exactly when push_token is.';
+COMMENT ON CONSTRAINT user_device_push_token_check ON user_device IS 'A push token is 1-512 characters (work-k5fk.9, V1).';
+COMMENT ON CONSTRAINT user_device_check ON user_device IS 'A push token and its provider are set and cleared together (work-k5fk.9, V1).';
 -- mwf_app: the caller's push token registration / clearing and biometric setting (user-settings.ts); other users' tokens are
 -- read by the job (push.ts).
 GRANT SELECT ON user_device TO app_access;
-GRANT INSERT (user_id, push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, created_at, updated_at)
+GRANT INSERT (user_id, push_token, push_provider, platform, last_seen_at, biometric_enabled, biometric_enrolled_at,
+              created_at, updated_at)
   ON user_device TO app_access;
-GRANT UPDATE (push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at) ON user_device TO app_access;
+GRANT UPDATE (push_token, push_provider, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at)
+  ON user_device TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON user_device TO mwf_definer;
 GRANT DELETE ON user_device TO mwf_definer;
 -- mwf_worker: push.ts sendPushNotification (notification delivery): the recipient's devices — another user than the
--- caller, so the worker reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
-GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO worker_access;
--- mwf_worker: push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
-GRANT UPDATE (push_token) ON user_device TO worker_access;
+-- caller, so the worker reads them (user_device RLS is user_id = me); newest device first (last_seen_at); Expo's only
+-- (push_provider)
+GRANT SELECT (user_id, push_token, push_provider, last_seen_at) ON user_device TO worker_access;
+-- mwf_worker: push.ts: a token Expo reports as unregistered is cleared with its provider (WHERE user_id = … AND push_token = …)
+GRANT UPDATE (push_token, push_provider) ON user_device TO worker_access;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,

@@ -209,7 +209,7 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       await c.query(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'people', '{}')`, [adaUser]);
       await one(
         'user_device',
-        `INSERT INTO user_device (user_id, push_token, platform) VALUES ($1, 'ExponentPushToken[ts12]', 'ios') RETURNING id`,
+        `INSERT INTO user_device (user_id, push_token, push_provider, platform) VALUES ($1, 'ExponentPushToken[ts12]', 'expo', 'ios') RETURNING id`,
         [adaUser],
       );
       await c.query(

@@ -153,7 +153,7 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
 
   it('account deletion: the walk as the job — a tombstone, private rows gone, keys shredded, survivors kept', async () => {
     // Bob's U-class rows and a key, so the walk has every class to sort
-    await run.sql(`INSERT INTO user_device (user_id, push_token) VALUES ($1, 'ExponentPushToken[ts12-bob]')`, [bob.id]);
+    await run.sql(`INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[ts12-bob]', 'expo')`, [bob.id]);
     await run.sql(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'gratitude', '{"entries": []}')`, [
       bob.id,
     ]);

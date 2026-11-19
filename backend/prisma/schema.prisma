@@ -1154,6 +1154,7 @@ model UserDevice {
   id                  String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
   userId              String          @map("user_id") @db.Uuid
   pushToken           String?         @map("push_token")
+  pushProvider        PushProvider?   @map("push_provider")
   platform            DevicePlatform?
   biometricEnabled    Boolean         @default(false) @map("biometric_enabled")
   biometricEnrolledAt DateTime?       @map("biometric_enrolled_at") @db.Timestamptz(3)
@@ -1712,6 +1713,12 @@ enum DevicePlatform {
   web
 
   @@map("device_platform")
+}
+
+enum PushProvider {
+  expo
+
+  @@map("push_provider")
 }
 
 enum WellbeingFeature {

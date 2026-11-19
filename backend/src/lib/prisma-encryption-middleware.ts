@@ -85,7 +85,7 @@
  * area_hint (enums: code constants, never user content — work-k5fk.9 Q4; prompt_seed is derived, not stored),
  * reminder.cadence (categories);
  * reflection.theme, takeaway.theme (taxonomy labels SQL groups on —
- * v_reflection_theme); participant.display_name, relationship_member.nickname,
+ * v_reflection_theme); participant.display_name, user_contact.nickname,
  * user.* (identity, read by views and the dashboard search); user_device.push_token
  * (a secret, keyed by ON CONFLICT); user_preferences.doc (settings, read by SQL
  * jsonb operators); brain_activity.* (T class — prompts and outputs, flagged

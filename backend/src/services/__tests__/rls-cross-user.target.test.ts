@@ -219,7 +219,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
     it.each([
       [
         'user_device',
-        `INSERT INTO user_device (user_id, push_token) VALUES ($1, 'ExponentPushToken[ada]')`,
+        `INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[ada]', 'expo')`,
         `UPDATE user_device SET push_token = 'ExponentPushToken[evil]' WHERE user_id = $1 RETURNING id`,
       ],
       [
@@ -283,7 +283,10 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
     });
 
     it('the worker clears a push token but never sets one, and never writes a telemetry blob (work-k5fk.10.29 R1, R2)', async () => {
-      await run.sql(`INSERT INTO user_device (user_id, push_token) VALUES ($1, 'ExponentPushToken[w]')`, [bob]);
+      await run.sql(
+        `INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[w]', 'expo')`,
+        [bob],
+      );
       expect(
         await code(
           'mwf_worker',
@@ -293,9 +296,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         ),
       ).toBe('rls');
       expect(
-        await as('mwf_worker', null, `UPDATE user_device SET push_token = NULL WHERE user_id = $1 RETURNING user_id`, [
-          bob,
-        ]),
+        await as(
+          'mwf_worker',
+          null,
+          `UPDATE user_device SET push_token = NULL, push_provider = NULL WHERE user_id = $1 RETURNING user_id`,
+          [bob],
+        ),
       ).toHaveLength(1);
       const [{ id }] = await run.sql<{ id: string }>(
         `INSERT INTO brain_activity (session_id, activity_type, model) VALUES ($1, 'LLM_CALL', 'm') RETURNING id::text`,
