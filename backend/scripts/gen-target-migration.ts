@@ -16,7 +16,7 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_definer check; schema app;
  *      app.current_user_id();
- *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, email,
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, ordinal_no, kek_id, email,
  *      milestone_key), the
  *      enums and the 49 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency

@@ -148,7 +148,7 @@ REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 133 named objects, all lower-case; 155 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 142 named objects, all lower-case; 155 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -281,10 +281,12 @@ GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_d
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, an email column as String,
--- and `migrate diff` reports nothing (TS-6 probe for intensity, 2026-10-19;
--- work-a39h.11.40 probe for uuid7, 2026-11-02; work-gevt for ts_ms,
--- 2026-11-10; work-k5fk.5 for email, 2026-11-13; PG 18.6 / Prisma 7.10).
+-- intensity or ordinal_no column as Int, an email or kek_id
+-- column as String, and `migrate diff` reports nothing (TS-6 probe for
+-- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
+-- work-gevt for ts_ms, 2026-11-10; work-k5fk.5 for email, 2026-11-13;
+-- work-k5fk.9 for ordinal_no and kek_id, 2026-11-19 — the drift
+-- gate passes with them; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
 -- Every uuid column (the uuidv7() primary keys and the columns that reference
@@ -363,6 +365,20 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
+
+-- work-k5fk.9 (D2): a 1-based ordinal — a message's seq and its conversation's next_seq, the last seen seq,
+-- an attempt's round, a result's or an offer's iteration, a draft's version. Not milestone.ordinal (0 = paused).
+-- Prisma reads it as Int, like intensity.
+CREATE DOMAIN ordinal_no AS integer CHECK (VALUE >= 1);
+COMMENT ON DOMAIN ordinal_no IS 'A 1-based ordinal: 1, 2, 3 … (message.seq, conversation.next_seq, conversation_read_state.last_seen_seq, empathy_attempt.round, reconciler_result.iteration, context_share_offer.iteration, draft.version).';
+
+-- work-k5fk.9 (D3): the id of the KMS key (the KEK) that wrapped a DEK (session_key, participant_key, user_key).
+-- No format is fixed yet (nothing writes these tables before W13), so only its bounds: 1..2048 characters (an
+-- AWS KMS key ARN or alias fits) with no whitespace or control character. There is deliberately no domain for
+-- wrapped_key: its format is W13's.
+CREATE DOMAIN kek_id AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 2048 AND VALUE COLLATE "C" !~ '[[:space:][:cntrl:]]');
+COMMENT ON DOMAIN kek_id IS 'The id of the KMS key (the KEK) that wrapped a data key: 1-2048 characters, no whitespace or control character. No format is fixed before W13.';
 
 -- work-k5fk.6: a milestone key (milestone.key, participant_milestone.milestone_key):
 -- a lower-case identifier such as feel_heard. A domain, not an enum: the keys
@@ -1023,7 +1039,8 @@ CREATE TABLE participant (
     user_id uuid7 NOT NULL,
     kind user_kind NOT NULL DEFAULT 'human',
     added_by_user_id uuid7,
-    display_name text,
+    -- work-k5fk.9 (D1): a snapshot of "user".name, which joins two person_name values: at most 100 + 1 + 100
+    display_name text CHECK (char_length(display_name) <= 201),
     joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     left_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1054,6 +1071,7 @@ COMMENT ON CONSTRAINT participant_check ON participant IS 'Only a human can be t
 COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
 COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
 COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to the user''s first name, else user.name (v_participant, app.session_parties; review F7).';
+COMMENT ON CONSTRAINT participant_display_name_check ON participant IS 'At most 201 characters: a snapshot of "user".name, two person_name values (each at most 100) joined by a space (work-k5fk.9, D1).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
 -- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
@@ -1172,7 +1190,7 @@ CREATE TABLE conversation (
     anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
     status conversation_status NOT NULL DEFAULT 'ACTIVE',
     resolved_at ts_ms,
-    next_seq integer NOT NULL DEFAULT 1 CHECK (next_seq >= 1),
+    next_seq ordinal_no NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1217,7 +1235,7 @@ CREATE TABLE empathy_attempt (
     session_id uuid7 NOT NULL,
     author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    round integer NOT NULL DEFAULT 1,
+    round ordinal_no NOT NULL DEFAULT 1,
     supersedes_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
     content ciphertext NOT NULL,
     status empathy_status NOT NULL DEFAULT 'HELD',
@@ -1239,12 +1257,20 @@ CREATE TABLE empathy_attempt (
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, subject_user_id),
     FOREIGN KEY (session_id, author_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
-    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (D4): the delivery group (delivery_status, delivered_at, seen_at) agrees with itself; the same three
+    -- CHECKs as context_share_offer's. PENDING → SEEN directly leaves delivered_at NULL (app.empathy_mark_delivery).
+    CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
+    CHECK (delivery_status <> 'DELIVERED' OR delivered_at IS NOT NULL),
+    CHECK (delivery_status <> 'PENDING' OR (delivered_at IS NULL AND seen_at IS NULL))
 );
 CREATE INDEX ON empathy_attempt (session_id, subject_user_id, revealed_at);
 CREATE INDEX ON empathy_attempt (supersedes_attempt_id);
 -- + sql_attempt_one_live_per_direction (sql-only.sql)
 COMMENT ON TABLE empathy_attempt IS 'Stage 2: one participant''s statement of how they imagine the other feels, per direction and round; revealed to the subject once both are READY.';
+COMMENT ON CONSTRAINT empathy_attempt_check2 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): seen_at is set exactly when the item is SEEN.';
+COMMENT ON CONSTRAINT empathy_attempt_check3 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a DELIVERED item has its delivered_at (a SEEN one may lack it: PENDING straight to SEEN).';
+COMMENT ON CONSTRAINT empathy_attempt_check4 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a PENDING item has neither delivery stamp.';
 COMMENT ON COLUMN empathy_attempt.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN empathy_attempt.author_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, author_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN empathy_attempt.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
@@ -1324,7 +1350,7 @@ GRANT DELETE ON need TO mwf_definer;
 
 CREATE TABLE message (
     conversation_id uuid7 NOT NULL,
-    seq integer NOT NULL CHECK (seq >= 1),
+    seq ordinal_no NOT NULL,
     session_id uuid7 NOT NULL,
     sender_user_id uuid7,
     role message_role NOT NULL,
@@ -1407,7 +1433,7 @@ CREATE TABLE conversation_read_state (
     user_id uuid7 NOT NULL,
     last_viewed_at ts_ms,
     last_seen_conversation_id uuid7,
-    last_seen_seq integer,
+    last_seen_seq ordinal_no,
     last_viewed_share_tab_at ts_ms,
     last_active_at ts_ms,
     archived_at ts_ms,
@@ -1452,7 +1478,7 @@ CREATE TABLE reconciler_result (
     attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
     session_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    iteration integer NOT NULL DEFAULT 1,
+    iteration ordinal_no NOT NULL DEFAULT 1,
     alignment_score integer NOT NULL,
     alignment_summary ciphertext NOT NULL,
     gap_summary ciphertext NOT NULL,
@@ -1532,7 +1558,7 @@ CREATE TABLE context_share_offer (
     result_id uuid7 NOT NULL REFERENCES reconciler_result ON DELETE CASCADE,
     session_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    iteration integer NOT NULL DEFAULT 1,
+    iteration ordinal_no NOT NULL DEFAULT 1,
     status share_offer_status NOT NULL DEFAULT 'PENDING',
     offer_message ciphertext,
     suggested_content ciphertext,
@@ -1557,11 +1583,18 @@ CREATE TABLE context_share_offer (
     UNIQUE (id, session_id),
     FOREIGN KEY (attempt_id, session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
     FOREIGN KEY (result_id, session_id) REFERENCES reconciler_result (id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (D4): the delivery group agrees with itself (the same three CHECKs as empathy_attempt's)
+    CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
+    CHECK (delivery_status <> 'DELIVERED' OR delivered_at IS NOT NULL),
+    CHECK (delivery_status <> 'PENDING' OR (delivered_at IS NULL AND seen_at IS NULL))
 );
 CREATE INDEX ON context_share_offer (session_id, subject_user_id, status);
 CREATE INDEX ON context_share_offer (result_id);
 COMMENT ON TABLE context_share_offer IS 'The suggestion to the subject of an attempt to share context with its author, and what happened to it; the shared text is delivered to the author as a message.';
+COMMENT ON CONSTRAINT context_share_offer_check2 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): seen_at is set exactly when the item is SEEN.';
+COMMENT ON CONSTRAINT context_share_offer_check3 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a DELIVERED item has its delivered_at (a SEEN one may lack it: PENDING straight to SEEN).';
+COMMENT ON CONSTRAINT context_share_offer_check4 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a PENDING item has neither delivery stamp.';
 COMMENT ON COLUMN context_share_offer.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN context_share_offer.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN context_share_offer.delivery_notified_at IS 'When the subject who shared was shown that the shared context was delivered (GET notifications, Sent-tab updates).';
@@ -1824,7 +1857,7 @@ CREATE TABLE draft (
     invitation_id uuid7 REFERENCES invitation ON DELETE CASCADE,
     content ciphertext NOT NULL,
     ready_to_share boolean NOT NULL DEFAULT false,
-    version integer NOT NULL DEFAULT 1,
+    version ordinal_no NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     reopened_at ts_ms,
@@ -1883,7 +1916,7 @@ GRANT INSERT (id, session_id, user_id, kind, about_user_id, content, ready_to_sh
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
-    key_id text NOT NULL,
+    key_id kek_id NOT NULL,
     wrapped_dek bytea NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
@@ -1901,7 +1934,7 @@ CREATE TABLE participant_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL,
     user_id uuid7 NOT NULL,
-    key_id text NOT NULL,
+    key_id kek_id NOT NULL,
     wrapped_dek bytea NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
@@ -2654,7 +2687,7 @@ GRANT DELETE ON feature_state TO mwf_definer;
 CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    key_id text NOT NULL,
+    key_id kek_id NOT NULL,
     wrapped_dek bytea NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
