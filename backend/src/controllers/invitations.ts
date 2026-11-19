@@ -42,7 +42,8 @@ import {
 const createSessionSchema = z
   .object({
     personId: z.string().optional(),
-    inviteName: z.string().min(1).optional(),
+    // 101: mobile sends first + space + last, each up to 50 (work-k5fk.9, D1); a known person's nickname is clamped to 100
+    inviteName: z.string().min(1).max(101).optional(),
     context: z.string().optional(),
     innerThoughtsId: z.string().optional(),
     linkedAtMessageId: z.string().optional(),

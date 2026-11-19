@@ -191,4 +191,15 @@ describeTarget('memory and preferences on the target, as mwf_app (and notificati
       ),
     ).toEqual([{ kind: 'GLOBAL_FACTS', user_scoped: true }]);
   });
+
+  // work-k5fk.9 (D1): the names are the person_name domain (1-100 characters, never blank). The profile contract
+  // lets lastName be "": that clears the last name to NULL rather than failing on the domain.
+  it('profile: PATCH /auth/me with lastName "" stores NULL, and the name reads back as the first name alone', async () => {
+    const res = await http(bob, 'patch', '/auth/me', { firstName: '  Bob ', lastName: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.user).toMatchObject({ firstName: 'Bob', lastName: null, name: 'Bob' });
+    expect(await run.sql(`SELECT first_name, last_name, name FROM "user" WHERE id = $1`, [bob.id])).toEqual([
+      { first_name: 'Bob', last_name: null, name: 'Bob' },
+    ]);
+  });
 });

@@ -128,11 +128,11 @@
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity or ordinal_no column as Int, an email or kek_id
+-- intensity or ordinal_no column as Int, an email, kek_id or person_name
 -- column as String, and `migrate diff` reports nothing (TS-6 probe for
 -- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
 -- work-gevt for ts_ms, 2026-11-10; work-k5fk.5 for email, 2026-11-13;
--- work-k5fk.9 for ordinal_no and kek_id, 2026-11-19 — the drift
+-- work-k5fk.9 for ordinal_no, kek_id and person_name, 2026-11-19 — the drift
 -- gate passes with them; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
@@ -226,6 +226,13 @@ COMMENT ON DOMAIN ordinal_no IS 'A 1-based ordinal: 1, 2, 3 … (message.seq, co
 CREATE DOMAIN kek_id AS text
   CHECK (char_length(VALUE) BETWEEN 1 AND 2048 AND VALUE COLLATE "C" !~ '[[:space:][:cntrl:]]');
 COMMENT ON DOMAIN kek_id IS 'The id of the KMS key (the KEK) that wrapped a data key: 1-2048 characters, no whitespace or control character. No format is fixed before W13.';
+
+-- work-k5fk.9 (D1): a person's name as a person typed it, or a sign-in provider sent it: "user".first_name and
+-- last_name, user_contact.nickname. At most 100 characters and never blank; NULL, not '', is "no name" (the app
+-- trims, and clamps a longer Clerk name to 100: utils/person-name.ts). participant.display_name snapshots
+-- "user".name — two of these joined — so it carries its own bound of 201 instead.
+CREATE DOMAIN person_name AS text CHECK (char_length(VALUE) BETWEEN 1 AND 100 AND btrim(VALUE) <> '');
+COMMENT ON DOMAIN person_name IS 'A person''s name or a nickname: 1-100 characters, not blank. NULL, never '''', means none (the app trims and clamps: utils/person-name.ts).';
 
 -- work-k5fk.6: a milestone key (milestone.key, participant_milestone.milestone_key):
 -- a lower-case identifier such as feel_heard. A domain, not an enum: the keys
@@ -669,8 +676,8 @@ CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     kind user_kind NOT NULL DEFAULT 'human',
     email email UNIQUE,
-    first_name text,
-    last_name text,
+    first_name person_name,
+    last_name person_name,
     deleted_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -800,7 +807,7 @@ GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_definer;
 CREATE TABLE user_contact (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     contact_user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    nickname text CHECK (char_length(nickname) <= 100 AND btrim(nickname) <> ''),
+    nickname person_name,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -812,7 +819,6 @@ COMMENT ON TABLE user_contact IS 'What one user calls another, like a phone''s c
 COMMENT ON COLUMN user_contact.user_id IS 'The owner of the entry: the user who chose the nickname, and the only one who reads it.';
 COMMENT ON COLUMN user_contact.contact_user_id IS 'The person the entry names.';
 COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (at most 100 characters, not blank; the invite name for a known person or PATCH /contacts/:userId/nickname); NULL clears it, and a cleared entry is authoritative (the app shows the display name, never an old invite name). Plain text, set by the owner.';
-COMMENT ON CONSTRAINT user_contact_nickname_check ON user_contact IS 'A nickname is at most 100 characters and never blank (whitespace only).';
 COMMENT ON CONSTRAINT user_contact_check ON user_contact IS 'Nobody is their own contact.';
 COMMENT ON INDEX user_contact_contact_user_id_idx IS 'The FK index of contact_user_id (the RESTRICT check on a user row).';
 -- mwf_app: the caller's own entries only — createSession records the invite name for a known person, PATCH

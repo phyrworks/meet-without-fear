@@ -38,6 +38,7 @@ import {
 } from '@meet-without-fear/shared';
 import { deleteAccountWithNotifications } from '../services/account-deletion';
 import { sendTestPushNotification } from '../services/push';
+import { toPersonName } from '../utils/person-name';
 import {
   clearPushTokens,
   deviceSummary,
@@ -122,13 +123,15 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response): P
   // Build update data - only include fields that were provided. `name` is
   // generated from the first and last names (spec §1.7); a `name` alone is
   // stored as the first name with no last name (it then reads back whole).
+  // Each name is stored as the person_name domain holds it (work-k5fk.9, D1): trimmed, and NULL rather than
+  // blank — the contract lets lastName be "", which clears it.
   const updateData: { firstName?: string | null; lastName?: string | null } = {};
   if (name !== undefined && firstName === undefined && lastName === undefined) {
-    updateData.firstName = name;
+    updateData.firstName = toPersonName(name);
     updateData.lastName = null;
   }
-  if (firstName !== undefined) updateData.firstName = firstName;
-  if (lastName !== undefined) updateData.lastName = lastName;
+  if (firstName !== undefined) updateData.firstName = toPersonName(firstName);
+  if (lastName !== undefined) updateData.lastName = toPersonName(lastName);
 
   // Update user profile
   const updatedUser = await prisma.user.update({
