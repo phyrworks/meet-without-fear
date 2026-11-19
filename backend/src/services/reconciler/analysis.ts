@@ -509,11 +509,11 @@ export async function persistAnalysis(opts: {
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
       const rows = await tx.$queryRaw<
         Array<{ id: string }>
-      >`INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score,
+      >`INSERT INTO reconciler_result (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score,
           alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
           recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
           suggested_share_reason, circuit_breaker_tripped)
-        VALUES (${opts.attemptId}::uuid, ${opts.sessionId}::uuid, ${opts.subjectUserId}::uuid,
+        VALUES (${opts.attemptId}::uuid, ${opts.sessionId}::uuid, ${opts.authorUserId}::uuid, ${opts.subjectUserId}::uuid,
           coalesce((SELECT max(x.iteration) FROM reconciler_result x WHERE x.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
           ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))},
           ${encryptColumnValue('reconciler_result', 'alignment_summary', r.alignment.summary)},

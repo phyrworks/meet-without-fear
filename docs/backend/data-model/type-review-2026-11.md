@@ -205,4 +205,5 @@ Branch `phoenix/sweep-10`, bead work-k5fk.9 (owner and orchestrator decisions of
 | D3 | `kek_id` domain (1–2048 characters, no whitespace or control) on the three `key_id` columns. Still no `wrapped_dek` domain: W13 fixes its format | §4 |
 | D4 | The same three delivery-group CHECKs on `empathy_attempt` and `context_share_offer` | — |
 | C1, C2, C4–C7, C10, C11 | Composite FKs: a sub-chat's proposal, a superseded round, a follow-up's agreement or proposal, a carried note's check-in, a reflection's linked session, a session-scoped memory, an offer's result, and each draft arm are of the same session and, where the rule says so, the same person | Q8 (the copies were already pinned by key in work-k5fk.3) |
+| C3, C9 | `need.superseded_by_need_id` pins the owner's own need (the edit applier writes the scalar, no nested connect). `reconciler_result.author_user_id` (new, NOT NULL) pins the attempt's author, and `reconciler_guidance` pins `(result_id, session_id, author_user_id, subject_user_id)`: the guidance, which its author's RLS reads, can name no third party | Q8 |
 

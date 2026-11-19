@@ -156,9 +156,9 @@ describeTarget('participant resolution and the single context entry point (targe
 
     // --- The subject's (Bob's) view of Ada's attempt: result and an open offer ---------------
     const [result] = await sql<{ id: string }>(
-      `INSERT INTO reconciler_result (attempt_id, subject_user_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, session_id)
-       VALUES ($1, $2::uuid, 40, 'summary', $3, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, $4::uuid) RETURNING id`,
-      [ids.adaAttempt, ids.bobUser, SUBJECT_ONLY.gap, ids.session],
+      `INSERT INTO reconciler_result (attempt_id, author_user_id, subject_user_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, session_id)
+       VALUES ($1, $2::uuid, $3::uuid, 40, 'summary', $4, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, $5::uuid) RETURNING id`,
+      [ids.adaAttempt, ids.adaUser, ids.bobUser, SUBJECT_ONLY.gap, ids.session],
     );
     await sql(
       `INSERT INTO context_share_offer (attempt_id, result_id, subject_user_id, status, suggested_content, session_id)

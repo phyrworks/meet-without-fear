@@ -3519,7 +3519,7 @@ CREATE POLICY diag_read ON proposal_revision FOR SELECT TO diag_access USING (tr
 GRANT SELECT (result_id, session_id, author_user_id, subject_user_id, guidance_type, created_at) ON reconciler_guidance TO diag_access;
 CREATE POLICY diag_read ON reconciler_guidance FOR SELECT TO diag_access USING (true);
 -- reconciler_result
-GRANT SELECT (id, attempt_id, session_id, subject_user_id, iteration, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
+GRANT SELECT (id, attempt_id, session_id, author_user_id, subject_user_id, iteration, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
 CREATE POLICY diag_read ON reconciler_result FOR SELECT TO diag_access USING (true);
 -- reflection
 GRANT SELECT (id, user_id, status, linked_session_id, linked_at, distilled_at, created_at, updated_at) ON reflection TO diag_access;
@@ -4033,11 +4033,12 @@ BEGIN
   FROM (VALUES ('message', 'need', '{refining_need_id}'),
                ('message', 'empathy_attempt', '{source_attempt_id}'),
                ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}'),
-               -- work-k5fk.9 (C1, C2, C5, C6)
+               -- work-k5fk.9 (C1, C2, C5, C6, C3)
                ('conversation', 'proposal', '{anchor_proposal_id}'),
                ('empathy_attempt', 'empathy_attempt', '{supersedes_attempt_id}'),
                ('follow_up_note', 'follow_up_checkin', '{carried_into_checkin_id}'),
-               ('reflection', 'participant', '{linked_session_id}')) x(rel, ref, cols),
+               ('reflection', 'participant', '{linked_session_id}'),
+               ('need', 'need', '{superseded_by_need_id}')) x(rel, ref, cols),
        LATERAL (SELECT x.rel || ' -> ' || x.ref || ' ON DELETE SET NULL ' || x.cols AS want) w
   WHERE NOT EXISTS (
     SELECT 1 FROM pg_constraint c

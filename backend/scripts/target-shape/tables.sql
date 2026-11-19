@@ -1166,7 +1166,7 @@ CREATE TABLE need (
     ai_confidence real NOT NULL,
     confirmed_at ts_ms,
     locked_at ts_ms,
-    superseded_by_need_id uuid7 REFERENCES need ON DELETE SET NULL,
+    superseded_by_need_id uuid7,
     deleted_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1178,7 +1178,11 @@ CREATE TABLE need (
     -- work-k5fk.3: what consent and need_share pin to (a share is its owner's, by key)
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, user_id),
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C3): a need is superseded only by its owner's own need of the same session; deleting the newer one
+    -- nulls the link alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (superseded_by_need_id, session_id, user_id) REFERENCES need (id, session_id, user_id)
+      ON DELETE SET NULL (superseded_by_need_id)
 );
 CREATE INDEX ON need (session_id, user_id);
 CREATE INDEX ON need (superseded_by_need_id);
@@ -1333,6 +1337,7 @@ CREATE TABLE reconciler_result (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
     session_id uuid7 NOT NULL,
+    author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
     iteration ordinal_no NOT NULL DEFAULT 1,
     alignment_score integer NOT NULL,
@@ -1361,18 +1366,21 @@ CREATE TABLE reconciler_result (
     CHECK (app.all_ciphertext(correctly_identified)),
     CHECK (app.all_ciphertext(missed_feelings)),
     CHECK (app.all_ciphertext(misattributions)),
-    -- work-k5fk.3: the result's subject is its attempt's subject, by key (the subject half of t_result_live_attempt)
+    -- work-k5fk.3: the result's subject is its attempt's subject, by key (the subject half of t_result_live_attempt);
+    -- work-k5fk.9 (C9): and its author the attempt's author, so the guidance cut from it names the right author
     UNIQUE (id, session_id),
-    UNIQUE (id, session_id, subject_user_id),
+    UNIQUE (id, session_id, author_user_id, subject_user_id),
     -- work-k5fk.9 (C10): what an offer's result key pins to (the offer cites a result of its own attempt)
     UNIQUE (id, attempt_id),
-    FOREIGN KEY (attempt_id, session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
+    FOREIGN KEY (attempt_id, session_id, author_user_id, subject_user_id)
+      REFERENCES empathy_attempt (id, session_id, author_user_id, subject_user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON reconciler_result (session_id, subject_user_id);
 -- + sql_result_one_current (sql-only.sql)
 COMMENT ON TABLE reconciler_result IS 'The reconciler''s gap analysis of one empathy attempt against its subject''s account; immutable, one current per attempt (superseded_at). Visible to the subject only.';
 COMMENT ON COLUMN reconciler_result.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
+COMMENT ON COLUMN reconciler_result.author_user_id IS 'The analysed attempt''s author (work-k5fk.9, C9): (attempt_id, session_id, author_user_id, subject_user_id) references empathy_attempt, so the guidance keyed to this result can only name that author. Never read by the subject''s policy.';
 COMMENT ON COLUMN reconciler_result.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN reconciler_result.iteration IS '1 for the first analysis of the attempt; +1 per re-analysis.';
 COMMENT ON COLUMN reconciler_result.alignment_score IS 'How well the attempt matches the subject''s account, 0 to 100.';
@@ -1397,7 +1405,7 @@ GRANT SELECT (id, attempt_id, subject_user_id, iteration, superseded_at) ON reco
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL).
 GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO ai_access;
 -- mwf_ai: persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
-GRANT INSERT (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary,
+GRANT INSERT (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary,
               gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
               recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
               suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO ai_access;
@@ -1870,10 +1878,13 @@ CREATE TABLE reconciler_guidance (
     prompt_seed ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    -- work-k5fk.3: the subject is the result's (so the attempt's) subject; the author a participant of that session
+    -- work-k5fk.3: the subject is the result's (so the attempt's) subject; work-k5fk.9 (C9): and the author is the
+    -- result's (so the attempt's) author — the author's RLS (app_select) reads the row, so a guidance naming anyone
+    -- else would leak the hint to a third party in an N-party session.
     -- Prisma models an FK whose columns hold a unique column as 1:1 and then needs those exact columns UNIQUE (P1012)
-    UNIQUE (result_id, session_id, subject_user_id),
-    FOREIGN KEY (result_id, session_id, subject_user_id) REFERENCES reconciler_result (id, session_id, subject_user_id) ON DELETE CASCADE,
+    UNIQUE (result_id, session_id, author_user_id, subject_user_id),
+    FOREIGN KEY (result_id, session_id, author_user_id, subject_user_id)
+      REFERENCES reconciler_result (id, session_id, author_user_id, subject_user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, author_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
@@ -1881,7 +1892,7 @@ CREATE INDEX ON reconciler_guidance (session_id, author_user_id);
 CREATE INDEX ON reconciler_guidance (session_id, subject_user_id);
 COMMENT ON TABLE reconciler_guidance IS 'The abstract hints from a reconciler result that the author may see (P3 D8a split from reconciler_result, which only the subject sees).';
 COMMENT ON COLUMN reconciler_guidance.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
-COMMENT ON COLUMN reconciler_guidance.author_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, author_user_id) references participant (session_id, user_id).';
+COMMENT ON COLUMN reconciler_guidance.author_user_id IS 'The result''s attempt''s author (work-k5fk.9, C9): (result_id, session_id, author_user_id, subject_user_id) references reconciler_result; the author''s policy reads the row.';
 COMMENT ON COLUMN reconciler_guidance.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a coarse area for the author to explore (one of six code phrases in generateAbstractGuidance).';
 COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';

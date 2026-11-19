@@ -526,10 +526,10 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [session, bob, ada],
       );
       [{ id: result }] = await run.sql<{ id: string }>(
-        `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
-                                        gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
-         VALUES ($1, $2, $3, 1, 50, 's', 'PROBE_GAP', 'MINOR', 'PROCEED', 'r', true) RETURNING id::text`,
-        [bobAttempt, session, ada],
+        `INSERT INTO reconciler_result (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score,
+                                        alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
+         VALUES ($1, $2, $3, $4, 1, 50, 's', 'PROBE_GAP', 'MINOR', 'PROCEED', 'r', true) RETURNING id::text`,
+        [bobAttempt, session, bob, ada],
       );
       await run.sql(
         `INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id, guidance_type)

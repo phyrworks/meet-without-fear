@@ -533,8 +533,8 @@ export async function writeTargetShape(
     const attemptId = attemptOf.get(r.guesser);
     if (!attemptId) throw new Error(`Scenario ${scenario.name}: the reconciler result's guesser has no attempt`);
     const result = await db.query<{ id: string }>(
-      `INSERT INTO reconciler_result (attempt_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap, recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at, updated_at, session_id)
-       VALUES ($1, $2, 1, $3, $4, $5, upper($6)::gap_severity, $7, $8, $9, $10, upper($11)::recommender_action, $12, $13, $14, $15, $16, $17, $17, $18)
+      `INSERT INTO reconciler_result (attempt_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap, recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at, updated_at, session_id, author_user_id)
+       VALUES ($1, $2, 1, $3, $4, $5, upper($6)::gap_severity, $7, $8, $9, $10, upper($11)::recommender_action, $12, $13, $14, $15, $16, $17, $17, $18, $19)
        RETURNING id`,
       [
         attemptId,
@@ -555,6 +555,7 @@ export async function writeTargetShape(
         r.suggestedShareReason,
         t(r.at),
         sessionId,
+        pid(r.guesser), // the attempt's author (work-k5fk.9, C9)
       ],
     );
     const offerAt = auto();

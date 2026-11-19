@@ -47,7 +47,7 @@ const AI_GRANTS = [
   'participant_milestone:SELECT(milestone_key,reached_at,session_id,user_id)',
   'reconciler_guidance:INSERT(area_hint,author_user_id,guidance_type,prompt_seed,result_id,session_id,subject_user_id)',
   'reconciler_guidance:SELECT(area_hint,guidance_type,prompt_seed,result_id)',
-  'reconciler_result:INSERT(alignment_score,alignment_summary,attempt_id,circuit_breaker_tripped,correctly_identified,gap_severity,gap_summary,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason)',
+  'reconciler_result:INSERT(alignment_score,alignment_summary,attempt_id,author_user_id,circuit_breaker_tripped,correctly_identified,gap_severity,gap_summary,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason)',
   'reconciler_result:SELECT(alignment_score,alignment_summary,attempt_id,correctly_identified,created_at,gap_severity,gap_summary,id,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason,superseded_at)',
   'reconciler_result:UPDATE(superseded_at)',
   'session:SELECT(id)',
