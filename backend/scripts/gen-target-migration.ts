@@ -17,7 +17,7 @@
  *      roles assertion and the SET ROLE mwf_definer check; schema app;
  *      app.current_user_id();
  *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, ordinal_no, kek_id, email,
- *      milestone_key), the
+ *      milestone_key, person_name), the
  *      enums and the 49 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
