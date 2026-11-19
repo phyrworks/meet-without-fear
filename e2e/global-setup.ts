@@ -2,6 +2,7 @@ import { FullConfig } from '@playwright/test';
 import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 
 /**
  * Global setup for the dev-server configs (playwright.config.ts,
@@ -14,6 +15,11 @@ import * as fs from 'fs';
  * application table — all of schema public except _prisma_migrations and the
  * baseline's seeded `milestone` reference table — then runs `prisma migrate
  * deploy` (a no-op once the baseline is applied). Never `db push`.
+ *
+ * The baseline is ONE migration edited in place on this branch, so `migrate deploy` skips it once its name is
+ * recorded — whatever the database holds. Setup therefore compares the recorded checksum with the file's; on a
+ * mismatch it drops and recreates the e2e database (owner mwf_migrator) so the deploy builds today's schema. (The
+ * 2026-11-19 full run had a baseline from the day before: no app.session_parties, so every state read failed.)
  *
  * The local production replica does NOT use this file; see
  * global-setup.local-deploy.ts.
@@ -61,6 +67,64 @@ async function globalSetup(_config: FullConfig) {
         `E2E global setup: ${v} points at "${dbName(val)}" but the e2e database is "${targetDb}"; ` +
           'the API would use a different database than the one reset. Unset it or point it at the e2e database.',
       );
+    }
+  }
+
+  // A stale baseline (same migration name, other content) is rebuilt, never reused: see the header.
+  const migrationsDir = path.join(backendDir, 'prisma', 'migrations');
+  const baselines = fs
+    .readdirSync(migrationsDir)
+    .filter(d => fs.existsSync(path.join(migrationsDir, d, 'migration.sql')))
+    .map(d => ({
+      name: d,
+      checksum: createHash('sha256').update(fs.readFileSync(path.join(migrationsDir, d, 'migration.sql'))).digest('hex'),
+    }));
+  const staleScriptPath = path.join(backendDir, '.temp-stale-baseline.js');
+  const staleScript = `
+const { Client } = require('pg');
+const WANT = ${JSON.stringify(baselines)};
+const TARGET = ${JSON.stringify(targetDb)};
+(async () => {
+  const db = new Client({ connectionString: process.env.DATABASE_URL });
+  let stale = [];
+  try {
+    await db.connect();
+    const { rows: has } = await db.query("SELECT to_regclass('public._prisma_migrations') IS NOT NULL AS ok");
+    if (has[0].ok) {
+      const { rows } = await db.query('SELECT migration_name, checksum FROM public._prisma_migrations');
+      stale = rows.filter(r => { const w = WANT.find(x => x.name === r.migration_name); return !w || w.checksum !== r.checksum; });
+    }
+  } finally {
+    await db.end().catch(() => {});
+  }
+  if (stale.length === 0) return;
+  console.log('  stale baseline (' + stale.map(r => r.migration_name).join(', ') + '): recreating ' + TARGET);
+  const admin = new URL(process.env.DATABASE_URL);
+  admin.pathname = '/postgres';
+  const pg = new Client({ connectionString: admin.toString() });
+  await pg.connect();
+  try {
+    const q = '"' + TARGET.replace(/"/g, '""') + '"';
+    await pg.query('DROP DATABASE IF EXISTS ' + q + ' WITH (FORCE)');
+    await pg.query('CREATE DATABASE ' + q + ' OWNER mwf_migrator');
+  } finally {
+    await pg.end();
+  }
+})().catch(function(e) { console.error(e); process.exit(1); });
+`;
+  console.log('Checking the applied baseline against prisma/migrations...');
+  try {
+    fs.writeFileSync(staleScriptPath, staleScript);
+    execSync(`node ${staleScriptPath}`, {
+      cwd: backendDir,
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+      stdio: 'inherit',
+    });
+  } finally {
+    try {
+      fs.unlinkSync(staleScriptPath);
+    } catch {
+      // Ignore cleanup errors
     }
   }
 

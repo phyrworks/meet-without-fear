@@ -10,11 +10,15 @@ applyE2EPortEnv();
 // Shared web server configurations
 const webServers = (fixtureId: string) => [
   {
-    command: 'npm run dev:api',
+    // Prepare the database before the API boots (as playwright.two-browser.config.ts): Playwright starts managed
+    // web servers before globalSetup, and a stale baseline is rebuilt by dropping the database, which must not
+    // happen beneath a live API. globalSetup runs again afterwards as a no-op check.
+    command: 'npx tsx e2e/prepare-database.ts && npm run dev:api',
     url: `${E2E_API_URL}/health`,
     reuseExistingServer: false,
     cwd: '..',
-    timeout: 60000,
+    // a rebuilt baseline (prepare-database) takes longer than a boot
+    timeout: 180000,
     env: {
       ...process.env,
       E2E_AUTH_BYPASS: 'true',
