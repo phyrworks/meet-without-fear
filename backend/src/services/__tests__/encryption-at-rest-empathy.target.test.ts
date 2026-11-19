@@ -230,9 +230,9 @@ describeTarget(
           subjectUserId: ids.adaUser,
           result,
           guidance: {
-            areaHint: 'PROBE_TS13_AREA',
+            areaHint: 'respect and value',
             guidanceType: 'challenge_assumptions',
-            promptSeed: 'PROBE_TS13_SEED',
+            promptSeed: 'what might be different from your initial understanding',
           },
           suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
         }),
@@ -266,14 +266,11 @@ describeTarget(
         suggestedShareContent: 'PROBE_TS13_SUGGESTION',
         suggestedShareReason: 'PROBE_TS13_SUGGESTION_REASON',
       });
-      for (const column of ['area_hint', 'prompt_seed']) {
-        await expectSealed(run, 'reconciler_guidance', column, `result_id = $1`, [id]);
-        proven.add(`reconciler_guidance.${column}`);
-      }
+      // work-k5fk.9 (Q4): the guidance is no longer encrypted — the area is a guidance_area label, the seed derived.
       expect(await asAi(() => analysis.guidanceFor(id!))).toEqual({
-        areaHint: 'PROBE_TS13_AREA',
+        areaHint: 'respect and value',
         guidanceType: 'challenge_assumptions',
-        promptSeed: 'PROBE_TS13_SEED',
+        promptSeed: 'what might be different from your initial understanding',
       });
     });
 

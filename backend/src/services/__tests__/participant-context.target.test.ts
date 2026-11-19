@@ -44,7 +44,8 @@ const BOB_PRIVATE = {
 /** What is private to the SUBJECT of Ada's attempt (Bob), never to its author (P3 D8a). */
 const SUBJECT_ONLY = { gap: 'PROBE_RESULT_GAP_SUMMARY', offer: 'PROBE_OFFER_SUGGESTED' };
 /** S-class rows Ada may see. */
-const SHARED = { needText: 'SHARED_BOB_NEED_TEXT', guidance: 'GUIDANCE_FOR_ADA' };
+// guidance: the phrase of the guidance_area label the row stores (work-k5fk.9, Q4)
+const SHARED = { needText: 'SHARED_BOB_NEED_TEXT', guidance: 'respect and value' };
 const ADA_PRIVATE = {
   reflection: 'PROBE_ADA_REFLECTION_TITLE',
   reflectionMessage: 'PROBE_ADA_REFLECTION_MSG',
@@ -168,7 +169,7 @@ describeTarget('participant resolution and the single context entry point (targe
     // ...and the abstract guidance its AUTHOR (Ada) may see.
     await sql(
       `INSERT INTO reconciler_guidance (result_id, author_user_id, subject_user_id, area_hint, session_id) VALUES ($1, $2::uuid, $3::uuid, $4, $5::uuid)`,
-      [result.id, ids.adaUser, ids.bobUser, SHARED.guidance, ids.session],
+      [result.id, ids.adaUser, ids.bobUser, 'respect_value', ids.session],
     );
 
     // --- Ada's own reflection (R1: never in Bob's prompt) — NOT linked to the session ----------

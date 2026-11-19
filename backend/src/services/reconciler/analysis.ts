@@ -33,6 +33,13 @@ import type { ReconcilerResult } from '@meet-without-fear/shared';
 import { currentAttempt, sessionParties, type SessionParty } from '../empathy-store';
 import { stageAt, type MilestoneReached } from '../stage-shim';
 import type { Seat } from '../participant-resolver';
+import {
+  guidanceAreaOf,
+  guidancePhrases,
+  type AbstractGuidance,
+  type GuidanceArea,
+  type GuidanceType,
+} from './guidance-phrases';
 
 /**
  * Ruling R35: the reconciler runs as the JOB. Every read and write of the
@@ -289,16 +296,14 @@ async function extractThemes(content: string, sessionId: string, userId?: string
 // Abstract Guidance
 // ============================================================================
 
-/** The abstract hints the author may see (reconciler_guidance). */
-export interface AbstractGuidance {
-  areaHint: string | null;
-  guidanceType: string | null;
-  promptSeed: string | null;
-}
-
-/** The guidance_type enum (reconciler_guidance.guidance_type). */
-export type GuidanceType = 'challenge_assumptions' | 'explore_breadth' | 'explore_deeper_feelings';
-
+export {
+  GUIDANCE_AREA_PHRASES,
+  guidanceAreaOf,
+  guidancePhrases,
+  type AbstractGuidance,
+  type GuidanceArea,
+  type GuidanceType,
+} from './guidance-phrases';
 /**
  * Generate abstract guidance for refinement conversation. General themes,
  * never the partner's specific content.
@@ -308,21 +313,21 @@ export function generateAbstractGuidance(result: ReconcilerResult): AbstractGuid
     return { areaHint: null, guidanceType: null, promptSeed: null };
   }
 
-  let areaHint: string | null = null;
+  let area: GuidanceArea | null = null;
   if (result.gaps.missedFeelings.length > 0) {
     const feelingText = result.gaps.missedFeelings.join(' ').toLowerCase();
     if (feelingText.includes('work') || feelingText.includes('effort') || feelingText.includes('appreciate')) {
-      areaHint = 'work and effort';
+      area = 'work_effort';
     } else if (feelingText.includes('connect') || feelingText.includes('close') || feelingText.includes('together')) {
-      areaHint = 'connection and closeness';
+      area = 'connection_closeness';
     } else if (feelingText.includes('safe') || feelingText.includes('secure') || feelingText.includes('trust')) {
-      areaHint = 'safety and security';
+      area = 'safety_security';
     } else if (feelingText.includes('hear') || feelingText.includes('listen') || feelingText.includes('understand')) {
-      areaHint = 'being heard and understood';
+      area = 'heard_understood';
     } else if (feelingText.includes('respect') || feelingText.includes('value')) {
-      areaHint = 'respect and value';
+      area = 'respect_value';
     } else {
-      areaHint = 'deeper emotional experiences';
+      area = 'deeper_emotions';
     }
   }
 
@@ -331,14 +336,7 @@ export function generateAbstractGuidance(result: ReconcilerResult): AbstractGuid
   else if (result.gaps.missedFeelings.length > 2) guidanceType = 'explore_breadth';
   else guidanceType = 'explore_deeper_feelings';
 
-  const promptSeed =
-    guidanceType === 'challenge_assumptions'
-      ? 'what might be different from your initial understanding'
-      : guidanceType === 'explore_breadth'
-        ? 'other aspects of their experience'
-        : 'what might be underneath the surface';
-
-  return { areaHint, guidanceType, promptSeed };
+  return guidancePhrases({ areaHint: area, guidanceType });
 }
 
 // ============================================================================
@@ -429,11 +427,7 @@ export function dbResultToReconcilerResult(
       sharingWouldHelp: db.sharingWouldHelp,
       suggestedShareFocus: db.suggestedShareFocus,
     },
-    abstractGuidance: {
-      areaHint: guidance?.areaHint ?? null,
-      guidanceType: guidance?.guidanceType ?? null,
-      promptSeed: guidance?.promptSeed ?? null,
-    },
+    abstractGuidance: guidance ?? { areaHint: null, guidanceType: null, promptSeed: null },
   };
 }
 
@@ -447,10 +441,11 @@ export async function currentResultFor(attemptId: string): Promise<StoredReconci
 
 /** The guidance of a result (author + subject may read it). */
 export async function guidanceFor(resultId: string): Promise<AbstractGuidance | null> {
-  return reader().reconcilerGuidance.findUnique({
+  const row = await reader().reconcilerGuidance.findUnique({
     where: { resultId },
-    select: { areaHint: true, guidanceType: true, promptSeed: true },
+    select: { areaHint: true, guidanceType: true },
   });
+  return row ? guidancePhrases(row) : null;
 }
 
 /**
@@ -532,13 +527,15 @@ export async function persistAnalysis(opts: {
           ${opts.circuitBreakerTripped ?? false})
         RETURNING id`;
       const resultId = rows[0].id;
+      // Q4 (work-k5fk.9): the area is stored as its guidance_area label; the prompt seed is derived from the type.
       const g = opts.guidance;
-      if (g.areaHint || g.guidanceType || g.promptSeed) {
+      const area = guidanceAreaOf(g.areaHint);
+      if (g.areaHint && !area) logger.warn('Dropped a guidance area outside guidance_area', { attemptId: opts.attemptId });
+      if (area || g.guidanceType) {
         await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id,
-                                                         area_hint, guidance_type, prompt_seed)
+                                                         area_hint, guidance_type)
           VALUES (${resultId}::uuid, ${opts.sessionId}::uuid, ${opts.authorUserId}::uuid, ${opts.subjectUserId}::uuid,
-                  ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType}::guidance_type,
-                  ${encryptColumnValue('reconciler_guidance', 'prompt_seed', g.promptSeed)})`;
+                  ${area}::guidance_area, ${g.guidanceType}::guidance_type)`;
       }
       return resultId;
     });

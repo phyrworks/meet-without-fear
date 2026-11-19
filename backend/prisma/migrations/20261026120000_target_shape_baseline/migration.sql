@@ -148,7 +148,7 @@ REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 143 named objects, all lower-case; 156 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 144 named objects, all lower-case; 156 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -734,6 +734,9 @@ CREATE TYPE recommender_action AS ENUM ('PROCEED', 'OFFER_OPTIONAL', 'OFFER_SHAR
 COMMENT ON TYPE recommender_action IS 'The reconciler''s recommendation: proceed to the reveal, or offer the subject the option or a nudge to share context.';
 CREATE TYPE guidance_type AS ENUM ('challenge_assumptions', 'explore_breadth', 'explore_deeper_feelings');
 COMMENT ON TYPE guidance_type IS 'The refinement guidance the reconciler picked for the author, from the gap''s shape (generateAbstractGuidance in services/reconciler/analysis.ts).';
+-- work-k5fk.9 (Q4): the area the author is pointed at; the app maps each label to its phrase (reconciler/guidance-phrases.ts)
+CREATE TYPE guidance_area AS ENUM ('work_effort', 'connection_closeness', 'safety_security', 'heard_understood', 'respect_value', 'deeper_emotions');
+COMMENT ON TYPE guidance_area IS 'The coarse area the reconciler points the author at, from the feelings their attempt missed (generateAbstractGuidance); a code constant, never user content, so not encrypted (work-k5fk.9, Q4). The phrase shown is the app''s (GUIDANCE_AREA_PHRASES).';
 CREATE TYPE consent_target AS ENUM ('NEED', 'EMPATHY_ATTEMPT', 'PROPOSAL', 'SHARE_OFFER', 'REVIEW');
 COMMENT ON TYPE consent_target IS 'The kind of thing a consent row decides on; consent.target_kind is generated from which arc column is set.';
 CREATE TYPE consent_decision AS ENUM ('GRANTED', 'DENIED', 'REVOKED');
@@ -2026,9 +2029,8 @@ CREATE TABLE reconciler_guidance (
     session_id uuid7 NOT NULL,
     author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    area_hint ciphertext,
+    area_hint guidance_area,
     guidance_type guidance_type,
-    prompt_seed ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- work-k5fk.3: the subject is the result's (so the attempt's) subject; work-k5fk.9 (C9): and the author is the
@@ -2047,15 +2049,14 @@ COMMENT ON TABLE reconciler_guidance IS 'The abstract hints from a reconciler re
 COMMENT ON COLUMN reconciler_guidance.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN reconciler_guidance.author_user_id IS 'The result''s attempt''s author (work-k5fk.9, C9): (result_id, session_id, author_user_id, subject_user_id) references reconciler_result; the author''s policy reads the row.';
 COMMENT ON COLUMN reconciler_guidance.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a coarse area for the author to explore (one of six code phrases in generateAbstractGuidance).';
-COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
+COMMENT ON COLUMN reconciler_guidance.area_hint IS 'A coarse area for the author to explore (guidance_area; work-k5fk.9, Q4). The refinement prompt''s seed phrase is not stored: it is a function of guidance_type (reconciler/guidance-phrases.ts).';
 -- mwf_app: read only (the author's abstract hints); written by the job.
 GRANT SELECT ON reconciler_guidance TO app_access;
 -- mwf_ai: persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
-GRANT INSERT (result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed)
+GRANT INSERT (result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type)
   ON reconciler_guidance TO ai_access;
 -- mwf_ai: analysis.ts guidanceFor: the guidance of a cached result
-GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO ai_access;
+GRANT SELECT (result_id, area_hint, guidance_type) ON reconciler_guidance TO ai_access;
 
 CREATE TABLE consent (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -6589,7 +6590,7 @@ BEGIN
     AND a.atttypid = 'public.uuid7'::regtype;
   IF n <> 156 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 156', n; END IF;
 
-  -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 43 text
+  -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 41 text
   -- columns typed ciphertext and 5 text[] columns CHECKed by
   -- app.all_ciphertext. The jest test encryption-at-rest-schema ties both sets
   -- to the map by name; these counts catch a retype here.
@@ -6597,7 +6598,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.ciphertext'::regtype;
-  IF n <> 43 THEN RAISE EXCEPTION 'step 20: % ciphertext columns, expected 43', n; END IF;
+  IF n <> 41 THEN RAISE EXCEPTION 'step 20: % ciphertext columns, expected 41', n; END IF;
   SELECT count(*) INTO n FROM pg_constraint k
   WHERE k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ 'app\.all_ciphertext\(';
   IF n <> 5 THEN RAISE EXCEPTION 'step 20: % all_ciphertext CHECKs, expected 5', n; END IF;

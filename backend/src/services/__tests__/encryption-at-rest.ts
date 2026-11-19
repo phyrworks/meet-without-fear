@@ -123,8 +123,6 @@ export const COVERAGE: Record<string, string[]> = {
     'reconciler_result.suggested_share_focus',
     'reconciler_result.suggested_share_content',
     'reconciler_result.suggested_share_reason',
-    'reconciler_guidance.area_hint',
-    'reconciler_guidance.prompt_seed',
   ],
   repair: [
     'need.label',

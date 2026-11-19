@@ -71,7 +71,6 @@
  * |-----------------------------------------------|----------------|-------------|
  * | invitation.decline_reason                     | text           | session     |
  * | reconciler_result.most_important_gap, rationale, suggested_share_focus, suggested_share_content, suggested_share_reason | text | participant (subject) |
- * | reconciler_guidance.area_hint, prompt_seed    | text           | participant (author) |
  * | proposal.duration, measure_of_success, removal_reason | text   | session     |
  * | proposal.unresolved_need_labels               | text[]         | session     |
  * | proposal_revision.before, after               | jsonb (envelope) | session   |
@@ -82,7 +81,9 @@
  * Left plain, with why: proposal_revision.reason — by ruling R47 it holds only
  * the closed set of app markers in services/proposal-revision-reasons.ts
  * (filtered by value in controllers/stage4.ts); every user- or model-derived
- * text of a revision is written into its encrypted `after`/`before`; reconciler_guidance.guidance_type, reminder.cadence (categories);
+ * text of a revision is written into its encrypted `after`/`before`; reconciler_guidance.guidance_type and
+ * area_hint (enums: code constants, never user content — work-k5fk.9 Q4; prompt_seed is derived, not stored),
+ * reminder.cadence (categories);
  * reflection.theme, takeaway.theme (taxonomy labels SQL groups on —
  * v_reflection_theme); participant.display_name, relationship_member.nickname,
  * user.* (identity, read by views and the dashboard search); user_device.push_token
@@ -210,14 +211,6 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
       suggestedShareFocus: text('suggested_share_focus', 'participant', undefined, true),
       suggestedShareContent: text('suggested_share_content', 'participant', undefined, true),
       suggestedShareReason: text('suggested_share_reason', 'participant', undefined, true),
-    },
-  },
-  ReconcilerGuidance: {
-    table: 'reconciler_guidance',
-    // R46: the LLM's free-text hints about the subject's material (guidance_type is a category, left plain)
-    fields: {
-      areaHint: text('area_hint', 'participant', undefined, true),
-      promptSeed: text('prompt_seed', 'participant', undefined, true),
     },
   },
   ContextShareOffer: {

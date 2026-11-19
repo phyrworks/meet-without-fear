@@ -73,9 +73,10 @@ const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
  * UUID7_COLUMNS, checkTables() counts them and the trailer's step-20 assertion
  * gets the numbers; encryption-at-rest-schema.target.test.ts ties the catalog
  * to the map itself, in both directions.
- * 43 since work-k5fk.9 (Q9): need_disposition.note went (-1).
+ * 43 since work-k5fk.9 (Q9): need_disposition.note went (-1); 41 (Q4): reconciler_guidance.area_hint became
+ * the guidance_area enum and prompt_seed went (-2).
  */
-export const CIPHERTEXT_COLUMNS = 43;
+export const CIPHERTEXT_COLUMNS = 41;
 export const CIPHERTEXT_ARRAYS = 5;
 const CIPHERTEXT_PLACEHOLDER = '@@CIPHERTEXT_COLUMNS@@';
 const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';

@@ -528,9 +528,8 @@ model ReconcilerGuidance {
   sessionId     String        @map("session_id") @db.Uuid
   authorUserId  String        @map("author_user_id") @db.Uuid
   subjectUserId String        @map("subject_user_id") @db.Uuid
-  areaHint      String?       @map("area_hint")
+  areaHint      GuidanceArea? @map("area_hint")
   guidanceType  GuidanceType? @map("guidance_type")
-  promptSeed    String?       @map("prompt_seed")
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   result             ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -1440,6 +1439,17 @@ enum GuidanceType {
   explore_deeper_feelings
 
   @@map("guidance_type")
+}
+
+enum GuidanceArea {
+  work_effort
+  connection_closeness
+  safety_security
+  heard_understood
+  respect_value
+  deeper_emotions
+
+  @@map("guidance_area")
 }
 
 enum ConsentTarget {

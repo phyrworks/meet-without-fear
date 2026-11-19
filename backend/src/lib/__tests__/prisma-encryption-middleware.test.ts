@@ -116,8 +116,6 @@ const R46_AMENDED: Record<string, string> = {
   'reconciler_result.suggested_share_focus': 'participant',
   'reconciler_result.suggested_share_content': 'participant',
   'reconciler_result.suggested_share_reason': 'participant',
-  'reconciler_guidance.area_hint': 'participant',
-  'reconciler_guidance.prompt_seed': 'participant',
   'proposal.duration': 'session',
   'proposal.measure_of_success': 'session',
   'proposal.removal_reason': 'session',

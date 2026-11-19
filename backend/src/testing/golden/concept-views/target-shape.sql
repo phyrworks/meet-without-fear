@@ -213,9 +213,22 @@ SELECT
   g.result_id,
   md5('participant:' || g.session_id::text || ':' || g.author_user_id::text)::uuid AS author_participant_id,
   md5('participant:' || g.session_id::text || ':' || g.subject_user_id::text)::uuid AS subject_participant_id,
-  g.area_hint,
+  -- work-k5fk.9 (Q4): the stored label and the derived seed, as the phrases the current shape stored
+  -- (reconciler/guidance-phrases.ts)
+  CASE g.area_hint
+    WHEN 'work_effort' THEN 'work and effort'
+    WHEN 'connection_closeness' THEN 'connection and closeness'
+    WHEN 'safety_security' THEN 'safety and security'
+    WHEN 'heard_understood' THEN 'being heard and understood'
+    WHEN 'respect_value' THEN 'respect and value'
+    WHEN 'deeper_emotions' THEN 'deeper emotional experiences'
+  END AS area_hint,
   g.guidance_type,
-  g.prompt_seed,
+  CASE g.guidance_type
+    WHEN 'challenge_assumptions' THEN 'what might be different from your initial understanding'
+    WHEN 'explore_breadth' THEN 'other aspects of their experience'
+    WHEN 'explore_deeper_feelings' THEN 'what might be underneath the surface'
+  END AS prompt_seed,
   g.created_at AT TIME ZONE 'UTC' AS created_at
 FROM reconciler_guidance g;
 
