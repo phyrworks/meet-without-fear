@@ -2008,7 +2008,6 @@ CREATE TABLE need_disposition (
     user_id uuid7 NOT NULL,
     status need_disposition_status NOT NULL DEFAULT 'OPEN',
     is_current boolean NOT NULL DEFAULT false,
-    note ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -2023,7 +2022,6 @@ COMMENT ON TABLE need_disposition IS 'How a participant dispositions a shared ne
 COMMENT ON COLUMN need_disposition.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN need_disposition.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
-COMMENT ON COLUMN need_disposition.note IS 'encrypted (participant): a note on the disposition; no writer sets it today.';
 -- mwf_app: the caller's Stage 4 walkthrough dispositions (stage4-walkthrough.ts), including un-declining (DELETE).
 GRANT SELECT ON need_disposition TO app_access;
 GRANT INSERT (session_id, user_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO app_access;
@@ -2612,7 +2610,6 @@ CREATE TABLE brain_activity (
     input jsonb,
     output jsonb,
     metadata jsonb,
-    structured_output jsonb,
     token_count_input integer NOT NULL DEFAULT 0,
     token_count_output integer NOT NULL DEFAULT 0,
     duration_ms integer NOT NULL DEFAULT 0,
@@ -2626,7 +2623,6 @@ CREATE TABLE brain_activity (
     CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
     CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
     CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
-    CHECK (structured_output IS NULL OR jsonb_typeof(structured_output) IN ('object', 'array')),
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
     FOREIGN KEY (session_id, participant_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
@@ -2657,12 +2653,12 @@ GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_
 -- pipeline trace into its metadata (metadata holds cache/tool/trace telemetry, never a prompt). Never input / output.
 GRANT SELECT (id, session_id, turn_id, call_type, metadata, created_at) ON brain_activity TO ai_access;
 -- mwf_ai: completeActivity / failActivity: the outcome of the call
-GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
+GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, metadata)
   ON brain_activity TO ai_access;
 -- mwf_worker: data-retention: the purge and delete windows (WHERE created_at < …, session_id IS NULL); the short-retention
--- purge sets the four blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
+-- purge sets the three blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
 GRANT SELECT (session_id, created_at) ON brain_activity TO worker_access;
-GRANT UPDATE (input, output, metadata, structured_output) ON brain_activity TO worker_access;
+GRANT UPDATE (input, output, metadata) ON brain_activity TO worker_access;
 GRANT DELETE ON brain_activity TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON brain_activity TO ops_access;

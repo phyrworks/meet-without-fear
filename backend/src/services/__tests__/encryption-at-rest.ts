@@ -130,7 +130,6 @@ export const COVERAGE: Record<string, string[]> = {
     'need.label',
     'need.evidence',
     'need_share.shared_text',
-    'need_disposition.note',
     'proposal.description',
     'proposal_choice.note',
     'agreement.description',

@@ -704,7 +704,6 @@ model NeedDisposition {
   userId    String                @map("user_id") @db.Uuid
   status    NeedDispositionStatus @default(OPEN)
   isCurrent Boolean               @default(false) @map("is_current")
-  note      String?
   createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1246,7 +1245,6 @@ model BrainActivity {
   input             Json?
   output            Json?
   metadata          Json?
-  structuredOutput  Json?          @map("structured_output")
   tokenCountInput   Int            @default(0) @map("token_count_input")
   tokenCountOutput  Int            @default(0) @map("token_count_output")
   durationMs        Int            @default(0) @map("duration_ms")

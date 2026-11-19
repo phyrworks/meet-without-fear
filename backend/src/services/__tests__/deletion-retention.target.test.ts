@@ -216,7 +216,7 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
     const res = await http(bob, 'delete', '/auth/me');
     expect(res.status).toBe(200);
     // The cross-participant row is gone with Bob's leave (R17: the session's unattributed rows);
-    // no row of the session carries Bob's line in output or structured_output any more except the
+    // no row of the session carries Bob's line in output any more except the
     // one attributed to Ada's own turn (a fixture probe, not his content in production).
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-reconciler'`)).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-own-turn'`)).toBe(1);

@@ -51,7 +51,11 @@ export interface BrainActivity {
   metadata: any;
   /** Typed call type for dashboard display */
   callType?: BrainActivityCallType | null;
-  /** Structured output data for typed display components */
+  /**
+   * Structured output data for typed display components. The backend no longer sends it: the column
+   * brain_activity.structured_output never had a writer and is dropped (work-k5fk.9, J1); the components
+   * fall back to `{}`.
+   */
   structuredOutput?: any;
   tokenCountInput: number;
   tokenCountOutput: number;

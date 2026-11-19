@@ -2904,8 +2904,8 @@ CREATE POLICY ai_unattributed ON brain_activity TO ai_access
 COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
-  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL AND structured_output IS NULL);
-COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the four blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
+  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL);
+COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the three blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
 CREATE POLICY worker_delete ON brain_activity FOR DELETE TO worker_access USING (true);
 CREATE POLICY ops_read ON brain_activity FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON brain_activity TO mwf_definer USING (true) WITH CHECK (true);

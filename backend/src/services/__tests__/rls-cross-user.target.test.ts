@@ -312,7 +312,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         await code(
           'mwf_worker',
           null,
-          `UPDATE brain_activity SET input = NULL, output = NULL, metadata = NULL, structured_output = NULL WHERE session_id = $1`,
+          `UPDATE brain_activity SET input = NULL, output = NULL, metadata = NULL WHERE session_id = $1`,
           [session],
         ),
       ).toBe('ok');

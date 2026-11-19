@@ -113,7 +113,6 @@ export class BrainService {
       input: params.input ?? {},
       output: null,
       metadata: params.metadata ?? {},
-      structuredOutput: null,
       tokenCountInput: 0,
       tokenCountOutput: 0,
       durationMs: 0,
@@ -165,7 +164,6 @@ export class BrainService {
       cost?: number;
       durationMs?: number;
       metadata?: unknown;
-      structuredOutput?: unknown;
     },
   ): Promise<BrainActivity | null> {
     if (!activityId) return null;
@@ -183,8 +181,7 @@ export class BrainService {
             cost = ${result.cost ?? 0},
             duration_ms = ${result.durationMs ?? 0},
             status = 'COMPLETED'::activity_status,
-            completed_at = ${completedAt},
-            structured_output = ${json(result.structuredOutput)}::jsonb
+            completed_at = ${completedAt}
             ${result.metadata ? Prisma.sql`, metadata = ${json(result.metadata)}::jsonb` : Prisma.empty}
         WHERE id = ${activityId}::uuid`,
       );

@@ -46,7 +46,6 @@
  * | need.label                                    | text           | participant |
  * | need.evidence                                 | text[]         | participant |
  * | need_share.shared_text                        | text           | session     |
- * | need_disposition.note                         | text           | participant |
  * | proposal.description                          | text           | session     |
  * | proposal_choice.note                          | text           | session     |
  * | agreement.description                         | text           | session     |
@@ -235,7 +234,6 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
     fields: { label: text('label', 'participant'), evidence: textArray('evidence', 'participant') },
   },
   NeedShare: { table: 'need_share', fields: { sharedText: text('shared_text', 'session') } },
-  NeedDisposition: { table: 'need_disposition', fields: { note: text('note', 'participant') } },
   Proposal: {
     table: 'proposal',
     fields: {

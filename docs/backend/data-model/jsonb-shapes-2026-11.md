@@ -5,7 +5,7 @@ description: Every jsonb column of the target shape, who writes it, its actual s
 ---
 # jsonb documents — shapes and validation (work-k5fk.8, 2026-11)
 
-The target shape (`schema-target-2026-10.md`) has **11 jsonb columns** in 7 tables. This page
+The target shape (`schema-target-2026-10.md`) has **10 jsonb columns** in 7 tables (11 until work-k5fk.9 dropped `brain_activity.structured_output`, J1: no writer ever set it). This page
 records, for each one, who writes it, the shape the code actually writes (read from the writers,
 not the spec), and the validation chosen. The DDL is `backend/scripts/target-shape/tables.sql`
 (the "jsonb documents" block and each table) and `trailer.sql` (validator functions, trigger,
@@ -24,7 +24,7 @@ step-20 assertions).
 | `reflection.summary_doc` | `conversation-summarizer.ts` (inner-thoughts summary; mwf_app, Prisma update) | envelope of `{ text, messageCount, oldestMessageAt, newestMessageAt, tokenCount, generatedAt, keyThemes[], emotionalJourney, unresolvedTopics[] }` | typeof CHECK + **envelope trigger** |
 | `proposal_revision.before` | `stage4-capture.service.ts` (mwf_app, Prisma create); `stage4-store.ts` conversion (mwf_worker, raw) | envelope of the proposal fields before the change, or `{ status }` at conversion; often NULL | typeof CHECK + **envelope trigger** |
 | `proposal_revision.after` | `controllers/stage4.ts` (legacy agreement marks `{ <mark>: true, type, followUpDate }` / `{ <mark>: true, confirmed }`), `stage4-subchat.service.ts` (`{ description, duration, measureOfSuccess }`), `stage4-capture.service.ts` (fields + `capturedFromUserMessage`, `reasonText`), `stage4-store.ts` (`{ agreementId, status }`) | envelope of one of those | typeof CHECK + **envelope trigger** |
-| `brain_activity.input`, `.output`, `.metadata`, `.structured_output` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: input `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / retrieval queries; output `{ text, stopReason }` / `{ success }`; metadata `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | typeof CHECK only (telemetry) |
+| `brain_activity.input`, `.output`, `.metadata` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: input `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / retrieval queries; output `{ text, stopReason }` / `{ success }`; metadata `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | typeof CHECK only (telemetry) |
 
 Writers in the test suites follow the same shapes (golden `tombstone` and the target tests seed
 `ai_memory` and `user_preferences` rows directly; the tombstone seed's GLOBAL_FACTS fact was a bare

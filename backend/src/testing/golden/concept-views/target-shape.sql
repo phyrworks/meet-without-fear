@@ -302,7 +302,8 @@ SELECT
   d.need_id,
   d.status::text AS status,
   d.is_current,
-  d.note
+  -- work-k5fk.9 (Q9): the column is dropped (it had no writer); the concept keeps it, always NULL
+  NULL::text AS note
 FROM need_disposition d;
 
 
@@ -515,7 +516,8 @@ SELECT
   b.input,
   b.output,
   b.metadata,
-  b.structured_output,
+  -- work-k5fk.9 (J1): the column is dropped (no writer ever set it); the concept keeps it, always NULL
+  NULL::jsonb AS structured_output,
   b.token_count_input,
   b.token_count_output,
   b.duration_ms,

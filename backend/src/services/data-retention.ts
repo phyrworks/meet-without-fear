@@ -41,7 +41,7 @@ const daysAgo = (now: Date, days: number): Date => new Date(now.getTime() - days
 /**
  * Run the data retention policy (idempotent).
  *
- * Phase 1: Nullify input/output/metadata/structured_output past the purge windows
+ * Phase 1: Nullify input/output/metadata past the purge windows
  * Phase 2: Delete records older than deleteDays
  */
 export async function enforceDataRetention(now: Date = new Date()): Promise<RetentionResult> {
@@ -52,7 +52,7 @@ export async function enforceDataRetention(now: Date = new Date()): Promise<Rete
 
   // Phase 1: Purge blobs (keep the row for cost/usage stats)
   const blobsPurged = await job.$executeRaw`UPDATE brain_activity
-    SET input = NULL, output = NULL, metadata = NULL, structured_output = NULL
+    SET input = NULL, output = NULL, metadata = NULL
     WHERE created_at >= ${deleteDate}
       AND (created_at < ${purgeDate} OR (session_id IS NULL AND created_at < ${sessionlessCutoff}))`;
 

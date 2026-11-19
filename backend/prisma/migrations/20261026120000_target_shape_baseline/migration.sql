@@ -2161,7 +2161,6 @@ CREATE TABLE need_disposition (
     user_id uuid7 NOT NULL,
     status need_disposition_status NOT NULL DEFAULT 'OPEN',
     is_current boolean NOT NULL DEFAULT false,
-    note ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -2176,7 +2175,6 @@ COMMENT ON TABLE need_disposition IS 'How a participant dispositions a shared ne
 COMMENT ON COLUMN need_disposition.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN need_disposition.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
-COMMENT ON COLUMN need_disposition.note IS 'encrypted (participant): a note on the disposition; no writer sets it today.';
 -- mwf_app: the caller's Stage 4 walkthrough dispositions (stage4-walkthrough.ts), including un-declining (DELETE).
 GRANT SELECT ON need_disposition TO app_access;
 GRANT INSERT (session_id, user_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO app_access;
@@ -2765,7 +2763,6 @@ CREATE TABLE brain_activity (
     input jsonb,
     output jsonb,
     metadata jsonb,
-    structured_output jsonb,
     token_count_input integer NOT NULL DEFAULT 0,
     token_count_output integer NOT NULL DEFAULT 0,
     duration_ms integer NOT NULL DEFAULT 0,
@@ -2779,7 +2776,6 @@ CREATE TABLE brain_activity (
     CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
     CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
     CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
-    CHECK (structured_output IS NULL OR jsonb_typeof(structured_output) IN ('object', 'array')),
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
     FOREIGN KEY (session_id, participant_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
@@ -2810,12 +2806,12 @@ GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_
 -- pipeline trace into its metadata (metadata holds cache/tool/trace telemetry, never a prompt). Never input / output.
 GRANT SELECT (id, session_id, turn_id, call_type, metadata, created_at) ON brain_activity TO ai_access;
 -- mwf_ai: completeActivity / failActivity: the outcome of the call
-GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
+GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, metadata)
   ON brain_activity TO ai_access;
 -- mwf_worker: data-retention: the purge and delete windows (WHERE created_at < …, session_id IS NULL); the short-retention
--- purge sets the four blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
+-- purge sets the three blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
 GRANT SELECT (session_id, created_at) ON brain_activity TO worker_access;
-GRANT UPDATE (input, output, metadata, structured_output) ON brain_activity TO worker_access;
+GRANT UPDATE (input, output, metadata) ON brain_activity TO worker_access;
 GRANT DELETE ON brain_activity TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON brain_activity TO ops_access;
@@ -5852,8 +5848,8 @@ CREATE POLICY ai_unattributed ON brain_activity TO ai_access
 COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
-  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL AND structured_output IS NULL);
-COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the four blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
+  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL);
+COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the three blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
 CREATE POLICY worker_delete ON brain_activity FOR DELETE TO worker_access USING (true);
 CREATE POLICY ops_read ON brain_activity FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON brain_activity TO mwf_definer USING (true) WITH CHECK (true);
@@ -6593,7 +6589,7 @@ BEGIN
     AND a.atttypid = 'public.uuid7'::regtype;
   IF n <> 156 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 156', n; END IF;
 
-  -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 44 text
+  -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 43 text
   -- columns typed ciphertext and 5 text[] columns CHECKed by
   -- app.all_ciphertext. The jest test encryption-at-rest-schema ties both sets
   -- to the map by name; these counts catch a retype here.
@@ -6601,7 +6597,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.ciphertext'::regtype;
-  IF n <> 44 THEN RAISE EXCEPTION 'step 20: % ciphertext columns, expected 44', n; END IF;
+  IF n <> 43 THEN RAISE EXCEPTION 'step 20: % ciphertext columns, expected 43', n; END IF;
   SELECT count(*) INTO n FROM pg_constraint k
   WHERE k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ 'app\.all_ciphertext\(';
   IF n <> 5 THEN RAISE EXCEPTION 'step 20: % all_ciphertext CHECKs, expected 5', n; END IF;
