@@ -60,7 +60,12 @@ describe production.
   FINDING, work-k5fk.10.33) unattributed ones.
 - `worker_access` — `worker_session` (scoped) on the Stage 4 closure's tables and on the follow-ups it
   schedules; `worker_all` elsewhere (retention, due follow-ups / reminders, push tokens cross sessions).
-- `ops_access` — `ops_read`: SELECT on every row of its tables. `mwf_definer` — `definer_all`.
+- `ops_access` — `ops_read`: SELECT on every row of its tables, but never a conversation line: its grants on
+  `message` and `reflection_message` leave out `content` (owner decision OD-1, work-k5fk.9), so the Neural
+  Monitor counts turns and shows telemetry, with no transcript panel. `brain_activity.output` (the model's text)
+  is a jsonb envelope sealed by the AI's writer; the dashboard opens it in the app with the field key, which never
+  enters the database. Still readable by ops, for the owner: `ai_memory.doc` (leaf-encrypted, opened in the app)
+  and a retrieval row's `brain_activity.input` search queries. `mwf_definer` — `definer_all`.
 - The database's ACL: PUBLIC has no CONNECT / TEMPORARY; the active capabilities have CONNECT.
 - Tests: `retire-mwf-job.target.test.ts` ("row-level security (9c)") and `job-path.target.test.ts`
   pin the scoped reads, the owner reading nothing and the dashboard's reach;

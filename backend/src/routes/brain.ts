@@ -10,7 +10,7 @@ import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
 import { fieldEncryptionEnabled } from '../utils/field-encryption';
-import { foldEmail, formatMessageId } from '@meet-without-fear/shared';
+import { foldEmail } from '@meet-without-fear/shared';
 
 /**
  * A brain_activity jsonb column (input / output / metadata) as the dashboard reads it: arbitrary
@@ -971,30 +971,8 @@ router.get('/activity/:sessionId', async (req, res) => {
       })
     ).map(activityDTO);
 
-    // Partner session: every participant's own chat turns (their MAIN conversation)
-    let messages: Array<{ id: string; content: string; timestamp: Date; senderId: string | null }> = (
-      await db().message.findMany({
-        where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', sessionId } },
-        orderBy: [{ createdAt: 'asc' }, { conversationId: 'asc' }, { seq: 'asc' }],
-        select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
-      })
-    ).map(m => ({
-      id: formatMessageId(m.conversationId, m.seq),
-      content: m.content,
-      timestamp: m.createdAt,
-      senderId: m.senderUserId ?? null,
-    }));
-
-    // If no messages found, it might be a reflection
-    if (messages.length === 0) {
-      messages = (
-        await db().reflectionMessage.findMany({
-          where: { reflectionId: sessionId, role: 'USER' },
-          orderBy: { createdAt: 'asc' },
-          select: { id: true, content: true, createdAt: true },
-        })
-      ).map(m => ({ id: m.id, content: m.content, timestamp: m.createdAt, senderId: null }));
-    }
+    // No transcript: mwf_ops holds no grant on message.content or reflection_message.content (owner decision OD-1,
+    // work-k5fk.9), so the dashboard shows telemetry only.
 
     // Notable facts: every participant's NOTABLE_FACTS document of this session (ai_memory)
     const facts = await db().aiMemory.findMany({
@@ -1012,7 +990,6 @@ router.get('/activity/:sessionId', async (req, res) => {
 
     return successResponse(res, {
       activities,
-      messages,
       notableFacts,
       summary: {
         totalCost,

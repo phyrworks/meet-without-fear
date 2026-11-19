@@ -1,5 +1,6 @@
 import { logger } from '../lib/logger';
 import { getAiPrisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { withSessionScope } from '../lib/request-context';
 import { getRequestContext } from '../lib/request-context';
 import { getAbly } from '../services/realtime';
@@ -175,7 +176,7 @@ export class BrainService {
         sessionId,
         async () =>
           await getAiPrisma().$executeRaw`UPDATE brain_activity
-        SET output = ${json(result.output ?? {})}::jsonb,
+        SET output = ${JSON.stringify(encryptColumnValue('brain_activity', 'output', result.output ?? {}))}::jsonb,
             token_count_input = ${result.tokenCountInput ?? 0},
             token_count_output = ${result.tokenCountOutput ?? 0},
             cost = ${result.cost ?? 0},

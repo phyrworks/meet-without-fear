@@ -73,7 +73,7 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     const want = (kind: string) =>
       sorted(ENCRYPTED_COLUMNS.filter(e => e.kind === kind).map(e => key(e.table, e.column)));
     expect(sorted(enveloped.map(r => key(r.t, r.c)))).toEqual(want('jsonb-envelope'));
-    expect(want('jsonb-envelope')).toHaveLength(5);
+    expect(want('jsonb-envelope')).toHaveLength(6); // brain_activity.output since work-k5fk.9 (OD-1)
     const triggered = await run.sql<{ t: string }>(
       `SELECT c.relname AS t FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid WHERE g.tgname = 't_doc_schema'`,
     );

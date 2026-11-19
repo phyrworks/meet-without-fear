@@ -331,10 +331,10 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- A strict variant (every value an envelope) is planned for when
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
 -- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
--- CHECK (app.all_ciphertext(col)) instead. Of the six jsonb columns in the map,
--- the five jsonb-envelope ones carry the t_jsonb_envelope trigger and
--- ai_memory.doc (jsonb-leaves) the structural t_doc_schema trigger (work-k5fk.8,
--- trailer.sql T5); all six have a COMMENT starting 'encrypted'.
+-- CHECK (app.all_ciphertext(col)) instead. Of the seven jsonb columns in the map,
+-- the six jsonb-envelope ones carry the t_jsonb_envelope trigger (brain_activity.output
+-- since work-k5fk.9, OD-1) and ai_memory.doc (jsonb-leaves) the structural t_doc_schema
+-- trigger (work-k5fk.8, trailer.sql T5); all seven have a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
          OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
@@ -456,7 +456,7 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- jsonb documents (work-k5fk.8). The shapes, their writers and why each column
 -- is validated the way it is: docs/backend/data-model/jsonb-shapes-2026-11.md.
 --  * Every jsonb column keeps its jsonb_typeof CHECK (step 20).
---  * The five jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
+--  * The six jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
 --    t_jsonb_envelope BEFORE trigger (trailer.sql T5): a sealed document is
 --    exactly {"$enc": <a v1 ciphertext>}. A trigger, not a CHECK: a CHECK
 --    refusal's DETAIL ("Failing row contains …") would echo the row — the
@@ -467,8 +467,9 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 --    of ai_memory.doc (its string leaves are encrypted; its keys, numbers and
 --    arrays are not) — are validated by a BEFORE trigger (trailer.sql T5)
 --    against app.json_schema, by the row's doc_schema_version.
---  * brain_activity.* stays at jsonb_typeof: telemetry, written by the job
---    only, read by the ops dashboard; its shape is each call site's.
+--  * brain_activity.input / metadata stay at jsonb_typeof: telemetry, written
+--    by the AI only, read by the ops dashboard; its shape is each call site's.
+--    brain_activity.output is a jsonb envelope (owner decision OD-1, work-k5fk.9).
 -- ----------------------------------------------------------------------------
 
 -- A JSON-schema version: 1, 2, … per schema name.
@@ -1450,8 +1451,11 @@ GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, cont
   ON message TO ai_access;
 -- mwf_worker: session-retention: the latest message of a stale candidate (max(created_at) by session_id). Never content.
 GRANT SELECT (session_id, created_at) ON message TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON message TO ops_access;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it — never content
+-- (owner decision OD-1, work-k5fk.9: the transcript panel is gone; the dashboard counts turns and reads their keys).
+GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, refining_need_id,
+              source_attempt_id, created_at)
+  ON message TO ops_access;
 
 CREATE TABLE conversation_read_state (
     session_id uuid7 NOT NULL,
@@ -2599,8 +2603,9 @@ COMMENT ON COLUMN reflection_message.content IS 'encrypted (user): the line''s t
 -- mwf_app: the turns of the caller's reflection (both the user's and the AI reply, written on the request path). Append-only.
 GRANT SELECT ON reflection_message TO app_access;
 GRANT INSERT (reflection_id, role, content, created_at) ON reflection_message TO app_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON reflection_message TO ops_access;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts) counts a reflection's turns — never content (owner decision
+-- OD-1, work-k5fk.9).
+GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO ops_access;
 
 CREATE TABLE takeaway (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2823,6 +2828,7 @@ COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retri
 COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, participant_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn.';
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
+COMMENT ON COLUMN brain_activity.output IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: the call''s outcome — the model''s text and stop reason, a retrieval''s matches; the participant key when attributed, the session key for a call over both parties, the user key for a reflection''s (owner decision OD-1, work-k5fk.9). The ops dashboard opens it in the app; the key never enters the database.';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
@@ -3154,7 +3160,7 @@ COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'Tr
 REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO app_access;
 
--- The envelope rule for the five jsonb-envelope columns (t_jsonb_envelope, T5).
+-- The envelope rule for the six jsonb-envelope columns (t_jsonb_envelope, T5; brain_activity.output since work-k5fk.9).
 -- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
 -- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
 -- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
@@ -3187,10 +3193,12 @@ CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
   $$;
 COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
 -- app_access, worker_access (mwf_app's and mwf_worker's: proposal_revision.before / after, and the app's enveloped
--- columns): the t_jsonb_envelope trigger calls it with the writer's rights.
+-- columns), ai_access (mwf_ai's: brain_activity.output, brain-service completeActivity; owner decision OD-1,
+-- work-k5fk.9): the t_jsonb_envelope trigger calls it with the writer's rights.
 REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO worker_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO ai_access;
 
 -- The TS-1 helpers over participant. (work-k5fk.3: app.is_co_participant and
 -- app.my_participant went with participant.id: every session-scoped row carries
@@ -5343,6 +5351,9 @@ COMMENT ON TRIGGER t_jsonb_envelope ON public.reflection IS 'summary_doc is a we
 CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF doc ON public.feature_state
   FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('doc');
 COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF output ON public.brain_activity
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('output');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.brain_activity IS 'output is a well-formed envelope (or keyless plaintext); owner decision OD-1, work-k5fk.9.';
 
 -- ---------------------------------------------------------------------------
 -- work-k5fk.2: who is in a session, without relationship. Four trigger
@@ -5840,8 +5851,8 @@ $$;
 --                 tokens) read and change rows of every session — the grants narrow them to columns, and where a
 --                 call site writes one value only, the policy says so (work-k5fk.10.29: worker_clear_token,
 --                 worker_purge_blobs, worker_purge).
---   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions; Q10 narrows message.content
---                 at §7 row 10, by column).
+--   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions); its grants never include
+--                 message.content or reflection_message.content (owner decision OD-1, work-k5fk.9 — §7 row 10).
 --   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
 --   auth_access, clinician_access: no table grant, so no policy.
 -- Each table below says which capabilities hold which commands (S I U D) on it.
@@ -6576,7 +6587,7 @@ BEGIN
 
   -- work-k5fk.8: every jsonb-envelope column (its COMMENT says 'jsonb envelope') is guarded
   -- by a t_jsonb_envelope trigger that both fires on it (UPDATE OF) and checks it (an
-  -- argument); no other column is; there are 5 (gen-target-migration.ts
+  -- argument); no other column is; there are 6 (gen-target-migration.ts
   -- JSONB_ENVELOPES; the jest test encryption-at-rest-schema ties the set to SENSITIVE_FIELD_MAP).
   SELECT string_agg(coalesce(e.col, g.col), ', ' ORDER BY coalesce(e.col, g.col)) INTO bad
   FROM (SELECT c.relname || '.' || a.attname AS col
@@ -6594,7 +6605,7 @@ BEGIN
   WHERE e.col IS NULL OR g.col IS NULL;
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb envelope column(s) and t_jsonb_envelope triggers differ: %', bad; END IF;
   SELECT sum(t.tgnargs) INTO n FROM pg_catalog.pg_trigger t WHERE t.tgname = 't_jsonb_envelope';
-  IF n IS DISTINCT FROM 5 THEN RAISE EXCEPTION 'step 20: t_jsonb_envelope guards % columns, expected 5', n; END IF;
+  IF n IS DISTINCT FROM 6 THEN RAISE EXCEPTION 'step 20: t_jsonb_envelope guards % columns, expected 6', n; END IF;
   -- and no CHECK echoes a refused envelope's row: the rule is the trigger's alone.
   SELECT string_agg(conrelid::regclass::text || '.' || conname, ', ') INTO bad FROM pg_catalog.pg_constraint
   WHERE contype = 'c' AND pg_get_constraintdef(oid) ~ 'jsonb_envelope';

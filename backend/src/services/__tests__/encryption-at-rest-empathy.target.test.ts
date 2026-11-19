@@ -19,7 +19,7 @@
 
 import { COVERAGE, expectSealed } from './encryption-at-rest';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndBob, httpAs, openTargetRun, opsUrlFor, type TargetRun } from './target-roles';
 import crypto from 'crypto';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
@@ -441,6 +441,47 @@ describeTarget(
       expect(s?.topicFrame).toBe('PROBE_TS13_TOPIC chores');
       proven.add('invitation.invitee_name');
       proven.add('session.topic_frame');
+    });
+
+    // Owner decision OD-1 (work-k5fk.9): the ops dashboard keeps its telemetry but reads no content in the database —
+    // no message or reflection line, and the model's output only sealed, opened by the app's key.
+    it('OD-1: brain_activity.output is sealed and the ops dashboard opens it in the app; mwf_ops cannot read a line', async () => {
+      const { brainService } = await import('../brain-service');
+      const activity = await asAi(() =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          activityType: 'LLM_CALL',
+          model: 'claude-sonnet',
+          input: { operation: 'probe' },
+        }),
+      );
+      expect(activity.id).not.toBe('');
+      await asAi(() =>
+        brainService.completeActivity(activity.id, { output: { text: 'PROBE_OD1_OUTPUT', stopReason: 'end' } }),
+      );
+      const [sealed] = await expectSealed(run, 'brain_activity', 'output', `id = $1`, [activity.id]);
+      expect(JSON.stringify(sealed)).not.toContain('PROBE_OD1_OUTPUT');
+      proven.add('brain_activity.output');
+
+      process.env.OPS_DATABASE_URL = opsUrlFor(run.fx.target, run.fx.database);
+      const { getOpsPrisma } = await import('../../lib/prisma');
+      const read = await getOpsPrisma().brainActivity.findUnique({
+        where: { id: activity.id },
+        select: { output: true },
+      });
+      expect(read?.output).toEqual({ text: 'PROBE_OD1_OUTPUT', stopReason: 'end' });
+
+      const opsCode = async (sql: string) =>
+        run.as('mwf_ops', null, sql).then(
+          () => 'ok',
+          (e: { code?: string }) => e.code,
+        );
+      expect({
+        messageKeys: await opsCode(`SELECT conversation_id, seq, role FROM message LIMIT 1`),
+        messageContent: await opsCode(`SELECT content FROM message LIMIT 1`),
+        reflectionTurns: await opsCode(`SELECT count(*) FROM reflection_message`),
+        reflectionContent: await opsCode(`SELECT content FROM reflection_message LIMIT 1`),
+      }).toEqual({ messageKeys: 'ok', messageContent: '42501', reflectionTurns: 'ok', reflectionContent: '42501' });
     });
 
     it('covers every session/chat/empathy/reconciler column of the map', () => {

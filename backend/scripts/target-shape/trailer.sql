@@ -177,7 +177,7 @@ COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'Tr
 REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO app_access;
 
--- The envelope rule for the five jsonb-envelope columns (t_jsonb_envelope, T5).
+-- The envelope rule for the six jsonb-envelope columns (t_jsonb_envelope, T5; brain_activity.output since work-k5fk.9).
 -- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
 -- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
 -- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
@@ -210,10 +210,12 @@ CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
   $$;
 COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
 -- app_access, worker_access (mwf_app's and mwf_worker's: proposal_revision.before / after, and the app's enveloped
--- columns): the t_jsonb_envelope trigger calls it with the writer's rights.
+-- columns), ai_access (mwf_ai's: brain_activity.output, brain-service completeActivity; owner decision OD-1,
+-- work-k5fk.9): the t_jsonb_envelope trigger calls it with the writer's rights.
 REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO worker_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO ai_access;
 
 -- The TS-1 helpers over participant. (work-k5fk.3: app.is_co_participant and
 -- app.my_participant went with participant.id: every session-scoped row carries
@@ -2366,6 +2368,9 @@ COMMENT ON TRIGGER t_jsonb_envelope ON public.reflection IS 'summary_doc is a we
 CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF doc ON public.feature_state
   FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('doc');
 COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF output ON public.brain_activity
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('output');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.brain_activity IS 'output is a well-formed envelope (or keyless plaintext); owner decision OD-1, work-k5fk.9.';
 
 -- ---------------------------------------------------------------------------
 -- work-k5fk.2: who is in a session, without relationship. Four trigger
@@ -2863,8 +2868,8 @@ $$;
 --                 tokens) read and change rows of every session — the grants narrow them to columns, and where a
 --                 call site writes one value only, the policy says so (work-k5fk.10.29: worker_clear_token,
 --                 worker_purge_blobs, worker_purge).
---   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions; Q10 narrows message.content
---                 at §7 row 10, by column).
+--   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions); its grants never include
+--                 message.content or reflection_message.content (owner decision OD-1, work-k5fk.9 — §7 row 10).
 --   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
 --   auth_access, clinician_access: no table grant, so no policy.
 -- Each table below says which capabilities hold which commands (S I U D) on it.

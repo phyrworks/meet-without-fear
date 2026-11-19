@@ -94,6 +94,8 @@ const AI_ROUTINES = [
   'deliver_message:EXECUTE',
   'empathy_mark_delivery:EXECUTE',
   'empathy_set_status:EXECUTE',
+  // owner decision OD-1 (work-k5fk.9): brain_activity.output is a jsonb envelope the AI writes
+  'jsonb_envelope_violation:EXECUTE',
   'jsonb_violation:EXECUTE',
   // work-k5fk.10.7: the AI policies' predicates (the acting user is a member of the scope; an inner-work row is
   // the acting user's reflection)

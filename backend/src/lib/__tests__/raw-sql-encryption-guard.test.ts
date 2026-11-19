@@ -206,6 +206,8 @@ function violationsOf(st: RawStatement): Violation[] {
       const val = assignment.slice(eq + 1).trim();
       if (!isEncryptedColumn(table, column)) continue;
       if (conflict && new RegExp(`^EXCLUDED\\.${column}$`, 'i').test(val)) continue;
+      // A literal NULL holds no plaintext (the retention purge of brain_activity.output; work-k5fk.9)
+      if (/^NULL$/i.test(val)) continue;
       if (!encryptedBind(val, st.exprs, table, column))
         v.push({ where: at, column: `${table}.${column}`, value: expr(val) });
     }

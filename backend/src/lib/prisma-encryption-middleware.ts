@@ -60,6 +60,7 @@
  * | takeaway.content                              | text           | user        |
  * | user_memory.content                           | text           | user        |
  * | feature_state.doc                             | jsonb (envelope) | user      |
+ * | brain_activity.output                         | jsonb (envelope) | per-row: participant_user_id set → participant; session only → session; reflection_id → user (owner decision OD-1, work-k5fk.9) |
  *
  * ## Amendments (ruling R46, TS-13 fix round 1; provisional pending the owner)
  *
@@ -88,8 +89,10 @@
  * v_reflection_theme); participant.display_name, user_contact.nickname,
  * user.* (identity, read by views and the dashboard search); user_device.push_token
  * (a secret, keyed by ON CONFLICT); user_preferences.doc (settings, read by SQL
- * jsonb operators); brain_activity.* (T class — prompts and outputs, flagged
- * for the owner, see the TS-13 report).
+ * jsonb operators); brain_activity.input and metadata (T class telemetry: call
+ * shapes, sizes and the turn trace — output, the model's text, is sealed since
+ * owner decision OD-1, work-k5fk.9; a RETRIEVAL row's input still carries the
+ * search queries the reference detector derived from the turn, open for the owner).
  *
  * ## Value shapes (rulings R43, R44)
  *
@@ -166,6 +169,8 @@ const MESSAGE_KEY_RULE =
   "role = 'USER' AND kind = 'CHAT' (the owner's turn) or role IN ('AI','SYSTEM') replying to the owner → participant; " +
   'every delivered kind (written by app.deliver_message) → session';
 const AI_MEMORY_KEY_RULE = 'session_id IS NOT NULL → participant; session_id IS NULL (GLOBAL_FACTS) → user';
+const BRAIN_OUTPUT_KEY_RULE =
+  'participant_user_id set → participant; session_id only (a call over both parties) → session; reflection_id → user';
 const EMPATHY_ATTEMPT_KEY_RULE =
   "revealed_at IS NULL → participant (author); re-encrypted under session at the reveal (lib/share-moments.ts 'empathy-reveal')";
 
@@ -285,6 +290,12 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   },
   Reminder: { table: 'reminder', fields: { note: text('note', 'user', undefined, true) } },
   FeatureState: { table: 'feature_state', fields: { doc: { column: 'doc', kind: 'jsonb-envelope', key: 'user' } } },
+  // Owner decision OD-1 (work-k5fk.9): the model's output text is content; sealed like any other. The ops dashboard
+  // reads it through this extension (routes/brain.ts), so the key never leaves the app.
+  BrainActivity: {
+    table: 'brain_activity',
+    fields: { output: { column: 'output', kind: 'jsonb-envelope', key: 'per-row', rule: BRAIN_OUTPUT_KEY_RULE } },
+  },
 };
 
 // ============================================================================
