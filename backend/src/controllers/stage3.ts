@@ -51,6 +51,7 @@ import {
 } from '../services/needs-share';
 import {
   getPartnerParticipant,
+  loadSessionParties,
   resolveParticipant,
   seatOf,
   type ResolvedParticipant,
@@ -59,25 +60,11 @@ import {
 import { loadStageStates } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { createFacilitatorMessage } from '../services/message-store';
+import { writeOwnStage4TransitionLine } from '../services/stage4-transition';
 
 // ============================================================================
 // Helpers
 // ============================================================================
-
-function buildStage4TransitionContent(firstNeed?: string | null): string {
-  const needText = firstNeed?.trim();
-  const needLine = needText ? `Let's start with one of yours: ${needText}.` : "Let's start with one of yours.";
-  return [
-    'You have both sent your needs and can now see what each of you named.',
-    `${needLine} The work now is not to decide everything, just to put ideas on the table. What might help honor that need?`,
-  ].join('\n\n');
-}
-
-/** The participant's first live confirmed need (their own label, in their own conversation). */
-async function firstNeedText(seat: Seat): Promise<string | null> {
-  const [first] = await listOwnNeeds(seat, { live: true, confirmed: true });
-  return first?.label ?? null;
-}
 
 interface NeedsContext {
   participant: ResolvedParticipant;
@@ -126,29 +113,23 @@ function needEditErrorResponse(res: Response, error: unknown): boolean {
 }
 
 /**
- * The mutual share completed: one Stage 4 transition message into each
- * present human's MAIN conversation (job), and the stage-completed events.
+ * The mutual share completed: the requester's own Stage 4 transition line, and the stage-completed events. Every
+ * other participant's line is written by their own next read (services/stage4-transition.ts): their label never
+ * enters this request (owner decision 2026-11-18, review r1). No event carries a line: the session channel reaches
+ * every device of the session (forUserId is a client-side filter), so each client refetches its own messages on
+ * partner.stage_completed.
  */
 async function announceStage4(sessionId: string, triggeredBy: { userId: string }): Promise<void> {
-  const humans = await prisma.participant.findMany({
-    where: { sessionId, kind: 'human', leftAt: null },
-    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
-    select: { sessionId: true, userId: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
-  });
+  const me = await resolveParticipant(sessionId, triggeredBy.userId);
+  if (me?.mainConversationId) await writeOwnStage4TransitionLine(seatOf(me), me.mainConversationId);
+  const humans = (await loadSessionParties([sessionId])).filter(p => p.kind === 'human' && !p.leftAt);
   for (const h of humans) {
-    const conversationId = h.conversations[0]?.id;
-    if (!conversationId) continue;
-    const message = await createFacilitatorMessage({
-      conversationId,
-      content: buildStage4TransitionContent(await firstNeedText(seatOf(h))),
-    });
     const eventData = {
       forUserId: h.userId,
       previousStage: 3,
       currentStage: 4,
       userId: triggeredBy.userId,
       triggeredByUserId: triggeredBy.userId,
-      message: { id: message.id, content: message.content, timestamp: message.createdAt, forUserId: h.userId },
     };
     if (h.userId === triggeredBy.userId) {
       await publishSessionEvent(sessionId, 'partner.stage_completed', eventData);

@@ -82,8 +82,20 @@ describeTarget('live_session_pair under concurrency and on every release path (w
     return c;
   };
   const JOIN = `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`;
-  const join = async (sessionId: string, userId: string, addedBy: string) =>
-    run.as('mwf_app', userId, JOIN, [sessionId, userId, addedBy]);
+  /**
+   * The invitation `invitee` accepted from `inviter` (superuser setup): a human joins only as the invitee of an
+   * invitation they accepted (work-k5fk.10.7, participant app_insert) — app.invitation_answer writes it in the accept.
+   */
+  const accepted = async (sessionId: string, invitee: string, inviter: string = ada) =>
+    run.sql(
+      `INSERT INTO invitation (session_id, invited_by_user_id, status, expires_at, accepted_by_user_id, accepted_at)
+       VALUES ($1, $2, 'ACCEPTED', now() + interval '7 days', $3, now())`,
+      [sessionId, inviter, invitee],
+    );
+  const join = async (sessionId: string, userId: string, addedBy: string) => {
+    await accepted(sessionId, userId, addedBy);
+    return run.as('mwf_app', userId, JOIN, [sessionId, userId, addedBy]);
+  };
   const pairs = (sessionId: string) =>
     run.sql<{ a: string; b: string }>(
       `SELECT user_a::text AS a, user_b::text AS b FROM live_session_pair WHERE session_id = $1 ORDER BY 1, 2`,
@@ -125,6 +137,7 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       await archiver.query('SELECT app.session_archive($1::uuid)', [s]);
       const joiner = await conn(ken);
       const probe = await waitsOnLock(joiner);
+      await accepted(s, ken);
       const joined = joiner.query(JOIN, [s, ken, ada]);
       expect(await probe()).toBe(true); // the join waits on the session row the archive holds
       await archiver.query('COMMIT');
@@ -144,6 +157,7 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       const ken = await human('Ken');
       const s = await session(ada);
       const joiner = await conn(ken);
+      await accepted(s, ken);
       await joiner.query(JOIN, [s, ken, ada]);
       const archiver = await conn(ada);
       const probe = await waitsOnLock(archiver);
@@ -167,6 +181,8 @@ describeTarget('live_session_pair under concurrency and on every release path (w
         const s = await session(ada);
         const [first, second] = order === 'ken first' ? [ken, lea] : [lea, ken];
         const c1 = await conn(first);
+        await accepted(s, first);
+        await accepted(s, second);
         await c1.query(JOIN, [s, first, ada]);
         const c2 = await conn(second);
         const probe = await waitsOnLock(c2);

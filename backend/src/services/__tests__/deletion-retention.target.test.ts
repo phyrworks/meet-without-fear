@@ -308,9 +308,15 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
       { status: 'ARCHIVED' },
     ]);
 
-    // Past the purge window: the whole session tree goes, the users stay
-    const later = new Date(Date.now() + ARCHIVED_SESSION_PURGE_MS + DAY);
-    const second = await enforceSessionRetention(later);
+    // Past the purge window: the whole session tree goes, the users stay. The window is the database's too
+    // (session worker_purge, work-k5fk.10.29 R3: by the real clock), so the archive is made old, not the run.
+    await run.sql(`ALTER TABLE session DISABLE TRIGGER USER`);
+    await run.sql(`UPDATE session SET updated_at = $2 WHERE id = $1`, [
+      s.id,
+      new Date(Date.now() - ARCHIVED_SESSION_PURGE_MS - DAY),
+    ]);
+    await run.sql(`ALTER TABLE session ENABLE TRIGGER USER`);
+    const second = await enforceSessionRetention();
     expect(second.deleted).toBeGreaterThanOrEqual(1);
     expect(await count(`SELECT count(*)::int AS n FROM session WHERE id = $1`, [s.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM participant WHERE session_id = $1`, [s.id])).toBe(0);

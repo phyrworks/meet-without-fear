@@ -22,6 +22,8 @@ import { aiNote, lastAiNote } from '../empathy-messages';
 import {
   directionOf,
   directionStatuses,
+  byAuthor,
+  currentGuidance,
   jobMoveIfUnchanged,
   markAttemptDelivery,
   partyOf,
@@ -412,16 +414,16 @@ export async function getReconcilerStatus(caller: Seat): Promise<{
 
   const visibleResult = async (author: SessionParty, subject: SessionParty): Promise<ReconcilerResult | null> => {
     if (subject.userId !== callerUserId) return null;
-    const stored = (await prisma.reconcilerResult.findFirst({
-      where: {
-        sessionId,
-        subjectUserId: subject.userId,
-        supersededAt: null,
-        attempt: { authorUserId: author.userId },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: RESULT_SELECT,
-    })) as StoredReconcilerResult | null;
+    // The analysed attempt is the author's, unrevealed to the subject: who wrote it comes through
+    // app.attempt_meta (work-k5fk.10.7), not a relation filter the subject's RLS would empty.
+    const stored = (await byAuthor(
+      await prisma.reconcilerResult.findMany({
+        where: { sessionId, subjectUserId: subject.userId, supersededAt: null },
+        orderBy: { createdAt: 'desc' },
+        select: RESULT_SELECT,
+      }),
+      author.userId,
+    )) as StoredReconcilerResult | null;
     return stored ? dbResultToReconcilerResult(stored, await guidanceFor(stored.id)) : null;
   };
 
@@ -435,13 +437,15 @@ export async function getReconcilerStatus(caller: Seat): Promise<{
     // guidance (author + subject) — never the existence of a result on an
     // attempt they authored (spec §1.2 reconciler_result RLS: subject only).
     prisma.reconcilerResult.count({ where: { sessionId, subjectUserId: callerUserId, supersededAt: null } }),
-    prisma.reconcilerGuidance.count({
-      where: {
-        sessionId,
-        OR: [{ authorUserId: callerUserId }, { subjectUserId: callerUserId }],
-        result: { supersededAt: null },
-      },
-    }),
+    // (the result of an attempt the caller authored is the subject's: its supersession comes through
+    // app.result_facts, work-k5fk.10.7)
+    prisma.reconcilerGuidance
+      .findMany({
+        where: { sessionId, OR: [{ authorUserId: callerUserId }, { subjectUserId: callerUserId }] },
+        select: { resultId: true },
+      })
+      .then(rows => currentGuidance(rows))
+      .then(rows => rows.length),
   ]);
 
   const ab = directionOf(statuses, a.userId, b.userId);
@@ -481,16 +485,14 @@ export async function generateReconcilerSummary(caller: Seat): Promise<Reconcile
   if (!me || !partner) return null;
 
   const [aboutMe, statuses, sharedAboutMe, sharedByMe] = await Promise.all([
-    prisma.reconcilerResult.findFirst({
-      where: {
-        sessionId,
-        subjectUserId: me.userId,
-        supersededAt: null,
-        attempt: { authorUserId: partner.userId },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { alignmentScore: true, alignmentSummary: true, gapSeverity: true },
-    }),
+    // (who wrote the analysed attempt: app.attempt_meta, work-k5fk.10.7)
+    prisma.reconcilerResult
+      .findMany({
+        where: { sessionId, subjectUserId: me.userId, supersededAt: null },
+        orderBy: { createdAt: 'desc' },
+        select: { attemptId: true, alignmentScore: true, alignmentSummary: true, gapSeverity: true },
+      })
+      .then(rows => byAuthor(rows, partner.userId)),
     directionStatuses(sessionId),
     // Sharing that reached me (delivered to my conversation) / that I did (my offers).
     prisma.message.count({

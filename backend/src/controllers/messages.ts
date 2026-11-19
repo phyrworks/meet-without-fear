@@ -48,7 +48,8 @@ import {
   type StoredMessage,
 } from '../services/message-store';
 import { loadInvitationPending, loadMilestones, loadStageStates } from '../services/stage-shim';
-import { getPartnerParticipant } from '../services/participant-resolver';
+import { getPartnerParticipant, loadSessionParties } from '../services/participant-resolver';
+import { ensureOwnStage4TransitionLine } from '../services/stage4-transition';
 import { reachMilestone } from '../services/milestone-writer';
 
 // Re-exported for existing callers that import these from this controller.
@@ -447,6 +448,10 @@ export async function getConversationHistory(req: Request, res: Response): Promi
       return;
     }
 
+    // The caller's own Stage 4 transition line, if the mutual share completed in a partner's request (written
+    // here, from the caller's own request: services/stage4-transition.ts).
+    if (!participant.leftAt) await ensureOwnStage4TransitionLine(participant, participant.mainConversationId);
+
     // The caller's MAIN conversation IS the audience: no sender/recipient
     // filter exists any more (target shape: no recipient column).
     logger.info(
@@ -554,10 +559,11 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     if (isInvitee) {
       // Invitee: partner is the inviter
       const inviterUserId = invitation?.invitedByUserId;
+      // The inviter's "user" row is theirs under RLS: their name comes from app.session_parties (review F7).
       const inviter = inviterUserId
-        ? await prisma.user.findUnique({ where: { id: inviterUserId }, select: { firstName: true, name: true } })
-        : null;
-      partnerName = inviter?.firstName || inviter?.name || undefined;
+        ? (await loadSessionParties([sessionId])).find(p => p.userId === inviterUserId && !p.isTombstone)
+        : undefined;
+      partnerName = inviter?.userName || undefined;
     } else {
       // Inviter: partner name is from the invitation
       partnerName = invitation?.inviteeName || undefined;

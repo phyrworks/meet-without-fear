@@ -28,7 +28,7 @@ jest.mock('../embedding', () => ({
 }));
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { actingAs, adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(240_000);
@@ -112,13 +112,15 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
       notableFacts: [{ category: 'People', fact: 'PROBE_TS13_FACT Ada has a sister' }],
     } as never);
     const { runPartnerSessionClassifier } = await import('../partner-session-classifier');
-    await runPartnerSessionClassifier({
-      userMessage: 'My sister visits',
-      conversationHistory: [],
-      sessionId: ids.session,
-      userId: ids.adaUser,
-      turnId: 'turn-ts13',
-    });
+    await actingAs(ids.adaUser, () =>
+      runPartnerSessionClassifier({
+        userMessage: 'My sister visits',
+        conversationHistory: [],
+        sessionId: ids.session,
+        userId: ids.adaUser,
+        turnId: 'turn-ts13',
+      }),
+    );
     spy.mockRestore();
     const [doc] = (await expectSealed(
       run,

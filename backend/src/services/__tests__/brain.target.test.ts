@@ -14,7 +14,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
+import { actingAs, adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -23,6 +23,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
   let run: TargetRun;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
   let reflectionId: string;
+  let reflectionOwner: string;
 
   beforeAll(async () => {
     run = await openTargetRun('INNER_WORK_LINKED_A', `ts12_brain_${process.pid}`);
@@ -31,7 +32,9 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     await run.sql(`REVOKE ALL ON brain_activity FROM app_access`);
     const pw = encodeURIComponent(process.env.GOLDEN_OPS_PASSWORD ?? 'mwf_ops_dev');
     process.env.OPS_DATABASE_URL = `postgresql://mwf_ops:${pw}@${run.fx.target.host}:${run.fx.target.port}/${run.fx.database}`;
-    [{ id: reflectionId }] = await run.sql<{ id: string }>(`SELECT id FROM reflection`);
+    [{ id: reflectionId, user_id: reflectionOwner }] = await run.sql<{ id: string; user_id: string }>(
+      `SELECT id, user_id::text FROM reflection`,
+    );
   });
   afterAll(async () => {
     if (run) await run.drop();
@@ -66,13 +69,15 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
         }),
     );
     expect(activity.id).not.toBe('');
-    await brainService.completeActivity(activity.id, {
-      output: { text: 'done' },
-      tokenCountInput: 10,
-      tokenCountOutput: 5,
-      cost: 0.0012,
-      durationMs: 33,
-    });
+    await actingAs(ids.bobUser, () =>
+      brainService.completeActivity(activity.id, {
+        output: { text: 'done' },
+        tokenCountInput: 10,
+        tokenCountOutput: 5,
+        cost: 0.0012,
+        durationMs: 33,
+      }),
+    );
     expect(
       await run.sql(
         `SELECT participant_user_id, reflection_id, status::text AS status, token_count_input, cost::text AS cost FROM brain_activity WHERE id = $1`,
@@ -128,14 +133,18 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       await run.sql(`SELECT session_id, participant_user_id FROM brain_activity WHERE id = $1`, [cross.id]),
     ).toEqual([{ session_id: ids.session, participant_user_id: null }]);
 
-    // A reflection turn: reflection_id, no session
-    const inner = await brainService.startActivity({
-      innerWorkSessionId: reflectionId,
-      activityType: 'LLM_CALL',
-      model: 'claude-haiku',
-      input: {},
+    // A reflection turn: reflection_id, no session — the reflection owner's request (work-k5fk.10.33: the AI reads
+    // and writes the sessionless telemetry of the acting user's own reflection only)
+    const inner = await actingAs(reflectionOwner, async () => {
+      const a = await brainService.startActivity({
+        innerWorkSessionId: reflectionId,
+        activityType: 'LLM_CALL',
+        model: 'claude-haiku',
+        input: {},
+      });
+      await brainService.failActivity(a.id, new Error('boom'));
+      return a;
     });
-    await brainService.failActivity(inner.id, new Error('boom'));
     expect(
       await run.sql(`SELECT session_id, reflection_id, status::text AS status FROM brain_activity WHERE id = $1`, [
         inner.id,
@@ -152,7 +161,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       input: {},
     });
     expect(bad.id).toBe('');
-    expect(await brainService.completeActivity(bad.id, { output: {} })).toBeNull();
+    expect(await actingAs(ids.bobUser, () => brainService.completeActivity(bad.id, { output: {} }))).toBeNull();
   });
 
   it('the dashboard reads through mwf_ops: sessions list, session detail, activity, cost summary', async () => {
@@ -225,14 +234,17 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     // A session-scoped activity inside the period, so the cost routes resolve this session's stages
     // (resolveStageIntervalsForSessions → loadStageStates → the shim's invitation probe).
     const { brainService } = await import('../brain-service');
-    const activity = await brainService.startActivity({
-      sessionId: ids.session,
-      activityType: 'LLM_CALL',
-      model: 'claude-sonnet',
-      input: {},
-    });
+    // (the AI acts for a participant of the session, as a request does: work-k5fk.10.7)
+    const activity = await actingAs(ids.bobUser, () =>
+      brainService.startActivity({
+        sessionId: ids.session,
+        activityType: 'LLM_CALL',
+        model: 'claude-sonnet',
+        input: {},
+      }),
+    );
     expect(activity.id).not.toBe('');
-    await brainService.completeActivity(activity.id, { output: {}, cost: 0.002 });
+    await actingAs(ids.bobUser, () => brainService.completeActivity(activity.id, { output: {}, cost: 0.002 }));
 
     // The shim reads invitation.invited_by_user_id; mwf_ops holds that column only
     // (metadata, never the invitation's content).

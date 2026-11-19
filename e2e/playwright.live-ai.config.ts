@@ -31,10 +31,10 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
     baseURL: E2E_WEB_URL,
-    screenshot: 'on',
-    video: 'on',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
     viewport: { width: 375, height: 667 },
-    trace: 'on',
+    trace: 'retain-on-failure',
   },
   projects: [
     {

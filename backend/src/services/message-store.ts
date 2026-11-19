@@ -57,7 +57,7 @@ export type TargetMessageKind =
  * sql_message_once (unique on conversation_id, dedupe_key) is the guard, so
  * two concurrent writers still produce one row.
  */
-export const MESSAGE_DEDUPE_KEYS = ['STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE'] as const;
+export const MESSAGE_DEDUPE_KEYS = ['STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE', 'STAGE4_TRANSITION'] as const;
 export type MessageDedupeKey = (typeof MESSAGE_DEDUPE_KEYS)[number];
 
 /** The row shape every reader here works with. */

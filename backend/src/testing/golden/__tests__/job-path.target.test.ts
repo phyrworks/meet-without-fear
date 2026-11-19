@@ -21,6 +21,7 @@
 import { createHarness, type Harness } from '../driver';
 import { withClient } from '../db';
 import { isTargetShape } from '../shape';
+import { actingAs } from '../../../services/__tests__/target-roles';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
@@ -66,7 +67,8 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
       await getAiPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
       WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_user_id IS NULL OR sender_user_id IS NOT NULL)`;
     const [session] = await rows<{ id: string }>('SELECT session_id::text AS id FROM message LIMIT 1');
-    const ok = await withSessionScope(session.id, count);
+    // (acting for a participant of the scope: work-k5fk.10.7)
+    const ok = await actingAs(harness.actors.userA.id, () => withSessionScope(session.id, count));
     expect(ok[0].n).toBeGreaterThan(0);
   });
 
@@ -81,29 +83,37 @@ describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_
     expect(await sessions()).toEqual([]);
     const [s] = await rows<{ id: string }>('SELECT session_id::text AS id FROM message LIMIT 1');
     const other = '00000000-0000-7000-8000-000000000000';
-    expect(await withSessionScope(s.id, sessions)).toEqual([{ session_id: s.id }]);
-    expect(await withSessionScope(other, sessions)).toEqual([]);
+    // The AI acts for a participant of its scope (work-k5fk.10.7: app.scope_actor_is_member) …
+    const ada = harness.actors.userA.id;
+    expect(await actingAs(ada, () => withSessionScope(s.id, sessions))).toEqual([{ session_id: s.id }]);
+    expect(await actingAs(ada, () => withSessionScope(other, sessions))).toEqual([]);
+    // … and reads nothing of its scope acting for no one.
+    expect(await withSessionScope(s.id, sessions)).toEqual([]);
   });
 
   it('the empathy-draft write is atomic: concurrent writes leave one row, the last write wins', async () => {
     const { persistTurnState } = await import('../../../services/stream-turn-actions');
     const { resolveParticipant } = await import('../../../services/participant-resolver');
-    const ada = await resolveParticipant(harness.sessionId, harness.actors.userA.id);
+    const ada = await actingAs(harness.actors.userA.id, () =>
+      resolveParticipant(harness.sessionId, harness.actors.userA.id),
+    );
     const write = (text: string) =>
-      persistTurnState({
-        requestId: 'draft-test',
-        sessionId: harness.sessionId,
-        userId: harness.actors.userA.id,
-        currentStage: 2,
-        effectiveStage: 2,
-        isInvitationPhase: false,
-        session: { topicFrame: null, topicFrameConfirmedAt: null },
-        participant: ada!,
-        userMessageId: 'none',
-        userContent: 'x',
-        aiMessageContent: 'y',
-        metadata: { offerReadyToShare: true, proposedEmpathyStatement: text },
-      });
+      actingAs(harness.actors.userA.id, () =>
+        persistTurnState({
+          requestId: 'draft-test',
+          sessionId: harness.sessionId,
+          userId: harness.actors.userA.id,
+          currentStage: 2,
+          effectiveStage: 2,
+          isInvitationPhase: false,
+          session: { topicFrame: null, topicFrameConfirmedAt: null },
+          participant: ada!,
+          userMessageId: 'none',
+          userContent: 'x',
+          aiMessageContent: 'y',
+          metadata: { offerReadyToShare: true, proposedEmpathyStatement: text },
+        }),
+      );
     const drafts = () =>
       rows<{ content: string; version: number }>(
         `SELECT d.content, d.version FROM draft d

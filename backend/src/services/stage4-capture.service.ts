@@ -668,6 +668,12 @@ async function applyOperation(
           measureOfSuccess: operation.measureOfSuccess,
           kind: operation.kind,
           status: Stage4ProposalStatus.ACTIVE,
+          // Becoming an individual commitment makes it the actor's own (the database refuses one handed to anyone
+          // else: t_proposal_app_moves).
+          ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
+          superseded.kind !== Stage4ProposalKind.INDIVIDUAL_COMMITMENT
+            ? creatorColumns(ctx, ctx.actor.userId)
+            : {}),
         },
       });
       await linkNeeds(ctx, superseded.id, operation.needsAddressed);
@@ -805,13 +811,10 @@ async function applyOperation(
       duration: operation.duration ?? proposal.duration,
       measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
       kind: operation.kind ?? proposal.kind,
-      // The creator moves only when the operation names one (an individual commitment is the actor's); an
-      // unchanged creator is left as it is, with its user (work-k5fk.3).
-      ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-        ? creatorColumns(ctx, ctx.actor.userId)
-        : operation.ownerUserId
-          ? creatorColumns(ctx, ownerUser(ctx, operation.ownerUserId))
-          : {}),
+      // The creator moves only when the edit makes the proposal the actor's own commitment; it is never
+      // re-assigned from the model's output (work-k5fk.10.9: the database refuses any other change of
+      // created_by_user_id, t_proposal_app_moves).
+      ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? creatorColumns(ctx, ctx.actor.userId) : {}),
       status: Stage4ProposalStatus.ACTIVE,
     },
   });

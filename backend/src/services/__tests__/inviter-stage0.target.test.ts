@@ -15,7 +15,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { actingAs, adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -67,7 +67,7 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
     // The shim's CurrentStage agrees with the stage it reports (not the view's feel_heard / "Your Story").
     const { loadCurrentStages } = await import('../stage-shim');
     const adaSeat = { sessionId: ids.session, userId: ids.adaUser };
-    expect((await loadCurrentStages([adaSeat])).get(adaSeat)).toMatchObject({
+    expect((await actingAs(adaSeat.userId, () => loadCurrentStages([adaSeat]))).get(adaSeat)).toMatchObject({
       stage: 0,
       invitationPending: true,
       milestoneKey: 'compact_signed',

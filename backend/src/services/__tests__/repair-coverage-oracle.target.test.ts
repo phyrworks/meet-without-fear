@@ -20,7 +20,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { actingAs, adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -74,7 +74,7 @@ describeTarget(
         return {
           status: gate.status,
           error: gate.body?.error?.message ?? null,
-          prompt: await getStage4OpenNeedsForPrompt(sid, ids.adaUser),
+          prompt: await actingAs(ids.adaUser, () => getStage4OpenNeedsForPrompt(sid, ids.adaUser)),
         };
       };
 

@@ -107,7 +107,8 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     const { checkAttempts: check } = await import('../reconciler/circuit-breaker');
     const { withSessionScope } = await import('../../lib/request-context');
     // The reconciler reads as the AI, scoped to the session (a seated request's, here explicit).
-    const checkAttempts: typeof check = (s, a, b) => withSessionScope(s, () => check(s, a, b));
+    // (…acting for a participant of it, as a request does: work-k5fk.10.7)
+    const checkAttempts: typeof check = (s, a, b) => as(a, () => withSessionScope(s, () => check(s, a, b)));
     expect(await checkAttempts(ada.sessionId, ada.userId, bob.userId)).toEqual({
       shouldSkipReconciler: false,
       attempts: 1,
@@ -120,7 +121,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
 
   it('only the author resubmits', async () => {
     const { resubmitAttempt, currentAttempt } = await store();
-    const round2 = (await currentAttempt(ada.sessionId, ada.userId, bob.userId))!;
+    const round2 = (await as(ada.userId, () => currentAttempt(ada.sessionId, ada.userId, bob.userId)))!;
     await expect(as(bob.userId, () => resubmitAttempt(round2.id, 'not mine to write'))).rejects.toThrow(
       /only the author resubmits/,
     );
@@ -158,12 +159,14 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     const { setAttemptStatus: setAny, currentAttempt } = await store();
     // The AI's moves name their session (app.session_scope, work-k5fk.10.5).
     const { withSessionScope } = await import('../../lib/request-context');
-    const setAttemptStatus: typeof setAny = (...a) => withSessionScope(ada.sessionId, () => setAny(...a));
+    // (…acting for a participant of it, as a request does: work-k5fk.10.7)
+    const setAttemptStatus: typeof setAny = (...a) =>
+      as(ada.userId, () => withSessionScope(ada.sessionId, () => setAny(...a)));
     // Bob READY, Ada's round 2 HELD → the gate does not hold.
     await expect(setAttemptStatus(bobRound1, 'REVEALED', { actor: 'job' })).rejects.toThrow(/reveal gate not met/);
     expect((await attempts()).find(a => a.id === bobRound1)!.revealed).toBe(false);
 
-    const round2 = (await currentAttempt(ada.sessionId, ada.userId, bob.userId))!;
+    const round2 = (await as(ada.userId, () => currentAttempt(ada.sessionId, ada.userId, bob.userId)))!;
     await setAttemptStatus(round2.id, 'READY', { actor: 'job' });
     await setAttemptStatus(bobRound1, 'REVEALED', { actor: 'job' });
     await setAttemptStatus(round2.id, 'REVEALED', { actor: 'job' });
@@ -209,7 +212,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       }),
     );
 
-    expect(await reviewVisibleToAuthor(bobRound1, ada)).toBeNull();
+    expect(await as(bob.userId, () => reviewVisibleToAuthor(bobRound1, ada))).toBeNull();
     const bobReads = [
       await get(harness.actors.userB!, '/empathy/status'),
       await get(harness.actors.userB!, '/empathy/partner'),
@@ -239,7 +242,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       [bobRound1],
     );
     expect(review).toEqual({ feedback: SENT, sent: true });
-    expect(await reviewVisibleToAuthor(bobRound1, ada)).toMatchObject({ feedback: SENT });
+    expect(await as(bob.userId, () => reviewVisibleToAuthor(bobRound1, ada))).toMatchObject({ feedback: SENT });
     const bobMessages = JSON.stringify((await get(harness.actors.userB!, '/messages')).body);
     expect(bobMessages).toContain(SENT);
     expect(bobMessages).not.toContain(UNSENT);

@@ -1337,6 +1337,7 @@ enum MessageKind {
 enum MessageDedupeKey {
   STAGE2_VALIDATED_WAIT
   STAGE4_HANDOFF_BRIDGE
+  STAGE4_TRANSITION
 
   @@map("message_dedupe_key")
 }

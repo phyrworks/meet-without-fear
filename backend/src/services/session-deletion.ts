@@ -67,12 +67,14 @@ export async function deleteSessionForUser(
   // The walk and the explicit deletes: one transaction on the caller's own connection — the walk is
   // app.anonymize_user_in_session's self arm, the deletes are the caller's own rows (work-k5fk.10.5:
   // was the job's)
+  // The deletes come first, while the caller is still a present participant (review F4: a leaver writes nothing in
+  // the session). One transaction, so the order is not seen.
   const extra = await prisma.$transaction(async tx => {
-    await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${userId}::uuid)`;
     const memories =
       await tx.$executeRaw`DELETE FROM user_memory WHERE user_id = ${userId}::uuid AND session_id = ${sessionId}::uuid`;
     const reminders = await tx.$executeRaw`DELETE FROM reminder r USING follow_up f
       WHERE r.follow_up_id = f.id AND f.session_id = ${sessionId}::uuid AND r.user_id = ${userId}::uuid`;
+    await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${userId}::uuid)`;
     return memories + reminders;
   });
 

@@ -44,7 +44,7 @@ import { pingStage2Refresh } from '../services/empathy-realtime';
 import { routeModel, scoreAmbiguity } from '../services/model-router';
 import { suggestSendableRewrite } from '../services/attacking-language';
 import { getModelCompletion, BrainActivityCallType } from '../lib/bedrock';
-import { partyOf, sessionParties, type SessionParty } from '../services/empathy-store';
+import { partyOf, sessionParties, withOneAttemptMeta, type SessionParty } from '../services/empathy-store';
 import { aiNote } from '../services/empathy-messages';
 import { loadCurrentStages } from '../services/stage-shim';
 
@@ -96,19 +96,19 @@ const direction = (result: ReconcilerResult | null) =>
 
 /** The caller's open offer (as subject), with its result and the attempt's author. */
 async function myOpenOffer(sessionId: string, me: SessionParty, where: { id?: string } = {}) {
-  return prisma.contextShareOffer.findFirst({
-    where: {
-      ...(where.id ? { id: where.id } : {}),
-      sessionId,
-      subjectUserId: me.userId,
-      status: { in: ['OFFERED', 'PENDING'] },
-    },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      result: true,
-      attempt: { select: { id: true, authorUserId: true, status: true, statusVersion: true } },
-    },
-  });
+  return prisma.contextShareOffer
+    .findFirst({
+      where: {
+        ...(where.id ? { id: where.id } : {}),
+        sessionId,
+        subjectUserId: me.userId,
+        status: { in: ['OFFERED', 'PENDING'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      // The attempt is the author's, unrevealed to the subject: its facts come through app.attempt_meta (work-k5fk.10.7).
+      include: { result: true },
+    })
+    .then(offer => withOneAttemptMeta(offer));
 }
 
 // ============================================================================
@@ -504,10 +504,12 @@ export async function refinementChatMessageHandler(req: Request, res: Response):
     if (!caller) return;
     const { sessionId, me, parties, userName } = caller;
 
-    const shareOffer = await prisma.contextShareOffer.findFirst({
-      where: { id: offerId, sessionId, subjectUserId: me.userId },
-      include: { result: true, attempt: { select: { authorUserId: true } } },
-    });
+    const shareOffer = await withOneAttemptMeta(
+      await prisma.contextShareOffer.findFirst({
+        where: { id: offerId, sessionId, subjectUserId: me.userId },
+        include: { result: true },
+      }),
+    );
     if (!shareOffer) {
       errorResponse(res, 'NOT_FOUND', 'Share offer not found', 404);
       return;

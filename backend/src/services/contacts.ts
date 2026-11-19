@@ -29,6 +29,7 @@
 import { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { getPgConstraintViolation } from '../middleware/errors';
+import { loadSessionParties } from './participant-resolver';
 
 type Tx = Prisma.TransactionClient;
 
@@ -54,14 +55,12 @@ interface OtherHuman {
 async function otherHumans(sessionIds: string[], userId: string): Promise<Map<string, OtherHuman>> {
   const out = new Map<string, OtherHuman>();
   if (sessionIds.length === 0) return out;
-  const rows = await prisma.participant.findMany({
-    where: { sessionId: { in: sessionIds }, kind: 'human', userId: { not: userId } },
-    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
-    select: { sessionId: true, userId: true, user: { select: { firstName: true, name: true } } },
-  });
+  // A partner's "user" row is theirs under RLS: their name comes from app.session_parties (work-k5fk.10.7, review
+  // F7) — the name the app calls them by, as firstName (first name, else the full name).
+  const rows = (await loadSessionParties(sessionIds)).filter(r => r.kind === 'human' && r.userId !== userId);
   for (const r of rows) {
     if (out.has(r.sessionId)) continue;
-    out.set(r.sessionId, { userId: r.userId, firstName: r.user?.firstName ?? null, name: r.user?.name ?? null });
+    out.set(r.sessionId, { userId: r.userId, firstName: r.userName, name: r.userName });
   }
   return out;
 }

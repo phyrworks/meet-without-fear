@@ -541,8 +541,8 @@ CREATE TYPE message_role AS ENUM ('USER', 'AI', 'SYSTEM');
 COMMENT ON TYPE message_role IS 'Who wrote a line: the human (USER), the AI guide (AI) or the app (SYSTEM). Also used by reflection_message.';
 CREATE TYPE message_kind AS ENUM ('CHAT', 'EMPATHY_STATEMENT', 'EMPATHY_REVEAL_INTRO', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION', 'EMPATHY_VALIDATION_PROMPT');
 COMMENT ON TYPE message_kind IS 'CHAT for an ordinary turn; every other member is an item delivered across participants (an empathy statement, shared context, validation feedback, a share suggestion and their prompts).';
-CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE');
-COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts). A closed set: no value is derived from message content.';
+CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE', 'STAGE4_TRANSITION');
+COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts); STAGE4_TRANSITION, each participant''s Stage 4 transition line, written from their own request (services/stage4-transition.ts). A closed set: no value is derived from message content.';
 CREATE TYPE draft_kind AS ENUM ('EMPATHY', 'VALIDATION_FEEDBACK', 'SHARE_CONTEXT');
 COMMENT ON TYPE draft_kind IS 'The sharing point a draft is for; it decides which of draft''s arc columns is set.';
 CREATE TYPE milestone_scope AS ENUM ('participant', 'session');
@@ -684,8 +684,8 @@ COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_na
 COMMENT ON CONSTRAINT user_tombstone ON "user" IS 'A human is deleted exactly when its email is the scrubbed deleted+<id>@invalid: a live account cannot hold such an address, a tombstone cannot keep a real one.';
 COMMENT ON CONSTRAINT user_ai_constant ON "user" IS 'The AI principal is never deleted and has no name: its row is a constant the baseline seeds (app.ai_user_id()).';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
--- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user) and its partner's
--- names; the profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
+-- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user; RLS: its own row, the AI and its personas — a partner's name comes from app.session_parties, review F7)
+-- The profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
 -- (work-bp5m): a first login creates the row through mwf_auth's app.create_user, so no request can write an email or
 -- re-bind an account (the work-jv9y takeover needed mwf_app's UPDATE (clerk_id, email)); the tombstone is
 -- app.anonymize_user_account.
@@ -693,7 +693,8 @@ GRANT SELECT ON "user" TO app_access;
 GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO app_access;
 -- mwf_definer: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
 -- the persona scrub)
-GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_definer;
+-- participant_presence, session_parties (review F7: the name a co-participant is called by)
+GRANT SELECT (id, kind, email, deleted_at, first_name, name) ON "user" TO mwf_definer;
 GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_definer;
 GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
@@ -803,6 +804,8 @@ GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON use
 GRANT UPDATE (nickname, updated_at) ON user_contact TO app_access;
 -- mwf_definer: anonymize_user_account deletes the leaver's own entries (U-class: their words about others).
 GRANT SELECT (user_id) ON user_contact TO mwf_definer;
+-- mwf_definer: actor_name_for (a push names its actor by the recipient's own nickname for them)
+GRANT SELECT (contact_user_id, nickname) ON user_contact TO mwf_definer;
 GRANT DELETE ON user_contact TO mwf_definer;
 -- mwf_ops: nothing — a nickname is its owner's alone (no dashboard reads one).
 
@@ -851,6 +854,8 @@ GRANT UPDATE (updated_at) ON session TO ai_access;
 -- mwf_definer: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
 GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_definer;
 GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_definer;
+-- mwf_definer: invitation_peek (is the topic frame set and confirmed — never its text)
+GRANT SELECT (topic_frame, topic_frame_confirmed_at) ON session TO mwf_definer;
 -- mwf_worker: session-retention: the ACTIVE candidates, staleness of an ACTIVE session and the purge window of an
 -- ARCHIVED one (status moves through app.session_set_status)
 GRANT SELECT (id, status, updated_at) ON session TO worker_access;
@@ -895,7 +900,7 @@ COMMENT ON COLUMN participant.added_by_user_id IS 'Who brought this participant 
 COMMENT ON CONSTRAINT participant_check ON participant IS 'Only a human can be the initiator: the AI or a persona always has an adder.';
 COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
 COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
-COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to user.name (v_participant).';
+COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to the user''s first name, else user.name (v_participant, app.session_parties; review F7).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
 -- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
@@ -906,6 +911,10 @@ GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_
 GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_definer;
 -- mwf_definer: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
 GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
+-- mwf_definer: invitation_peek (the inviter's display name, as the invitee sees it)
+GRANT SELECT (display_name) ON participant TO mwf_definer;
+-- mwf_definer: session_parties (review F7: the parties of the caller's sessions, in join order)
+GRANT SELECT (joined_at) ON participant TO mwf_definer;
 -- mwf_definer: anonymize_user_in_session step 2
 GRANT UPDATE (display_name, left_at) ON participant TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts), brain-service
@@ -1217,6 +1226,10 @@ GRANT DELETE ON message TO app_access;
 -- mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe; deliver_message: the delivered copy with
 -- its instant, RETURNING seq, created_at
 GRANT SELECT (conversation_id, source_attempt_id, kind, seq, created_at) ON message TO mwf_definer;
+-- mwf_definer: stage4_transition_started (whether a party's Stage 4 transition line exists: its key, never content)
+GRANT SELECT (dedupe_key) ON message TO mwf_definer;
+-- mwf_definer: co_participant_presence (a co-participant's last turn: the instant of their latest USER CHAT line)
+GRANT SELECT (session_id, sender_user_id, role) ON message TO mwf_definer;
 GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at) ON message TO mwf_definer;
 -- mwf_ai: message-store createFacilitatorMessage / createFacilitatorMessageOnce: the AI / SYSTEM line (sender_user_id
 -- is sent as NULL; t_session_scope refuses any other role), a once-only line's dedupe_key (work-fdc1, sql_message_once),
@@ -1276,6 +1289,9 @@ GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_se
   ON conversation_read_state TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: the caller's own read state; a co-participant's shared-frame instant and last activity, review F2)
+GRANT SELECT (last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at)
+  ON conversation_read_state TO mwf_definer;
 GRANT DELETE ON conversation_read_state TO mwf_definer;
 
 CREATE TABLE reconciler_result (
@@ -1337,6 +1353,8 @@ COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (parti
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
 GRANT SELECT ON reconciler_result TO app_access;
+-- mwf_definer: result_facts (which attempt a result analysed, its iteration and supersession — never the analysis)
+GRANT SELECT (id, attempt_id, subject_user_id, iteration, superseded_at) ON reconciler_result TO mwf_definer;
 -- mwf_ai: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
 -- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL).
@@ -1409,6 +1427,8 @@ GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content
 -- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
 -- offer on the recipient's round, review F3)
 GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
+-- mwf_definer: shares_delivered_to_me (the author's delivered shared text — never the offer)
+GRANT SELECT (shared_content, shared_at, delivered_at) ON context_share_offer TO mwf_definer;
 GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
 -- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
 -- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a
@@ -1563,6 +1583,8 @@ GRANT SELECT ON mood_reading TO app_access;
 GRANT INSERT (session_id, user_id, intensity, context, recorded_at, created_at) ON mood_reading TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: the caller's own latest mood — never a co-participant's, review F2)
+GRANT SELECT (id, intensity, recorded_at) ON mood_reading TO mwf_definer;
 GRANT DELETE ON mood_reading TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON mood_reading TO ops_access;
@@ -1623,16 +1645,18 @@ COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set 
 COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
 COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
 COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
--- mwf_app: the inviter creates it and confirms its message; the INVITEE accepts / declines / expires it and locks it
--- (FOR UPDATE / FOR SHARE need UPDATE) — FINDING: a write of the inviter's row, a definer function's job later.
+-- mwf_app: the inviter creates it and confirms its message (and locks it FOR SHARE for a pre-join draft save, which
+-- needs an UPDATE grant). The INVITEE's accept / decline / expire is app.invitation_answer, its pre-membership read
+-- app.invitation_peek (work-k5fk.10.7: the inviter's row, written by the invitee, is a definer's job).
 GRANT SELECT ON invitation TO app_access;
 GRANT INSERT (session_id, invited_by_user_id, invitee_name, status, expires_at, created_at, updated_at)
   ON invitation TO app_access;
-GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, message_confirmed_at, updated_at)
-  ON invitation TO app_access;
+GRANT UPDATE (message_confirmed_at, updated_at) ON invitation TO app_access;
 -- mwf_definer: session_abandon_declined (invitations.ts declineInvitation: the decliner is no participant, so the
--- declined invitation is what lets the session end)
-GRANT SELECT (id, session_id, invited_by_user_id, status) ON invitation TO mwf_definer;
+-- declined invitation is what lets the session end); invitation_peek, invitation_answer, session_invitee_access
+GRANT SELECT (id, session_id, invited_by_user_id, status, accepted_by_user_id, invitee_name, message_confirmed_at,
+              expires_at, created_at) ON invitation TO mwf_definer;
+GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason) ON invitation TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT (session_id, invited_by_user_id) ON invitation TO ops_access;
 
@@ -1687,18 +1711,21 @@ COMMENT ON COLUMN draft.invitation_id IS 'EMPATHY before the subject has joined:
 COMMENT ON COLUMN draft.reopened_at IS 'Set when the author chose Edit first on a pre-join draft after the join; cleared by the next draft write (work-9309).';
 COMMENT ON COLUMN draft.content IS 'encrypted (participant): the draft text, AI-proposed or written by the participant.';
 -- mwf_app: the caller's drafts (empathy-store upsertDraft, reconciler/sharing.ts, empathy-draft-save reopen, delete).
--- id and created_at: ONLY repointInvitationDrafts — FINDING: at accept the INVITEE's request deletes and re-inserts the
--- INVITER's pre-join drafts (same id, timestamps) to re-point them at the new participant.
+-- No id, created_at or updated_at: the accept's move of the INVITER's pre-join drafts to the invitee (same id,
+-- timestamps) is app.invitation_repoint_drafts (work-k5fk.10.7; was the invitee's request writing the inviter's rows).
 GRANT SELECT ON draft TO app_access;
-GRANT INSERT (id, session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
-              ready_to_share, version, reopened_at, created_at, updated_at) ON draft TO app_access;
+GRANT INSERT (session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
+              ready_to_share, version, reopened_at) ON draft TO app_access;
 GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO app_access;
 -- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
 -- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
 GRANT DELETE ON draft TO app_access;
--- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON draft TO mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads;
+-- invitation_repoint_drafts: the whole row, moved with its id and timestamps (work-k5fk.10.7)
+GRANT SELECT ON draft TO mwf_definer;
 GRANT DELETE ON draft TO mwf_definer;
+GRANT INSERT (id, session_id, user_id, kind, about_user_id, content, ready_to_share, version, created_at, updated_at,
+              reopened_at) ON draft TO mwf_definer;
 
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1775,6 +1802,8 @@ GRANT INSERT (attempt_id, session_id, reviewer_user_id, validated, feedback, fee
 GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO app_access;
 -- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
 GRANT SELECT (id, session_id, reviewer_user_id) ON empathy_review TO mwf_definer;
+-- mwf_definer: validated_at (when the author's attempt was first validated — nothing else of the review)
+GRANT SELECT (attempt_id, validated, created_at) ON empathy_review TO mwf_definer;
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
@@ -1984,6 +2013,8 @@ GRANT UPDATE (decision, note, created_at) ON proposal_choice TO app_access;
 -- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON proposal_choice TO mwf_definer;
+-- mwf_definer: t_agreement_parties (every party WILLING on the proposal)
+GRANT SELECT (proposal_id, decision) ON proposal_choice TO mwf_definer;
 GRANT DELETE ON proposal_choice TO mwf_definer;
 -- mwf_worker: closureInputsAsJob / agreeIfEveryoneWilling (every present human WILLING) and T-agreement-parties
 -- (deferred, invoker = the agreement's writer): every party WILLING on the proposal
@@ -2051,6 +2082,8 @@ COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s fr
 COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 -- mwf_app: read only; agreements are created and moved by the job.
 GRANT SELECT ON agreement TO app_access;
+-- mwf_definer: t_agreement_parties (the agreement whose parties it checks)
+GRANT SELECT (id, session_id, proposal_id, created_at) ON agreement TO mwf_definer;
 -- mwf_worker: stage4-store createAgreementsAsJob / insertAgreementsTx: the agreement row (snapshot of the proposal) and its
 -- id (RETURNING id)
 GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO worker_access;
@@ -2078,6 +2111,8 @@ COMMENT ON COLUMN agreement_party.session_id IS 'The session of every participan
 COMMENT ON COLUMN agreement_party.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: read only (an agreement's parties).
 GRANT SELECT ON agreement_party TO app_access;
+-- mwf_definer: t_agreement_parties (the parties)
+GRANT SELECT (agreement_id, user_id) ON agreement_party TO mwf_definer;
 -- mwf_worker: stage4-store insertAgreementsTx: one party row per present human
 GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO worker_access;
 -- mwf_worker: T-agreement-parties (deferred, invoker = mwf_worker): the party set
@@ -2407,6 +2442,8 @@ GRANT INSERT (user_id, doc) ON user_preferences TO app_access;
 GRANT UPDATE (doc, updated_at) ON user_preferences TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON user_preferences TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: whether a co-participant shows their activity status)
+GRANT SELECT (doc) ON user_preferences TO mwf_definer;
 GRANT DELETE ON user_preferences TO mwf_definer;
 
 CREATE TABLE user_memory (

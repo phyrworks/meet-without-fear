@@ -31,7 +31,7 @@
 import type { PrismaClient } from '../generated/prisma/client';
 import { getAiPrisma, prisma, type DbClient } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
-import type { Seat } from './participant-resolver';
+import { loadSessionParties, type Seat } from './participant-resolver';
 
 export type TargetEmpathyStatus =
   | 'HELD'
@@ -98,6 +98,19 @@ export interface SessionParty {
  * directions are this order.
  */
 export async function sessionParties(sessionId: string, client: PrismaClient = prisma): Promise<SessionParty[]> {
+  if (client === prisma) {
+    // As mwf_app: a partner's "user" and conversation rows are theirs under RLS; their name and MAIN conversation id
+    // come from app.session_parties (work-k5fk.10.7, review F7/F8).
+    const rows = await loadSessionParties([sessionId]);
+    return rows
+      .filter(r => r.kind === 'human' && !r.leftAt)
+      .map(r => ({
+        userId: r.userId,
+        name: r.userName || r.displayName || null,
+        joinedAt: r.joinedAt,
+        mainConversationId: r.mainConversationId,
+      }));
+  }
   const rows = await client.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
     orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
@@ -127,23 +140,25 @@ export async function sessionParties(sessionId: string, client: PrismaClient = p
  * present partner. `name` is always null (the tombstone has none).
  */
 export async function departedCounterpart(me: Seat, client: PrismaClient = prisma): Promise<SessionParty | null> {
-  const rows = await client.participant.findMany({
-    where: { sessionId: me.sessionId, kind: 'human', leftAt: { not: null }, userId: { not: me.userId } },
-    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
-    select: {
-      userId: true,
-      joinedAt: true,
-      conversations: { where: { kind: 'MAIN' }, select: { id: true } },
-    },
-  });
+  const rows =
+    client === prisma
+      ? (await loadSessionParties([me.sessionId]))
+          .filter(r => r.kind === 'human' && r.leftAt && r.userId !== me.userId)
+          .map(r => ({ userId: r.userId, joinedAt: r.joinedAt, mainConversationId: r.mainConversationId }))
+      : (
+          await client.participant.findMany({
+            where: { sessionId: me.sessionId, kind: 'human', leftAt: { not: null }, userId: { not: me.userId } },
+            orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
+            select: {
+              userId: true,
+              joinedAt: true,
+              conversations: { where: { kind: 'MAIN' }, select: { id: true } },
+            },
+          })
+        ).map(r => ({ userId: r.userId, joinedAt: r.joinedAt, mainConversationId: r.conversations[0]?.id ?? null }));
   if (rows.length !== 1) return null;
   const r = rows[0];
-  return {
-    userId: r.userId,
-    name: null,
-    joinedAt: r.joinedAt,
-    mainConversationId: r.conversations[0]?.id ?? null,
-  };
+  return { userId: r.userId, name: null, joinedAt: r.joinedAt, mainConversationId: r.mainConversationId };
 }
 
 /** The party with this user id. */
@@ -614,16 +629,31 @@ export async function lockInvitationForAccept(tx: DbClient, invitationId: string
  * re-point every draft about the invitation to that participant
  * (about_user_id = the invitee, invitation_id = NULL). Returns the count.
  *
- * A move (delete, then insert the same row with the new arc), not an UPDATE:
- * the row's touch_updated_at trigger would stamp updated_at with the join
- * instant, and updated_at IS the draft's written-at — the review prompt after
- * the join shows it, and it tells a pre-join draft from one written since
- * (`preJoinReview`, getDraft). id, created_at, updated_at and version carry
- * over. Through the Prisma client, so the content goes out decrypted and back
- * in sealed by the encryption extension (a raw INSERT … SELECT would copy the
- * ciphertext, which raw-sql-encryption-guard refuses on principle).
+ * The drafts are the INVITER's rows, so the move is app.invitation_repoint_drafts
+ * (work-k5fk.10.7): a definer that checks the caller accepted the invitation and is
+ * seated, then deletes and re-inserts each row with the new arc — not an UPDATE, which
+ * would stamp updated_at (the draft's written-at, `preJoinReview`); id, created_at,
+ * updated_at, version and reopened_at carry over. It locks the rows FOR UPDATE (the
+ * invitation lock is the protocol; this keeps the move safe from any writer that skips it).
  */
 export async function repointInvitationDrafts(
+  tx: DbClient,
+  invitationId: string,
+  /** The invitee's new participant (of the invitation's session): the caller. */
+  about: Seat,
+): Promise<number> {
+  void about;
+  const [row] = await tx.$queryRaw<Array<{ moved: number }>>`
+    SELECT app.invitation_repoint_drafts(${invitationId}::uuid) AS moved`;
+  return Number(row?.moved ?? 0);
+}
+
+/**
+ * The E2E tooling's copy of the move (controllers/session-state.ts acceptPendingInvitationForE2ESession, on the
+ * superuser tooling connection, which no definer arm admits): the same delete and re-insert through the
+ * Prisma client. Tooling only, never a request path.
+ */
+export async function repointInvitationDraftsAsTooling(
   tx: DbClient,
   invitationId: string,
   /** The invitee's new participant (of the invitation's session). */
@@ -652,6 +682,129 @@ export async function repointInvitationDrafts(
     });
   }
   return drafts.length;
+}
+
+/** Content-free facts of a reconciler result behind guidance the caller may read (app.result_facts). */
+export interface ResultFacts {
+  id: string;
+  attemptId: string;
+  iteration: number;
+  supersededAt: Date | null;
+}
+
+/**
+ * Which attempt each result analysed, its iteration and supersession — never the analysis — through
+ * app.result_facts (work-k5fk.10.7): the author of an attempt reads its guidance, but the result is the
+ * subject's (reconciler_result app_select, R6), so a relation filter on it would see nothing.
+ */
+export async function resultFactsOf(ids: string[], client: DbClient = prisma): Promise<Map<string, ResultFacts>> {
+  if (ids.length === 0) return new Map();
+  const rows = await client.$queryRaw<
+    Array<{ id: string; attempt_id: string; iteration: number; superseded_at: Date | null }>
+  >`SELECT id, attempt_id, iteration, superseded_at FROM app.result_facts(${[...new Set(ids)]}::uuid[])`;
+  return new Map(
+    rows.map(r => [r.id, { id: r.id, attemptId: r.attempt_id, iteration: r.iteration, supersededAt: r.superseded_at }]),
+  );
+}
+
+/** Of these guidance rows, the ones whose result is current (not superseded) — and of `attemptId`, when given. */
+export async function currentGuidance<T extends { resultId: string }>(
+  rows: T[],
+  attemptId?: string,
+): Promise<Array<T & { result: ResultFacts }>> {
+  const facts = await resultFactsOf(rows.map(r => r.resultId));
+  return rows.flatMap(r => {
+    const result = facts.get(r.resultId);
+    return result && result.supersededAt === null && (attemptId === undefined || result.attemptId === attemptId)
+      ? [{ ...r, result }]
+      : [];
+  });
+}
+
+/** Content-free facts of an attempt the caller is a party of (app.attempt_meta). */
+export interface AttemptMeta {
+  id: string;
+  sessionId: string;
+  authorUserId: string;
+  subjectUserId: string;
+  round: number;
+  status: TargetEmpathyStatus;
+  statusVersion: number;
+  revealedAt: Date | null;
+}
+
+/**
+ * The facts (never the content) of attempts the caller authored or is the subject of, by id — through
+ * app.attempt_meta (work-k5fk.10.7): before the reveal, the subject cannot read the attempt's row at all
+ * (empathy_attempt app_select, P0-2), yet answers a share offer on it, which moves its round.
+ */
+export async function attemptMetaOf(ids: string[], client: DbClient = prisma): Promise<Map<string, AttemptMeta>> {
+  if (ids.length === 0) return new Map();
+  const rows = await client.$queryRaw<
+    Array<{
+      id: string;
+      session_id: string;
+      author_user_id: string;
+      subject_user_id: string;
+      round: number;
+      status: TargetEmpathyStatus;
+      status_version: number;
+      revealed_at: Date | null;
+    }>
+  >`SELECT id, session_id, author_user_id, subject_user_id, round, status::text AS status, status_version, revealed_at
+    FROM app.attempt_meta(${[...new Set(ids)]}::uuid[])`;
+  return new Map(
+    rows.map(r => [
+      r.id,
+      {
+        id: r.id,
+        sessionId: r.session_id,
+        authorUserId: r.author_user_id,
+        subjectUserId: r.subject_user_id,
+        round: r.round,
+        status: r.status,
+        statusVersion: r.status_version,
+        revealedAt: r.revealed_at,
+      },
+    ]),
+  );
+}
+
+/** `rows` with each one's attempt facts attached as `attempt` (rows whose attempt the caller is no party of drop out). */
+export async function withAttemptMeta<T extends { attemptId: string }>(
+  rows: T[],
+  client: DbClient = prisma,
+): Promise<Array<T & { attempt: AttemptMeta }>> {
+  const meta = await attemptMetaOf(
+    rows.map(r => r.attemptId),
+    client,
+  );
+  return rows.flatMap(r => {
+    const attempt = meta.get(r.attemptId);
+    return attempt ? [{ ...r, attempt }] : [];
+  });
+}
+
+/** The first of `rows` (in their order) whose attempt `authorUserId` wrote — by app.attempt_meta, not the row's RLS. */
+export async function byAuthor<T extends { attemptId: string }>(
+  rows: T[],
+  authorUserId: string,
+  client: DbClient = prisma,
+): Promise<T | null> {
+  const meta = await attemptMetaOf(
+    rows.map(r => r.attemptId),
+    client,
+  );
+  return rows.find(r => meta.get(r.attemptId)?.authorUserId === authorUserId) ?? null;
+}
+
+/** One row with its attempt facts attached (null in, or no party of it: null). */
+export async function withOneAttemptMeta<T extends { attemptId: string }>(
+  row: T | null,
+  client: DbClient = prisma,
+): Promise<(T & { attempt: AttemptMeta }) | null> {
+  if (!row) return null;
+  return (await withAttemptMeta([row], client))[0] ?? null;
 }
 
 /** Has the author GRANTED a submission consent on any round of this direction (m12: any round, not only the newest)? */

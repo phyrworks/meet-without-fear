@@ -27,6 +27,7 @@ import { getSharedContextForGuesser, getSharedContentDeliveryStatus } from './re
 import {
   currentAttempt,
   directionOf,
+  currentGuidance,
   directionStatuses,
   partyOf,
   revealedAttemptAbout,
@@ -109,11 +110,21 @@ export async function buildEmpathyExchangeStatus(
   // The abstract guidance for my attempt (reconciler_guidance: author-visible).
   let refinementHint: EmpathyExchangeStatusResponse['refinementHint'] = null;
   if (myAttempt && (myAttempt.status === 'AWAITING_SHARING' || myAttempt.status === 'REFINING')) {
-    const guidance = await prisma.reconcilerGuidance.findFirst({
-      where: { sessionId, authorUserId: userId, result: { attemptId: myAttempt.id, supersededAt: null } },
-      select: { areaHint: true, guidanceType: true, promptSeed: true },
-    });
-    if (guidance) refinementHint = guidance;
+    // The result is the subject's (R6): its attempt and supersession come through app.result_facts (work-k5fk.10.7).
+    const [guidance] = await currentGuidance(
+      await prisma.reconcilerGuidance.findMany({
+        where: { sessionId, authorUserId: userId },
+        select: { areaHint: true, guidanceType: true, promptSeed: true, resultId: true },
+      }),
+      myAttempt.id,
+    );
+    if (guidance) {
+      refinementHint = {
+        areaHint: guidance.areaHint,
+        guidanceType: guidance.guidanceType,
+        promptSeed: guidance.promptSeed,
+      };
+    }
   }
 
   const readyForStage3 = myAttempt?.status === 'VALIDATED' && partnerAttempt?.status === 'VALIDATED';

@@ -232,6 +232,42 @@ function r33ConceptChanges(): AllowRule[] {
   ];
 }
 
+/**
+ * Owner decision 2026-11-18 (work-k5fk.10.7 review r1; timing-only move approved): each participant's Stage 4
+ * transition line is written from their own request. Bob's line — the same row, id, content and hash — is no longer
+ * written by Ada's completing share (step 23) but by Bob's first read of the session afterwards, his state read
+ * (step 36). Concept half: the row leaves step 23 and arrives, unchanged, at step 36.
+ */
+const BOB_TRANSITION_LINE = {
+  view: 'message',
+  kind: 'added',
+  key: '<message:bob@main#2>',
+  'after.conversation_id': '<conversation:bob@main/MAIN>',
+  'after.role': 'AI',
+  'after.content_hash': 'b33a59b0102be64f3c4dbff322de16c6efcb6a9cdd4b40de624de33d92a06eb2',
+} as const;
+function ownRequestTransitionLineConcept(): AllowRule[] {
+  const why =
+    'owner decision 2026-11-18 (review r1): Bob’s Stage 4 transition line is written by his own first read (state, ' +
+    'step 36), not by Ada’s completing share (step 23) — same row, id, content and hash; timing only.';
+  return [
+    {
+      kind: 'removedEntry',
+      at: `steps.${NEEDS_STEPS.adaShares}.changes`,
+      where: BOB_TRANSITION_LINE,
+      mustMatch: true,
+      why,
+    },
+    {
+      kind: 'addedEntries',
+      at: `steps.${NEEDS_STEPS.state.bothBob}.changes`,
+      where: BOB_TRANSITION_LINE,
+      mustMatch: true,
+      why,
+    },
+  ];
+}
+
 /** Concept-only: the fixture's `initial` image (TS-9 representation deltas). */
 function initialFixtureDeltas(): AllowRule[] {
   return [
@@ -292,6 +328,7 @@ export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
     ...SHARED_RULES(true),
     ...initialFixtureDeltas(),
     ...r33ConceptChanges(),
+    ...ownRequestTransitionLineConcept(),
     // The share steps write the need_share rows the target reads (spec §1.4,
     // `app.need_share()`); today they write none (finding F2). One rule per
     // need, pinned by structural key and owner.
@@ -377,13 +414,31 @@ export const NEEDS_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
         'need (spec §1.3 consent_target NEED). The concept golden compares the rows under their structural labels.',
     },
     ...targetByteRules({
-      addedTables: [NEEDS_STEPS.bobShares, NEEDS_STEPS.adaShares].map(step => ({
-        step,
-        table: 'need_share',
-        kind: 'added' as const,
-        count: 2,
-        why: 'the sharer’s two need_share rows (app.need_share, spec §1.4; today none — F2)',
-      })),
+      addedTables: [
+        ...[NEEDS_STEPS.bobShares, NEEDS_STEPS.adaShares].map(step => ({
+          step,
+          table: 'need_share',
+          kind: 'added' as const,
+          count: 2,
+          why: 'the sharer’s two need_share rows (app.need_share, spec §1.4; today none — F2)',
+        })),
+        // Owner decision 2026-11-18 (review r1, timing-only): the share step writes Ada's transition line only; Bob's
+        // first read writes his (the concept rules pin the row).
+        {
+          step: NEEDS_STEPS.adaShares,
+          table: 'message',
+          kind: 'added' as const,
+          count: -1,
+          why: 'one line fewer: the share writes only Ada’s own Stage 4 transition line; Bob’s moved to his own read',
+        },
+        {
+          step: NEEDS_STEPS.state.bothBob,
+          table: 'message',
+          kind: 'added' as const,
+          count: 1,
+          why: 'Bob’s own Stage 4 transition line, written by his own first read (owner decision 2026-11-18)',
+        },
+      ],
       droppedTables: [
         {
           step: NEEDS_STEPS.bobShares,

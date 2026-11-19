@@ -30,7 +30,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { actingAs, adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -100,12 +100,12 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     const second = await invite('Ken again');
     expect(await pairsOf(second.sessionId)).toEqual([]);
 
-    // … and the database refuses Ken's join, as the app role, with the pair key.
+    // … and the database refuses Ken's join with the pair key. (Written by the superuser: the app role seats a human
+    // only as the invitee of an invitation they accepted — participant app_insert, work-k5fk.10.7 — and the accept,
+    // below, is that path.)
     expect(
       await failure(
-        run.as(
-          'mwf_app',
-          ken.id,
+        run.sql(
           `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, display_name) VALUES ($1, $2, 'human', $3, 'Ken')`,
           [second.sessionId, ken.id, ada.id],
         ),
@@ -158,8 +158,16 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     // Neither kind of non-human seat can pose as a human, and a human cannot sit as the AI or a persona:
     // a seat's kind is its user's kind, pinned by the FK (user_id, kind) -> "user" (work-k5fk.3).
     const kindRefused = { code: '23503', constraint: 'participant_user_id_kind_fkey' };
-    expect(await failure(seat(aiUser, 'human', ada.id))).toEqual(kindRefused);
-    expect(await failure(seat(persona.id, 'human', ada.id))).toEqual(kindRefused);
+    // (A human seat the app never writes for another user — participant app_insert, work-k5fk.10.7 — so the FK is
+    // shown by the superuser; the app's refusal of it is rls-cross-user.target.test.ts's.)
+    const seatHuman = (userId: string) =>
+      run.sql(`INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`, [
+        s.sessionId,
+        userId,
+        ada.id,
+      ]);
+    expect(await failure(seatHuman(aiUser))).toEqual(kindRefused);
+    expect(await failure(seatHuman(persona.id))).toEqual(kindRefused);
     expect(await failure(seat(max.id, 'ai', ada.id))).toEqual(kindRefused);
     expect(await failure(seat(max.id, 'persona', ada.id))).toEqual(kindRefused);
     // A persona is seated by its owner only (t_participant_added_by); the AI and a persona always have an adder.
@@ -171,7 +179,9 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
           aiUser,
         ]),
       ),
-    ).toEqual({ code: '23514', constraint: 'participant_check' });
+      // work-k5fk.10.7: refused by participant app_insert (an adder-less seat is the caller's own, as initiator)
+      // before participant_check (only a human starts a session) is reached.
+    ).toEqual({ code: '42501', constraint: undefined });
 
     const [aiSeat] = await seat(aiUser, 'ai', ada.id);
     const [personaSeat] = await seat(persona.id, 'persona', ada.id);
@@ -329,13 +339,13 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
   it('review F2: before the invitee joins, what the inviter calls them is the invite name (not "Partner")', async () => {
     const s = await invite('Zed');
     const contacts = await import('../contacts');
-    expect(await contacts.getNicknameForSessionPartner(s.sessionId, ada.id)).toBe('Zed');
-    expect(await contacts.loadSessionPartner(s.sessionId, ada.id)).toBeNull();
+    expect(await actingAs(ada.id, () => contacts.getNicknameForSessionPartner(s.sessionId, ada.id))).toBe('Zed');
+    expect(await actingAs(ada.id, () => contacts.loadSessionPartner(s.sessionId, ada.id))).toBeNull();
     const zed = person('zed');
     expect((await http(zed, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     // After the join: the invite name of the invitation Zed accepted (Ada's own row).
-    expect(await contacts.getNicknameForSessionPartner(s.sessionId, ada.id)).toBe('Zed');
-    expect(await contacts.getNicknameForSessionPartner(s.sessionId, zed.id)).toBeNull();
+    expect(await actingAs(ada.id, () => contacts.getNicknameForSessionPartner(s.sessionId, ada.id))).toBe('Zed');
+    expect(await actingAs(zed.id, () => contacts.getNicknameForSessionPartner(s.sessionId, zed.id))).toBeNull();
   });
 
   it('review F4: a NEW_PROCESS follow-up shows the partner of the session it continues', async () => {
@@ -376,7 +386,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       followUps.push(f.id);
     }
     const contacts = await import('../contacts');
-    const partners = await contacts.loadSessionPartners(followUps, ada.id);
+    const partners = await actingAs(ada.id, () => contacts.loadSessionPartners(followUps, ada.id));
     expect(followUps.map(f => partners.get(f)?.userId)).toEqual([rhea.id, rhea.id]);
   });
 
@@ -399,7 +409,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     );
     await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada')`, [f.id, ada.id]);
     const contacts = await import('../contacts');
-    expect(await contacts.loadSessionPartner(f.id, ada.id)).toBeNull();
+    expect(await actingAs(ada.id, () => contacts.loadSessionPartner(f.id, ada.id))).toBeNull();
     expect(JSON.stringify((await http(ada, 'get', `/sessions/${f.id}`)).body)).not.toContain(sam.id);
   });
 

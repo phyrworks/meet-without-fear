@@ -46,7 +46,9 @@ describeTarget(
     const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
       ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
     /** The AI's writes, scoped to the run's session (app.session_scope; work-k5fk.10.5). */
-    const asAi = <T>(fn: () => Promise<T>): Promise<T> => ctx.withSessionScope(ids.session, async () => await fn());
+    // …acting for a participant of it, as a request does (work-k5fk.10.7: the AI policies require one).
+    const asAi = <T>(fn: () => Promise<T>): Promise<T> =>
+      asUser(ids.adaUser, () => ctx.withSessionScope(ids.session, async () => await fn()));
     const momentsCalled = (moment: string) =>
       hook.mock.calls
         .filter(([e]) => (e as { moment: string }).moment === moment)
@@ -361,7 +363,7 @@ describeTarget(
 
     it('the reveal (checkAndRevealBothIfReady as mwf_ai): the EMPATHY_STATEMENT copies are ciphertext, the subject reads plaintext, the hook runs', async () => {
       await asUser(ids.bobUser, () => store.setAttemptStatus(bobRound1, 'READY', { actor: 'participant' }));
-      const round2 = (await store.currentAttempt(ids.session, ids.adaUser, ids.bobUser))!;
+      const round2 = (await asUser(ids.adaUser, () => store.currentAttempt(ids.session, ids.adaUser, ids.bobUser)))!;
       await asAi(() => store.setAttemptStatus(round2.id, 'READY', { actor: 'job' }));
       hook.mockClear();
       const state = await import('../reconciler/state');

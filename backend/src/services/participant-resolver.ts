@@ -159,10 +159,11 @@ export interface CoParticipantPresence {
  * The presence facts the session view shows about a co-participant — the
  * ONE read of another participant's read state and turn times outside the
  * context builder, as one statement returning instants only (never content).
- * TS-16 NOTE: under owner-only RLS on conversation_read_state,
- * user_preferences and message this must become a SECURITY DEFINER function
- * (owned by mwf_definer, identity-bound), as the v_participant note in the
- * trailer says; its result shape is already that function's.
+ * Under owner-only RLS on conversation_read_state, user_preferences and
+ * message (work-k5fk.10.7) it is the definer app.co_participant_presence
+ * (owned by mwf_definer, identity-bound: a participant of the same session),
+ * which also withholds the activity instants of a co-participant who hides
+ * their activity.
  */
 export async function getCoParticipantPresence(co: Seat): Promise<CoParticipantPresence> {
   const rows = await prisma.$queryRaw<
@@ -173,15 +174,8 @@ export async function getCoParticipantPresence(co: Seat): Promise<CoParticipantP
       last_turn_at: Date | null;
     }>
   >`
-    SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows,
-           r.last_viewed_at, r.last_active_at,
-           (SELECT max(m.created_at) FROM message m
-             WHERE m.session_id = p.session_id AND m.sender_user_id = p.user_id
-               AND m.role = 'USER' AND m.kind = 'CHAT') AS last_turn_at
-    FROM participant p
-    LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
-    LEFT JOIN user_preferences up ON up.user_id = p.user_id
-    WHERE p.session_id = ${co.sessionId}::uuid AND p.user_id = ${co.userId}::uuid`;
+    SELECT shows, last_viewed_at, last_active_at, last_turn_at
+    FROM app.co_participant_presence(${co.sessionId}::uuid, ${co.userId}::uuid)`;
   const r = rows[0];
   return {
     showsActivity: r?.shows ?? true,
@@ -200,4 +194,31 @@ export async function getPartnerUserIdFor(sessionId: string, userId: string): Pr
   const me = await resolveParticipant(sessionId, userId);
   if (!me) return null;
   return (await getPartnerParticipant(me))?.userId ?? null;
+}
+
+/** A party of a session the caller is seated in, as `app.session_parties` gives it (work-k5fk.10.7, review F7/F8). */
+export interface SessionPartyRow extends Seat {
+  kind: ParticipantKind;
+  displayName: string | null;
+  joinedAt: Date;
+  leftAt: Date | null;
+  /** The name the app calls them by: first name, else the full name; NULL for a tombstone. */
+  userName: string | null;
+  isTombstone: boolean;
+  mainConversationId: string | null;
+}
+
+/**
+ * Every participant of the given sessions — the caller's own seat included — that the caller is seated in, in join
+ * order. The app's one read of a co-participant's name and MAIN conversation id: "user" and conversation are
+ * own-row tables under RLS, so a Prisma relation include returns null for a partner. As mwf_app (app_access).
+ */
+export async function loadSessionParties(sessionIds: string[]): Promise<SessionPartyRow[]> {
+  if (sessionIds.length === 0) return [];
+  return prisma.$queryRaw<SessionPartyRow[]>`
+    SELECT session_id::text AS "sessionId", user_id::text AS "userId", kind::text AS kind,
+           display_name AS "displayName", joined_at AS "joinedAt", left_at AS "leftAt",
+           user_name AS "userName", is_tombstone AS "isTombstone", main_conversation_id::text AS "mainConversationId"
+    FROM app.session_parties(${sessionIds}::uuid[])
+    ORDER BY joined_at, user_id`;
 }

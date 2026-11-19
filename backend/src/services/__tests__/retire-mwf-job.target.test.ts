@@ -95,8 +95,12 @@ const AI_ROUTINES = [
   'empathy_mark_delivery:EXECUTE',
   'empathy_set_status:EXECUTE',
   'jsonb_violation:EXECUTE',
+  // work-k5fk.10.7: the AI policies' predicates (the acting user is a member of the scope; an inner-work row is
+  // the acting user's reflection)
+  'owns_reflection:EXECUTE',
   'schema app:USAGE',
   'schema public:USAGE',
+  'scope_actor_is_member:EXECUTE',
   'session_scope:EXECUTE',
 ];
 const WORKER_ROUTINES = [
@@ -226,7 +230,8 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
       run.as('mwf_ai', null, insert, [conv, session], '01a1e6a2-0000-7000-8000-000000000000'),
     ).rejects.toMatchObject({ code: '42501' });
     // The session's own scope: written.
-    const rows = await run.as<{ seq: number }>('mwf_ai', null, insert, [conv, session], session);
+    // The session's own scope, acting for a participant of it (work-k5fk.10.7): written.
+    const rows = await run.as<{ seq: number }>('mwf_ai', adaUser, insert, [conv, session], session);
     expect(rows).toHaveLength(1);
     // An AI write never carries a participant's line, even in scope.
     await expect(
@@ -287,11 +292,17 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
     });
 
     it('the AI cannot read or lock a session other than its scope', async () => {
-      const { session } = await adaAndBob(run);
+      const { session, adaUser } = await adaAndBob(run);
       const read = `SELECT id::text FROM session WHERE id = $1`;
-      expect(await run.as('mwf_ai', null, read, [session], session)).toEqual([{ id: session }]);
-      expect(await run.as('mwf_ai', null, read, [session], OTHER)).toEqual([]);
-      expect(await run.as('mwf_ai', null, `SELECT count(*)::int AS n FROM participant`, [], OTHER)).toEqual([{ n: 0 }]);
+      // The AI acts for a participant of its scope (work-k5fk.10.7: app.scope_actor_is_member)…
+      expect(await run.as('mwf_ai', adaUser, read, [session], session)).toEqual([{ id: session }]);
+      expect(await run.as('mwf_ai', adaUser, read, [session], OTHER)).toEqual([]);
+      expect(await run.as('mwf_ai', adaUser, `SELECT count(*)::int AS n FROM participant`, [], OTHER)).toEqual([
+        { n: 0 },
+      ]);
+      // …and with no acting user, or one who is not a participant, it reads nothing even in its scope.
+      expect(await run.as('mwf_ai', null, read, [session], session)).toEqual([]);
+      expect(await run.as('mwf_ai', OTHER, read, [session], session)).toEqual([]);
     });
 
     it('the owner mwf_migrator reads and writes no row by default (FORCE; pgaudit, not RLS, is what holds it)', async () => {

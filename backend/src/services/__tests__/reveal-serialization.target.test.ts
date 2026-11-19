@@ -18,7 +18,7 @@
 import { Client } from 'pg';
 import { aiUrlFor } from '../../testing/golden/driver';
 import { isTargetShape } from '../../testing/golden/shape';
-import { openTargetRun, type TargetRun } from './target-roles';
+import { actingAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -32,8 +32,8 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
   it('one serialization failure is retried: both directions revealed, one copy per subject', async () => {
     run = await openTargetRun('RECONCILER_SHOWN_B', `k5fk4_reveal_${process.pid}`);
     process.env.E2E_AUTH_BYPASS = 'true'; // realtime: no Ably key in tests, the E2E path skips the publishes
-    const [ids] = await run.sql<{ session: string; adaConv: string }>(
-      `SELECT c.session_id AS session, c.id AS "adaConv" FROM conversation c JOIN "user" u ON u.id = c.user_id
+    const [ids] = await run.sql<{ session: string; adaConv: string; adaUser: string }>(
+      `SELECT c.session_id AS session, c.id AS "adaConv", u.id::text AS "adaUser" FROM conversation c JOIN "user" u ON u.id = c.user_id
        WHERE u.email = 'ada@e2e.test' AND c.kind = 'MAIN'`,
     );
     // Both directions READY (the fixture has AWAITING_SHARING / HELD; the path there is not what this pins).
@@ -47,6 +47,8 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
       await blocker.query('BEGIN');
       // The AI writes within its session (app.session_scope; work-k5fk.10.5).
       await blocker.query("SELECT set_config('app.session_scope', $1, true)", [ids.session]);
+      // …acting for a participant of it (work-k5fk.10.7: the AI policies require one).
+      await blocker.query("SELECT set_config('app.current_user_id', $1, true)", [ids.adaUser]);
       await blocker.query(
         `INSERT INTO message (conversation_id, session_id, role, kind, content) VALUES ($1, $2, 'AI', 'CHAT', 'concurrent line')`,
         [ids.adaConv, ids.session],
@@ -55,7 +57,10 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
 
       const state = await import('../reconciler/state');
       const { withSessionScope } = await import('../../lib/request-context');
-      const reveal = withSessionScope(ids.session, () => state.checkAndRevealBothIfReady(ids.session));
+      // the AI acting for a participant, as the request that reveals does (work-k5fk.10.7)
+      const reveal = actingAs(ids.adaUser, () =>
+        withSessionScope(ids.session, () => state.checkAndRevealBothIfReady(ids.session)),
+      );
       // Wait until some backend is blocked behind the blocker's row lock — the reveal's copy into Ada's conversation.
       for (let i = 0; ; i++) {
         const [{ n }] = await run.sql<{ n: number }>(

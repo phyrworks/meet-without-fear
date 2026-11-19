@@ -107,6 +107,9 @@ SELECT 'connected as ' || session_user || ' (current_user ' || current_user || '
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 -- The AI's arm needs the session in app.session_scope (work-k5fk.10.5, Q20); session-wide here, transaction-local in the app.
 SELECT set_config('app.session_scope', :'r_session', false) \g /dev/null
+-- …and its acting user (the request's identity, bound on the AI connection too) must be a participant of it
+-- (work-k5fk.10.7: the ai_session policies' app.scope_actor_is_member()).
+SELECT set_config('app.current_user_id', :'a_user', false) \g /dev/null
 
 -- 5a. the AI arm needs the scope: with another session's scope the attempt is not found to it
 DO $$ BEGIN
@@ -169,6 +172,9 @@ SELECT 'connected as ' || session_user || ' (current_user ' || current_user || '
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 -- The AI's arm needs the session in app.session_scope (work-k5fk.10.5, Q20); session-wide here, transaction-local in the app.
 SELECT set_config('app.session_scope', :'r_session', false) \g /dev/null
+-- …and its acting user (the request's identity, bound on the AI connection too) must be a participant of it
+-- (work-k5fk.10.7: the ai_session policies' app.scope_actor_is_member()).
+SELECT set_config('app.current_user_id', :'a_user', false) \g /dev/null
 -- 8. the AI reveals both; the subject's conversation gains exactly one copy, even when the reveal is repeated
 DO $$ DECLARE n int; BEGIN
   PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'REVEALED');
@@ -302,6 +308,12 @@ DO $$ BEGIN
 END $$;
 BEGIN;
 DO $$ BEGIN
+  -- work-k5fk.10.7: the names are the caller's own row ("user" app_update): B edits nothing of A's.
+  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
+  UPDATE "user" SET first_name = 'Mallory' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+  IF FOUND THEN RAISE EXCEPTION 'TEST FAILED: B edited A''s names'; END IF;
+  RAISE NOTICE 'PASS 21j another user''s names are not the caller''s to edit (no row)';
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
   UPDATE "user" SET first_name = 'Ada B.' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
   IF NOT FOUND THEN RAISE EXCEPTION 'TEST FAILED: the profile edit updated no row'; END IF;
   RAISE NOTICE 'PASS 21i mwf_app still edits the names (profile edit)';
@@ -373,6 +385,8 @@ END $$;
 -- 14. A review by a non-subject is refused (I5). Since work-k5fk.3 (6a) by key, not by the retired t_review_subject:
 -- empathy_review (attempt_id, session_id, reviewer_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).
 DO $$ BEGIN
+  -- as A, so the row is A's own (empathy_review app_own, work-k5fk.10.7) and the key is what refuses it
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
   BEGIN
     INSERT INTO empathy_review (attempt_id, session_id, reviewer_user_id, validated)
     VALUES (current_setting('t.att_a')::uuid, current_setting('t.r_session')::uuid,
@@ -751,14 +765,14 @@ DO $$ DECLARE v_con text; BEGIN
     IF SQLERRM NOT LIKE 'only a worker archives through session_set_status%' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 19l a current participant cannot archive through session_set_status: %', SQLERRM;
   END;
-  -- 19m. session_check1: mwf_app cannot INSERT an ARCHIVED session (no archived_at)
+  -- 19m. mwf_app cannot INSERT an ARCHIVED session: a new session starts CREATED (work-k5fk.10.7: session
+  --      app_insert, which PostgreSQL checks before session_check1's missing archived_at)
   BEGIN
     INSERT INTO session (status) VALUES ('ARCHIVED');
     RAISE EXCEPTION 'TEST FAILED: mwf_app inserted an ARCHIVED session';
-  EXCEPTION WHEN check_violation THEN
-    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
-    IF v_con <> 'session_check1' THEN RAISE; END IF;
-    RAISE NOTICE 'PASS 19m mwf_app INSERT of an ARCHIVED session refused by %', v_con;
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM NOT LIKE 'new row violates row-level security policy for table "session"%' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19m mwf_app INSERT of an ARCHIVED session refused: %', SQLERRM;
   END;
   IF (SELECT status FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1') <> 'RESOLVED' THEN
     RAISE EXCEPTION 'TEST FAILED: X moved off RESOLVED';
@@ -850,6 +864,11 @@ END $$;
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: session W for 19k)';
 INSERT INTO session (id, status) VALUES ('00000000-0000-7e00-8000-0000000005e7', 'CREATED');
+-- work-k5fk.10.29 R3: the worker purges only past the window (untouched for 90 days since the archive); X was
+-- archived in 19i. touch_updated_at would stamp the backdated value away: triggers off for the one statement.
+ALTER TABLE session DISABLE TRIGGER USER;
+UPDATE session SET updated_at = now() - interval '91 days' WHERE id = '00000000-0000-7e00-8000-0000000005e1';
+ALTER TABLE session ENABLE TRIGGER USER;
 \connect - mwf_worker
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 DO $$ BEGIN
@@ -859,6 +878,10 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e7' AND status = 'ARCHIVED') THEN
     RAISE EXCEPTION 'TEST FAILED: the worker''s archive did not archive';
   END IF;
+  -- work-k5fk.10.29 R3: W, archived in this very transaction, is not purgeable (worker_purge: past the window only)
+  DELETE FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e7';
+  IF NOT FOUND THEN RAISE NOTICE 'PASS 19k-0 the worker cannot archive and purge a session in one transaction';
+  ELSE RAISE EXCEPTION 'TEST FAILED: the worker purged a session it had just archived'; END IF;
   DELETE FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1';
   IF EXISTS (SELECT 1 FROM participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e1') THEN
     RAISE EXCEPTION 'TEST FAILED: purge left participants';
@@ -1070,9 +1093,26 @@ ROLLBACK;
 --     (the summarizer and the partner-session classifier write it: INSERT … ON CONFLICT DO UPDATE)
 \connect - mwf_ai
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.r_session', :'r_session', false), set_config('t.outsider', :'outsider', false) \g /dev/null
 -- The AI's arm needs the session in app.session_scope (work-k5fk.10.5, Q20); session-wide here, transaction-local in the app.
 SELECT set_config('app.session_scope', :'r_session', false) \g /dev/null
+-- …and its acting user (the request's identity, bound on the AI connection too) must be a participant of it
+-- (work-k5fk.10.7: the ai_session policies' app.scope_actor_is_member()).
+SELECT set_config('app.current_user_id', :'a_user', false) \g /dev/null
+-- 27-0. work-k5fk.10.7: in its scope, the AI acting for a user who is no participant of it writes nothing
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
+  BEGIN
+    INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid,
+      'NOTABLE_FACTS', '{"facts": []}');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote for an actor outside its scope';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM NOT LIKE 'new row violates row-level security policy for table "ai_memory"%' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27-0 the AI acting for a non-participant writes no memory in its scope: %', SQLERRM;
+  END;
+  IF EXISTS (SELECT 1 FROM ai_memory) THEN RAISE EXCEPTION 'TEST FAILED: the AI reads memory for an actor outside its scope'; END IF;
+  RAISE NOTICE 'PASS 27-1 …nor reads any';
+END $$;
 DO $$ DECLARE v_msg text; BEGIN
   -- the summarizer's document (conversation-summarizer.ts updateSessionSummary), every key it writes
   INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'SUMMARY',
@@ -1501,6 +1541,21 @@ DO $$ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b another session''s scope, no AI write: %', SQLERRM;
   END;
   PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e6', true);
+  -- work-k5fk.10.7: in its scope, the AI acting for no one — or for someone outside it (C) — writes no line
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'no actor');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote a line acting for no one';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b-0 the AI acting for no one writes no line: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
+  BEGIN
+    INSERT INTO message (conversation_id, session_id, role, kind, content)
+    VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'outsider');
+    RAISE EXCEPTION 'TEST FAILED: the AI wrote a line acting for a non-participant';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b-1 the AI acting for a non-participant writes no line: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
   INSERT INTO message (conversation_id, session_id, role, kind, content)
   VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'in scope');
   RAISE NOTICE 'PASS 31c the AI writes its line in its scope';
@@ -1530,6 +1585,19 @@ UPDATE empathy_attempt SET status = 'HELD', revealed_at = NULL WHERE id = curren
 SET SESSION AUTHORIZATION mwf_ai;
 DO $$ BEGIN
   PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  -- 32-0 (review F6). the AI's scope is not enough: it acts for a participant of the session, or moves nothing
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'READY');
+    RAISE EXCEPTION 'TEST FAILED: the AI acting for no one moved a round';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 32-0 the AI acting for no one moves no round: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-00000000dead', true);
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'READY');
+    RAISE EXCEPTION 'TEST FAILED: the AI acting for a non-participant moved a round';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 32-0 the AI acting for a non-participant moves no round: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
   -- 32a. the AI never resubmits a round (SUPERSEDED writes the author's next round) nor reviews a revealed one
   BEGIN
     PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'SUPERSEDED', 'AI WROTE THIS');
@@ -1580,11 +1648,11 @@ DO $$ BEGIN
     RAISE EXCEPTION 'TEST FAILED: the worker activated a session';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33a the worker cannot move a session to ACTIVE: %', SQLERRM;
   END;
-  BEGIN
-    DELETE FROM session WHERE id = current_setting('t.r_session')::uuid;
-    RAISE EXCEPTION 'TEST FAILED: the worker deleted a live session';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33b the worker purges only ARCHIVED sessions: %', SQLERRM;
-  END;
+  -- work-k5fk.10.29 R3: a live session is not the worker's to delete — worker_purge does not reach it (no row;
+  -- t_session_purge, behind it, would refuse a non-ARCHIVED one)
+  DELETE FROM session WHERE id = current_setting('t.r_session')::uuid;
+  IF FOUND THEN RAISE EXCEPTION 'TEST FAILED: the worker deleted a live session'; END IF;
+  RAISE NOTICE 'PASS 33b the worker purges only ARCHIVED sessions past the window (a live one: no row)';
   PERFORM set_config('app.session_scope', '', true);
   BEGIN
     INSERT INTO follow_up (session_id, type, scope, status, scheduled_for, summary)

@@ -13,7 +13,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { actingAs, adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -88,7 +88,11 @@ describeTarget('repair privacy fixes (fix round 1) — closure oracle and the pa
     for (const l of ADA_LABELS) expect(JSON.stringify(bobTending.body)).not.toContain(l);
     // The Tending prompt reads loadFollowUpsForParticipant: Bob's excludes it.
     const { loadFollowUpsForParticipant } = await import('../tending.service');
-    expect((await loadFollowUpsForParticipant(sid, ids.bob)).map(f => f.id)).not.toContain(entry.id);
-    expect((await loadFollowUpsForParticipant(sid, ids.ada)).map(f => f.id)).toContain(entry.id);
+    expect((await actingAs(ids.bobUser, () => loadFollowUpsForParticipant(sid, ids.bob))).map(f => f.id)).not.toContain(
+      entry.id,
+    );
+    expect((await actingAs(ids.adaUser, () => loadFollowUpsForParticipant(sid, ids.ada))).map(f => f.id)).toContain(
+      entry.id,
+    );
   });
 });

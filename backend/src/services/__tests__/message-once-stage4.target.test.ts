@@ -21,7 +21,6 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { MESSAGE_DEDUPE_KEYS } from '../message-store';
 import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
@@ -34,8 +33,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   let store: typeof import('../message-store');
   let ctx: typeof import('../../lib/request-context');
   /** The AI's once-only line, scoped to the run's session (app.session_scope; work-k5fk.10.5). */
+  // …acting for a participant of it, as a request does (work-k5fk.10.7: the AI policies require one).
   const onceInScope = (o: Parameters<typeof store.createFacilitatorMessageOnce>[0]) =>
-    ctx.withSessionScope(ids.session, () => store.createFacilitatorMessageOnce(o));
+    asUser(ids.adaUser, () => ctx.withSessionScope(ids.session, () => store.createFacilitatorMessageOnce(o)));
   let conv: { ada: string; bob: string };
   const ada = () => ({ id: ids.adaUser, email: 'ada@e2e.test' });
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
@@ -86,7 +86,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const labels = await run.sql<{ l: string }>(
       `SELECT enumlabel AS l FROM pg_enum WHERE enumtypid = 'message_dedupe_key'::regtype ORDER BY enumsortorder`,
     );
-    expect(labels.map(l => l.l)).toEqual([...MESSAGE_DEDUPE_KEYS]);
+    expect(labels.map(l => l.l)).toEqual([...store.MESSAGE_DEDUPE_KEYS]);
     const [idx] = await run.sql<{ def: string; uniq: boolean }>(
       `SELECT pg_get_indexdef(i.indexrelid) AS def, i.indisunique AS uniq FROM pg_index i
         WHERE i.indexrelid = 'public.sql_message_once'::regclass`,
@@ -179,23 +179,25 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   it('inside an interactive transaction a duplicate returns null and the transaction goes on', async () => {
     const { getAiPrisma } = await import('../../lib/prisma');
     const { withSessionScope } = await import('../../lib/request-context');
-    const out = await withSessionScope(ids.session, () =>
-      getAiPrisma().$transaction(async tx => {
-        const dup = await store.createFacilitatorMessageOnce({
-          conversationId: conv.bob,
-          dedupeKey: 'STAGE2_VALIDATED_WAIT',
-          content: 'PROBE_FDC1_TX_DUP',
-          client: tx,
-        });
-        // A later statement in the same transaction still runs (no 25P02).
-        const fresh = await store.createFacilitatorMessageOnce({
-          conversationId: conv.bob,
-          dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
-          content: 'PROBE_FDC1_TX_FRESH',
-          client: tx,
-        });
-        return { dup, fresh };
-      }),
+    const out = await asUser(ids.adaUser, () =>
+      withSessionScope(ids.session, () =>
+        getAiPrisma().$transaction(async tx => {
+          const dup = await store.createFacilitatorMessageOnce({
+            conversationId: conv.bob,
+            dedupeKey: 'STAGE2_VALIDATED_WAIT',
+            content: 'PROBE_FDC1_TX_DUP',
+            client: tx,
+          });
+          // A later statement in the same transaction still runs (no 25P02).
+          const fresh = await store.createFacilitatorMessageOnce({
+            conversationId: conv.bob,
+            dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
+            content: 'PROBE_FDC1_TX_FRESH',
+            client: tx,
+          });
+          return { dup, fresh };
+        }),
+      ),
     );
     expect(out.dup).toBeNull();
     expect(out.fresh).toMatchObject({ content: 'PROBE_FDC1_TX_FRESH' });

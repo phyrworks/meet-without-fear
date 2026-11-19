@@ -19,6 +19,7 @@ import { withClient } from '../../testing/golden/db';
 import { aiUrlFor, appUrlFor, workerUrlFor } from '../../testing/golden/driver';
 import { restoreFixture, type RestoredFixture } from '../../testing/golden/fixtures';
 import { isTargetShape } from '../../testing/golden/shape';
+import { actingAs } from './target-roles';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
@@ -208,21 +209,25 @@ describeTarget('participant resolution and the single context entry point (targe
   // -------------------------------------------------------------------------------------------
 
   it("resolves the caller's participant with its MAIN conversation", async () => {
-    const p = await resolver.resolveParticipant(ids.session, ids.adaUser);
+    const p = await actingAs(ids.adaUser, () => resolver.resolveParticipant(ids.session, ids.adaUser));
     expect(p).toMatchObject({ sessionId: ids.session, userId: ids.adaUser, kind: 'human', leftAt: null });
     const [conv] = await sql<{ id: string }>(
       `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
       [ids.session, ids.adaUser],
     );
     expect(p?.mainConversationId).toBe(conv.id);
-    expect(await resolver.resolveParticipant(ids.session, '00000000-0000-7000-8000-000000000000')).toBeNull();
+    expect(
+      await actingAs(ids.adaUser, () =>
+        resolver.resolveParticipant(ids.session, '00000000-0000-7000-8000-000000000000'),
+      ),
+    ).toBeNull();
   });
 
   it('finds co-participants through v_co_participant and the two-party partner', async () => {
-    const co = await resolver.getCoParticipants(ids.ada);
+    const co = await actingAs(ids.adaUser, () => resolver.getCoParticipants(ids.ada));
     expect(co.map(c => c.userId)).toEqual([ids.bobUser]);
-    expect((await resolver.getPartnerParticipant(ids.ada))?.userId).toBe(ids.bobUser);
-    expect(await resolver.getPartnerUserIdFor(ids.session, ids.bobUser)).toBe(ids.adaUser);
+    expect((await actingAs(ids.adaUser, () => resolver.getPartnerParticipant(ids.ada)))?.userId).toBe(ids.bobUser);
+    expect(await actingAs(ids.bobUser, () => resolver.getPartnerUserIdFor(ids.session, ids.bobUser))).toBe(ids.adaUser);
   });
 
   it('is N-party safe: an AI participant is a co-participant but not "the partner"; a second human makes the partner ambiguous (null)', async () => {
@@ -231,8 +236,8 @@ describeTarget('participant resolution and the single context entry point (targe
       `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, display_name) VALUES ($1, app.ai_user_id(), 'ai', $2, 'Coach')`,
       [ids.session, ids.adaUser],
     );
-    expect((await resolver.getCoParticipants(ids.ada)).length).toBe(2);
-    expect((await resolver.getPartnerParticipant(ids.ada))?.userId).toBe(ids.bobUser);
+    expect((await actingAs(ids.adaUser, () => resolver.getCoParticipants(ids.ada))).length).toBe(2);
+    expect((await actingAs(ids.adaUser, () => resolver.getPartnerParticipant(ids.ada)))?.userId).toBe(ids.bobUser);
 
     const [carol] = await sql<{ id: string }>(
       `INSERT INTO "user" (email, first_name) VALUES ('carol@e2e.test', 'Carol') RETURNING id`,
@@ -242,8 +247,8 @@ describeTarget('participant resolution and the single context entry point (targe
       [ids.session, carol.id, ids.adaUser],
     );
     try {
-      expect((await resolver.getCoParticipants(ids.ada)).length).toBe(3);
-      expect(await resolver.getPartnerParticipant(ids.ada)).toBeNull();
+      expect((await actingAs(ids.adaUser, () => resolver.getCoParticipants(ids.ada))).length).toBe(3);
+      expect(await actingAs(ids.adaUser, () => resolver.getPartnerParticipant(ids.ada))).toBeNull();
     } finally {
       await sql(`DELETE FROM participant WHERE session_id = $1 AND user_id = $2`, [ids.session, carol.id]);
       await sql(`DELETE FROM participant WHERE session_id = $1 AND kind = 'ai'`, [ids.session]);
@@ -288,8 +293,10 @@ describeTarget('participant resolution and the single context entry point (targe
       ids.bobUser,
     ]);
     try {
-      expect(await resolver.resolveParticipant(ids.session, ids.bobUser)).toBeNull();
-      expect(await resolver.resolveParticipant(ids.session, ids.bobUser, { includeLeft: true })).toMatchObject(ids.bob);
+      expect(await actingAs(ids.bobUser, () => resolver.resolveParticipant(ids.session, ids.bobUser))).toBeNull();
+      expect(
+        await actingAs(ids.bobUser, () => resolver.resolveParticipant(ids.session, ids.bobUser, { includeLeft: true })),
+      ).toMatchObject(ids.bob);
       // Bob is the invitation's acceptor: the fallback would admit him; it must not be reached.
       const [inv] = await sql<{ accepted_by_user_id: string }>(`SELECT accepted_by_user_id FROM invitation`);
       expect(inv.accepted_by_user_id).toBe(ids.bobUser);

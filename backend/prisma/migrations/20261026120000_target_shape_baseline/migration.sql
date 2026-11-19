@@ -694,8 +694,8 @@ CREATE TYPE message_role AS ENUM ('USER', 'AI', 'SYSTEM');
 COMMENT ON TYPE message_role IS 'Who wrote a line: the human (USER), the AI guide (AI) or the app (SYSTEM). Also used by reflection_message.';
 CREATE TYPE message_kind AS ENUM ('CHAT', 'EMPATHY_STATEMENT', 'EMPATHY_REVEAL_INTRO', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION', 'EMPATHY_VALIDATION_PROMPT');
 COMMENT ON TYPE message_kind IS 'CHAT for an ordinary turn; every other member is an item delivered across participants (an empathy statement, shared context, validation feedback, a share suggestion and their prompts).';
-CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE');
-COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts). A closed set: no value is derived from message content.';
+CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE', 'STAGE4_TRANSITION');
+COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts); STAGE4_TRANSITION, each participant''s Stage 4 transition line, written from their own request (services/stage4-transition.ts). A closed set: no value is derived from message content.';
 CREATE TYPE draft_kind AS ENUM ('EMPATHY', 'VALIDATION_FEEDBACK', 'SHARE_CONTEXT');
 COMMENT ON TYPE draft_kind IS 'The sharing point a draft is for; it decides which of draft''s arc columns is set.';
 CREATE TYPE milestone_scope AS ENUM ('participant', 'session');
@@ -837,8 +837,8 @@ COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_na
 COMMENT ON CONSTRAINT user_tombstone ON "user" IS 'A human is deleted exactly when its email is the scrubbed deleted+<id>@invalid: a live account cannot hold such an address, a tombstone cannot keep a real one.';
 COMMENT ON CONSTRAINT user_ai_constant ON "user" IS 'The AI principal is never deleted and has no name: its row is a constant the baseline seeds (app.ai_user_id()).';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
--- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user) and its partner's
--- names; the profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
+-- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user; RLS: its own row, the AI and its personas — a partner's name comes from app.session_parties, review F7)
+-- The profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
 -- (work-bp5m): a first login creates the row through mwf_auth's app.create_user, so no request can write an email or
 -- re-bind an account (the work-jv9y takeover needed mwf_app's UPDATE (clerk_id, email)); the tombstone is
 -- app.anonymize_user_account.
@@ -846,7 +846,8 @@ GRANT SELECT ON "user" TO app_access;
 GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO app_access;
 -- mwf_definer: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
 -- the persona scrub)
-GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_definer;
+-- participant_presence, session_parties (review F7: the name a co-participant is called by)
+GRANT SELECT (id, kind, email, deleted_at, first_name, name) ON "user" TO mwf_definer;
 GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_definer;
 GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
@@ -956,6 +957,8 @@ GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON use
 GRANT UPDATE (nickname, updated_at) ON user_contact TO app_access;
 -- mwf_definer: anonymize_user_account deletes the leaver's own entries (U-class: their words about others).
 GRANT SELECT (user_id) ON user_contact TO mwf_definer;
+-- mwf_definer: actor_name_for (a push names its actor by the recipient's own nickname for them)
+GRANT SELECT (contact_user_id, nickname) ON user_contact TO mwf_definer;
 GRANT DELETE ON user_contact TO mwf_definer;
 -- mwf_ops: nothing — a nickname is its owner's alone (no dashboard reads one).
 
@@ -1004,6 +1007,8 @@ GRANT UPDATE (updated_at) ON session TO ai_access;
 -- mwf_definer: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
 GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_definer;
 GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_definer;
+-- mwf_definer: invitation_peek (is the topic frame set and confirmed — never its text)
+GRANT SELECT (topic_frame, topic_frame_confirmed_at) ON session TO mwf_definer;
 -- mwf_worker: session-retention: the ACTIVE candidates, staleness of an ACTIVE session and the purge window of an
 -- ARCHIVED one (status moves through app.session_set_status)
 GRANT SELECT (id, status, updated_at) ON session TO worker_access;
@@ -1048,7 +1053,7 @@ COMMENT ON COLUMN participant.added_by_user_id IS 'Who brought this participant 
 COMMENT ON CONSTRAINT participant_check ON participant IS 'Only a human can be the initiator: the AI or a persona always has an adder.';
 COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
 COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
-COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to user.name (v_participant).';
+COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to the user''s first name, else user.name (v_participant, app.session_parties; review F7).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
 -- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
@@ -1059,6 +1064,10 @@ GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_
 GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_definer;
 -- mwf_definer: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
 GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
+-- mwf_definer: invitation_peek (the inviter's display name, as the invitee sees it)
+GRANT SELECT (display_name) ON participant TO mwf_definer;
+-- mwf_definer: session_parties (review F7: the parties of the caller's sessions, in join order)
+GRANT SELECT (joined_at) ON participant TO mwf_definer;
 -- mwf_definer: anonymize_user_in_session step 2
 GRANT UPDATE (display_name, left_at) ON participant TO mwf_definer;
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts), brain-service
@@ -1370,6 +1379,10 @@ GRANT DELETE ON message TO app_access;
 -- mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe; deliver_message: the delivered copy with
 -- its instant, RETURNING seq, created_at
 GRANT SELECT (conversation_id, source_attempt_id, kind, seq, created_at) ON message TO mwf_definer;
+-- mwf_definer: stage4_transition_started (whether a party's Stage 4 transition line exists: its key, never content)
+GRANT SELECT (dedupe_key) ON message TO mwf_definer;
+-- mwf_definer: co_participant_presence (a co-participant's last turn: the instant of their latest USER CHAT line)
+GRANT SELECT (session_id, sender_user_id, role) ON message TO mwf_definer;
 GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at) ON message TO mwf_definer;
 -- mwf_ai: message-store createFacilitatorMessage / createFacilitatorMessageOnce: the AI / SYSTEM line (sender_user_id
 -- is sent as NULL; t_session_scope refuses any other role), a once-only line's dedupe_key (work-fdc1, sql_message_once),
@@ -1429,6 +1442,9 @@ GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_se
   ON conversation_read_state TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: the caller's own read state; a co-participant's shared-frame instant and last activity, review F2)
+GRANT SELECT (last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at)
+  ON conversation_read_state TO mwf_definer;
 GRANT DELETE ON conversation_read_state TO mwf_definer;
 
 CREATE TABLE reconciler_result (
@@ -1490,6 +1506,8 @@ COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (parti
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
 GRANT SELECT ON reconciler_result TO app_access;
+-- mwf_definer: result_facts (which attempt a result analysed, its iteration and supersession — never the analysis)
+GRANT SELECT (id, attempt_id, subject_user_id, iteration, superseded_at) ON reconciler_result TO mwf_definer;
 -- mwf_ai: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
 -- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL).
@@ -1562,6 +1580,8 @@ GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content
 -- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
 -- offer on the recipient's round, review F3)
 GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
+-- mwf_definer: shares_delivered_to_me (the author's delivered shared text — never the offer)
+GRANT SELECT (shared_content, shared_at, delivered_at) ON context_share_offer TO mwf_definer;
 GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
 -- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
 -- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a
@@ -1716,6 +1736,8 @@ GRANT SELECT ON mood_reading TO app_access;
 GRANT INSERT (session_id, user_id, intensity, context, recorded_at, created_at) ON mood_reading TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: the caller's own latest mood — never a co-participant's, review F2)
+GRANT SELECT (id, intensity, recorded_at) ON mood_reading TO mwf_definer;
 GRANT DELETE ON mood_reading TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON mood_reading TO ops_access;
@@ -1776,16 +1798,18 @@ COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set 
 COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
 COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
 COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
--- mwf_app: the inviter creates it and confirms its message; the INVITEE accepts / declines / expires it and locks it
--- (FOR UPDATE / FOR SHARE need UPDATE) — FINDING: a write of the inviter's row, a definer function's job later.
+-- mwf_app: the inviter creates it and confirms its message (and locks it FOR SHARE for a pre-join draft save, which
+-- needs an UPDATE grant). The INVITEE's accept / decline / expire is app.invitation_answer, its pre-membership read
+-- app.invitation_peek (work-k5fk.10.7: the inviter's row, written by the invitee, is a definer's job).
 GRANT SELECT ON invitation TO app_access;
 GRANT INSERT (session_id, invited_by_user_id, invitee_name, status, expires_at, created_at, updated_at)
   ON invitation TO app_access;
-GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, message_confirmed_at, updated_at)
-  ON invitation TO app_access;
+GRANT UPDATE (message_confirmed_at, updated_at) ON invitation TO app_access;
 -- mwf_definer: session_abandon_declined (invitations.ts declineInvitation: the decliner is no participant, so the
--- declined invitation is what lets the session end)
-GRANT SELECT (id, session_id, invited_by_user_id, status) ON invitation TO mwf_definer;
+-- declined invitation is what lets the session end); invitation_peek, invitation_answer, session_invitee_access
+GRANT SELECT (id, session_id, invited_by_user_id, status, accepted_by_user_id, invitee_name, message_confirmed_at,
+              expires_at, created_at) ON invitation TO mwf_definer;
+GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason) ON invitation TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT (session_id, invited_by_user_id) ON invitation TO ops_access;
 
@@ -1840,18 +1864,21 @@ COMMENT ON COLUMN draft.invitation_id IS 'EMPATHY before the subject has joined:
 COMMENT ON COLUMN draft.reopened_at IS 'Set when the author chose Edit first on a pre-join draft after the join; cleared by the next draft write (work-9309).';
 COMMENT ON COLUMN draft.content IS 'encrypted (participant): the draft text, AI-proposed or written by the participant.';
 -- mwf_app: the caller's drafts (empathy-store upsertDraft, reconciler/sharing.ts, empathy-draft-save reopen, delete).
--- id and created_at: ONLY repointInvitationDrafts — FINDING: at accept the INVITEE's request deletes and re-inserts the
--- INVITER's pre-join drafts (same id, timestamps) to re-point them at the new participant.
+-- No id, created_at or updated_at: the accept's move of the INVITER's pre-join drafts to the invitee (same id,
+-- timestamps) is app.invitation_repoint_drafts (work-k5fk.10.7; was the invitee's request writing the inviter's rows).
 GRANT SELECT ON draft TO app_access;
-GRANT INSERT (id, session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
-              ready_to_share, version, reopened_at, created_at, updated_at) ON draft TO app_access;
+GRANT INSERT (session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
+              ready_to_share, version, reopened_at) ON draft TO app_access;
 GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO app_access;
 -- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
 -- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
 GRANT DELETE ON draft TO app_access;
--- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON draft TO mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads;
+-- invitation_repoint_drafts: the whole row, moved with its id and timestamps (work-k5fk.10.7)
+GRANT SELECT ON draft TO mwf_definer;
 GRANT DELETE ON draft TO mwf_definer;
+GRANT INSERT (id, session_id, user_id, kind, about_user_id, content, ready_to_share, version, created_at, updated_at,
+              reopened_at) ON draft TO mwf_definer;
 
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1928,6 +1955,8 @@ GRANT INSERT (attempt_id, session_id, reviewer_user_id, validated, feedback, fee
 GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO app_access;
 -- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
 GRANT SELECT (id, session_id, reviewer_user_id) ON empathy_review TO mwf_definer;
+-- mwf_definer: validated_at (when the author's attempt was first validated — nothing else of the review)
+GRANT SELECT (attempt_id, validated, created_at) ON empathy_review TO mwf_definer;
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
@@ -2137,6 +2166,8 @@ GRANT UPDATE (decision, note, created_at) ON proposal_choice TO app_access;
 -- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON proposal_choice TO mwf_definer;
+-- mwf_definer: t_agreement_parties (every party WILLING on the proposal)
+GRANT SELECT (proposal_id, decision) ON proposal_choice TO mwf_definer;
 GRANT DELETE ON proposal_choice TO mwf_definer;
 -- mwf_worker: closureInputsAsJob / agreeIfEveryoneWilling (every present human WILLING) and T-agreement-parties
 -- (deferred, invoker = the agreement's writer): every party WILLING on the proposal
@@ -2204,6 +2235,8 @@ COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s fr
 COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 -- mwf_app: read only; agreements are created and moved by the job.
 GRANT SELECT ON agreement TO app_access;
+-- mwf_definer: t_agreement_parties (the agreement whose parties it checks)
+GRANT SELECT (id, session_id, proposal_id, created_at) ON agreement TO mwf_definer;
 -- mwf_worker: stage4-store createAgreementsAsJob / insertAgreementsTx: the agreement row (snapshot of the proposal) and its
 -- id (RETURNING id)
 GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO worker_access;
@@ -2231,6 +2264,8 @@ COMMENT ON COLUMN agreement_party.session_id IS 'The session of every participan
 COMMENT ON COLUMN agreement_party.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: read only (an agreement's parties).
 GRANT SELECT ON agreement_party TO app_access;
+-- mwf_definer: t_agreement_parties (the parties)
+GRANT SELECT (agreement_id, user_id) ON agreement_party TO mwf_definer;
 -- mwf_worker: stage4-store insertAgreementsTx: one party row per present human
 GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO worker_access;
 -- mwf_worker: T-agreement-parties (deferred, invoker = mwf_worker): the party set
@@ -2560,6 +2595,8 @@ GRANT INSERT (user_id, doc) ON user_preferences TO app_access;
 GRANT UPDATE (doc, updated_at) ON user_preferences TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON user_preferences TO mwf_definer;
+-- mwf_definer: participant_presence (v_participant: whether a co-participant shows their activity status)
+GRANT SELECT (doc) ON user_preferences TO mwf_definer;
 GRANT DELETE ON user_preferences TO mwf_definer;
 
 CREATE TABLE user_memory (
@@ -2882,7 +2919,9 @@ COMMENT ON INDEX sql_user_device_token IS 'A push token is registered once per u
 --                  identity (app.current_user_id()) is the row's participant;
 --   the AI arm     pg_has_role(session_user, 'ai_access', 'USAGE') and
 --                  app.session_scope() is the row's session (Q20: required —
---                  an unset scope is NULL, so the arm fails closed);
+--                  an unset scope is NULL, so the arm fails closed), and its
+--                  acting user is a participant of it (app.scope_actor_is_member;
+--                  work-k5fk.10.7 review F6, as the ai_session policies);
 --   the worker arm the same with worker_access;
 --   mwf_migrator   local tooling and the caller tests (never a runtime client).
 -- An arm never borrows another's: the AI's client binds the request's identity
@@ -3066,6 +3105,23 @@ REVOKE EXECUTE ON FUNCTION app.touch_updated_at() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION app.is_member(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.is_member(uuid) TO app_access;
 
+-- Is the caller a PRESENT participant of this session (seated, not left)? Review F4: a leaver keeps reading
+-- (app.is_member) but loses every write — the app_active_* restrictive policies and the session INSERT's
+-- previous_session_id test.
+CREATE FUNCTION app.is_current_member(session uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (
+      SELECT 1 FROM public.participant p
+      WHERE p.session_id = is_current_member.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL
+    )
+  $$;
+COMMENT ON FUNCTION app.is_current_member(uuid) IS 'True when the caller is a participant of the session who has not left. The write half of app.is_member (review F4).';
+-- mwf_app (app_access): the app_active_* RLS policies.
+REVOKE EXECUTE ON FUNCTION app.is_current_member(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.is_current_member(uuid) TO app_access;
+
 -- The caller's co-participant's user id: NULL unless the caller is a
 -- participant and the session has exactly two human participants (kept for
 -- the two-party job paths; v_co_participant is the N-safe read).
@@ -3084,6 +3140,485 @@ CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
 -- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app.
 REVOKE EXECUTE ON FUNCTION app.partner_user_id(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO app_access;
+
+-- The row predicates of the §6 policies (rows 9d–9g, work-k5fk.10.7) that need a row the caller does not see
+-- (or holds no grant on): definers, so a policy never recurses into another table's policy (spec P1-1). Each is a
+-- boolean of the caller's identity (app.current_user_id(); NULL never matches) or scope, and nothing more.
+
+-- A session nobody is seated in yet: createSession's INSERT … RETURNING (and tending's linked process) reads the
+-- new session back before its initiator's participant row exists. Committed, every session has a participant
+-- (both writers seat the initiator in the same transaction), so the arm reaches only that moment.
+-- Review F12 (accepted, documented): the arm cannot be scoped to its creator — session has no creator column, and
+-- the initiator's participant row, which would name them, is what does not exist yet. An unseated CREATED session
+-- other than one's own in-flight insert is unreachable: no committed state holds one (the two writers above seat
+-- the initiator in the session's own transaction, which is invisible to every other transaction until it commits),
+-- mwf_app cannot DELETE a participant, and seats go only with their session (the worker's retention purge,
+-- t_session_purge). A superuser or migration that commits an unseated session would open it; none does.
+-- Review F13 (accepted, documented): true for a session id that does not exist, so with app.session_invitee_access
+-- it tells a signed-in caller whether an id names a session. The ids are UUIDv7 (not enumerable), and the answer
+-- carries nothing of the session.
+CREATE FUNCTION app.session_unseated(session uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$ SELECT NOT EXISTS (SELECT 1 FROM public.participant p WHERE p.session_id = session_unseated.session) $$;
+COMMENT ON FUNCTION app.session_unseated(uuid) IS 'True when no participant is seated in the session yet (the moment between createSession''s INSERT and its initiator''s participant row). RLS predicate of session (work-k5fk.10.7).';
+-- mwf_app (app_access): the session policy app_select.
+REVOKE EXECUTE ON FUNCTION app.session_unseated(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_unseated(uuid) TO app_access;
+
+-- Is this user a live human the caller shares a session with (both seated in one, leavers included, as
+-- app.is_member)? createSession's personId check: a session is started only with a known person (review F7: "user"
+-- no longer shows a co-participant's row, so the check asks here and learns nothing but yes or no).
+CREATE FUNCTION app.shares_session_with(other uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (
+      SELECT 1 FROM public.participant me
+      JOIN public.participant o ON o.session_id = me.session_id AND o.user_id = shares_session_with.other
+      JOIN public."user" u ON u.id = o.user_id AND u.kind = 'human' AND u.deleted_at IS NULL
+      WHERE me.user_id = app.current_user_id()
+    )
+  $$;
+COMMENT ON FUNCTION app.shares_session_with(uuid) IS 'True when the user is a live (not deleted) human who shares a session with the caller (leavers included). createSession''s personId check (work-k5fk.10.7, review F7).';
+-- mwf_app (app_access): controllers/invitations.ts createSession.
+REVOKE EXECUTE ON FUNCTION app.shares_session_with(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.shares_session_with(uuid) TO app_access;
+
+-- Is this user a persona the caller owns (design note §6 "user" S)? mwf_app holds nothing on persona.
+CREATE FUNCTION app.owns_persona("user" uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (SELECT 1 FROM public.persona x
+                   WHERE x.user_id = owns_persona."user" AND x.owner_user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.owns_persona(uuid) IS 'True when the user is a persona the caller owns. RLS predicate of "user" (work-k5fk.10.7).';
+-- mwf_app (app_access): the "user" policy app_select.
+REVOKE EXECUTE ON FUNCTION app.owns_persona(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.owns_persona(uuid) TO app_access;
+
+-- The AI's acting user (the request's identity, which the AI connection binds too) is a participant of the one
+-- session its transaction is scoped to (design note §6: the ai_access policies are the scope "and the acting user
+-- must be a member"). An unset scope or identity: false.
+CREATE FUNCTION app.scope_actor_is_member() RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (SELECT 1 FROM public.participant p
+                   WHERE p.session_id = app.session_scope() AND p.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.scope_actor_is_member() IS 'True when the acting user (app.current_user_id) is a participant of app.session_scope. The membership term of the ai_access policies (work-k5fk.10.7).';
+-- mwf_ai (ai_access): every ai_session policy, as (SELECT app.scope_actor_is_member()).
+REVOKE EXECUTE ON FUNCTION app.scope_actor_is_member() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.scope_actor_is_member() TO ai_access;
+
+-- Is this reflection the acting user's? The AI's sessionless telemetry of an inner-work call (brain_activity with
+-- a reflection_id) is its owner's only (work-k5fk.10.33: any AI transaction read and rewrote every sessionless row).
+CREATE FUNCTION app.owns_reflection(reflection uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (SELECT 1 FROM public.reflection r
+                   WHERE r.id = owns_reflection.reflection AND r.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.owns_reflection(uuid) IS 'True when the reflection is the acting user''s. RLS predicate of the AI''s sessionless brain_activity rows (work-k5fk.10.33).';
+-- mwf_ai (ai_access): the brain_activity policy ai_reflection.
+REVOKE EXECUTE ON FUNCTION app.owns_reflection(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.owns_reflection(uuid) TO ai_access;
+
+-- An invitation as someone who is not (yet) a participant may see it (design note §6 invitation: "pre-membership
+-- accept read via definer app.invitation_peek(id)"). The invitation's link is the bearer credential, so a caller
+-- who names the id reads this much — never the session's content, only whether it is ready to join. No identity is
+-- required: GET /invitations/:id (the link's preview) is public, rate-limited (routes/invitations.ts). invitee_name
+-- is the inviter's name for the invitee, ciphertext (the caller decrypts). No row: not found.
+CREATE FUNCTION app.invitation_peek(invitation uuid)
+  RETURNS TABLE (id uuid, session_id uuid, invited_by_user_id uuid, inviter_display_name text, invitee_name text,
+                 status public.invitation_status, accepted_by_user_id uuid, message_confirmed_at timestamptz,
+                 expires_at timestamptz, created_at timestamptz, session_status public.session_status,
+                 topic_frame_confirmed boolean)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT i.id, i.session_id, i.invited_by_user_id, p.display_name, i.invitee_name, i.status, i.accepted_by_user_id,
+           i.message_confirmed_at, i.expires_at, i.created_at, s.status,
+           (s.topic_frame IS NOT NULL AND s.topic_frame_confirmed_at IS NOT NULL)
+    FROM public.invitation i
+    JOIN public.session s ON s.id = i.session_id
+    JOIN public.participant p ON p.session_id = i.session_id AND p.user_id = i.invited_by_user_id
+    WHERE i.id = invitation_peek.invitation AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.invitation_peek(uuid) IS 'The invitation by id for a caller who need not be a participant, nor signed in (its link is the credential; the preview is public): status, expiry, the inviter''s display name, the invitee name (ciphertext) and whether the session is ready to join. app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): invitations.ts getInvitation, acceptInvitation, declineInvitation, acknowledgeInvitation.
+REVOKE EXECUTE ON FUNCTION app.invitation_peek(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.invitation_peek(uuid) TO app_access;
+
+-- The invitee's answer to a PENDING invitation (design note §6: the inviter's row is written only through a
+-- function): ACCEPTED (not yet expired; accepted by the caller, at instant), DECLINED (with the reason, ciphertext),
+-- or EXPIRED (only once past expires_at). Identity-bound, never the inviter. Locks the invitation FOR UPDATE first:
+-- the accept's lock (work-99k2: a concurrent pre-join draft save holds it FOR SHARE). Refusals: not found (P0002;
+-- the inviter too), not PENDING, not expired, expired (check_violation).
+CREATE FUNCTION app.invitation_answer(invitation uuid, answer public.invitation_status, instant timestamptz DEFAULT NULL,
+                                      reason text DEFAULT NULL)
+  RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me      uuid := app.current_user_id();
+    v_now     timestamptz := CURRENT_TIMESTAMP;
+    v_at      timestamptz := coalesce(invitation_answer.instant, CURRENT_TIMESTAMP);
+    v_inviter uuid;
+    v_status  public.invitation_status;
+    v_expires timestamptz;
+  BEGIN
+    IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
+      RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    SELECT i.invited_by_user_id, i.status, i.expires_at INTO v_inviter, v_status, v_expires
+    FROM public.invitation i WHERE i.id = invitation_answer.invitation FOR UPDATE;
+    IF v_inviter IS NULL OR v_inviter = v_me THEN
+      RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_status <> 'PENDING' THEN
+      RAISE EXCEPTION 'invitation is %, not PENDING', v_status USING ERRCODE = 'check_violation';
+    END IF;
+    -- review F3: the instant only stamps the answer (accepted_at / declined_at), and only near now — as
+    -- app.deliver_message / empathy_mark_delivery; expiry is always judged against the database's clock.
+    IF v_at < v_now - interval '10 minutes' OR v_at > v_now + interval '5 seconds' THEN
+      RAISE EXCEPTION 'an answer is stamped now (within ten minutes back, five seconds ahead)' USING ERRCODE = 'check_violation';
+    END IF;
+    IF invitation_answer.answer = 'ACCEPTED' THEN
+      IF v_expires <= v_now THEN
+        RAISE EXCEPTION 'invitation has expired' USING ERRCODE = 'check_violation';
+      END IF;
+      UPDATE public.invitation i SET status = 'ACCEPTED', accepted_by_user_id = v_me, accepted_at = v_at
+      WHERE i.id = invitation_answer.invitation;
+    ELSIF invitation_answer.answer = 'DECLINED' THEN
+      UPDATE public.invitation i
+      SET status = 'DECLINED', declined_at = v_at, decline_reason = invitation_answer.reason::public.ciphertext
+      WHERE i.id = invitation_answer.invitation;
+    ELSIF invitation_answer.answer = 'EXPIRED' THEN
+      IF v_expires > v_now THEN
+        RAISE EXCEPTION 'invitation has not expired' USING ERRCODE = 'check_violation';
+      END IF;
+      UPDATE public.invitation i SET status = 'EXPIRED' WHERE i.id = invitation_answer.invitation;
+    ELSE
+      RAISE EXCEPTION 'not an answer: %', invitation_answer.answer USING ERRCODE = 'check_violation';
+    END IF;
+  END
+  $$;
+COMMENT ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) IS 'The invitee''s answer to a PENDING invitation: ACCEPTED (by the caller, before expiry), DECLINED (with a ciphertext reason) or EXPIRED (past expiry). Identity-bound, app_access, never the inviter; locks the invitation FOR UPDATE (work-k5fk.10.7).';
+-- mwf_app (app_access): invitations.ts acceptInvitation, declineInvitation.
+REVOKE EXECUTE ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) TO app_access;
+
+-- At accept, inside the transaction that seats the invitee (invitations.ts acceptInvitation, after the participant
+-- row): the inviter's EMPATHY drafts about the invitation become about the invitee (about_user_id = the invitee,
+-- invitation_id = NULL; work-99k2). A move — delete, then insert the same row with the new arc — not an UPDATE:
+-- touch_updated_at would stamp updated_at, which is the draft's written-at (preJoinReview). id, created_at,
+-- updated_at, version and reopened_at carry over; content is copied as it is stored (one key, no row binding:
+-- lib/prisma-encryption-middleware.ts). The caller is the invitee: identity-bound, the invitation is ACCEPTED by
+-- them and they are seated in its session (a definer, work-k5fk.10.7: the drafts are the inviter's own rows).
+-- Returns the drafts moved.
+CREATE FUNCTION app.invitation_repoint_drafts(invitation uuid) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me      uuid := app.current_user_id();
+    v_session uuid;
+    v_rows    public.draft[];
+  BEGIN
+    SELECT i.session_id INTO v_session FROM public.invitation i
+    WHERE i.id = invitation_repoint_drafts.invitation AND i.status = 'ACCEPTED' AND i.accepted_by_user_id = v_me;
+    IF v_me IS NULL OR v_session IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+       OR NOT EXISTS (SELECT 1 FROM public.participant p WHERE p.session_id = v_session AND p.user_id = v_me) THEN
+      RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    -- The DELETE takes the rows' locks (the invitation lock is the protocol; this keeps the move safe from any
+    -- writer that skips it); the INSERT is a second statement, so the same ids are free again.
+    WITH moved AS (DELETE FROM public.draft d WHERE d.invitation_id = invitation_repoint_drafts.invitation RETURNING d.*)
+    SELECT array_agg(m ORDER BY m.id) INTO v_rows FROM moved m;
+    IF v_rows IS NULL THEN
+      RETURN 0;
+    END IF;
+    INSERT INTO public.draft (id, session_id, user_id, kind, about_user_id, content, ready_to_share, version,
+                              created_at, updated_at, reopened_at)
+    SELECT r.id, r.session_id, r.user_id, r.kind, v_me, r.content, r.ready_to_share, r.version,
+           r.created_at, r.updated_at, r.reopened_at
+    FROM unnest(v_rows) r;
+    RETURN cardinality(v_rows);
+  END
+  $$;
+COMMENT ON FUNCTION app.invitation_repoint_drafts(uuid) IS 'At accept: the inviter''s EMPATHY drafts about the invitation move to the invitee (same id and timestamps). The invitee, seated, who accepted it (identity-bound, app_access). work-99k2, work-k5fk.10.7.';
+-- mwf_app (app_access): empathy-store repointInvitationDrafts (acceptInvitation).
+REVOKE EXECUTE ON FUNCTION app.invitation_repoint_drafts(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.invitation_repoint_drafts(uuid) TO app_access;
+
+-- What a push to `recipient` calls the caller (push.ts getNotificationActorName): the recipient's own name for them —
+-- their user_contact entry for the caller (authoritative when present, a cleared NULL included), else the invite name
+-- on the recipient's latest invitation the caller accepted (ciphertext; contacts.ts namesIGave's order). Both are the
+-- recipient's private rows (user_contact app_own, invitation app_select), read here only by the actor the push is
+-- about, for a recipient they share a session with (work-k5fk.10.7). No row: no such recipient for the caller.
+-- Review r1 (accepted, owner decision 2026-11-18): the recipient's nickname for the actor thus reaches the actor's
+-- request — server memory only. push.ts composes the push to the recipient from it and returns it to no client: the
+-- actor's own device never receives it.
+CREATE FUNCTION app.actor_name_for(recipient uuid)
+  RETURNS TABLE (has_entry boolean, nickname text, invite_name text)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT c.user_id IS NOT NULL, c.nickname,
+           (SELECT i.invitee_name FROM public.invitation i
+            WHERE i.invited_by_user_id = actor_name_for.recipient AND i.accepted_by_user_id = app.current_user_id()
+              AND i.invitee_name IS NOT NULL
+            ORDER BY i.created_at DESC LIMIT 1)
+    FROM (SELECT 1) one
+    LEFT JOIN public.user_contact c ON c.user_id = actor_name_for.recipient AND c.contact_user_id = app.current_user_id()
+    WHERE pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND app.shares_session_with(actor_name_for.recipient)
+  $$;
+COMMENT ON FUNCTION app.actor_name_for(uuid) IS 'The recipient''s own name for the caller (their user_contact nickname, else the invite name of their invitation the caller accepted, ciphertext), for a push about the caller to a recipient they share a session with; server memory only, never the caller''s client (review r1, accepted). Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): push.ts getNotificationActorName.
+REVOKE EXECUTE ON FUNCTION app.actor_name_for(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.actor_name_for(uuid) TO app_access;
+
+-- A co-participant's presence for the session view (participant-resolver getCoParticipantPresence;
+-- session-state.ts): whether they show their activity, when they last viewed the session and were last active, and
+-- when they last took a turn — instants only, never content. Their read state, preferences and messages are own-row
+-- under RLS (work-k5fk.10.7), so a participant of the same session reads them here. When they hide their activity
+-- (user_preferences.doc.privacy.showActivityStatus false) the three instants are NULL: the caller shows none (review F2).
+CREATE FUNCTION app.co_participant_presence(session uuid, "user" uuid)
+  RETURNS TABLE (shows boolean, last_viewed_at public.ts_ms, last_active_at public.ts_ms, last_turn_at public.ts_ms)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT v.shows,
+           CASE WHEN v.shows IS DISTINCT FROM false THEN r.last_viewed_at END,
+           CASE WHEN v.shows IS DISTINCT FROM false THEN r.last_active_at END,
+           CASE WHEN v.shows IS DISTINCT FROM false THEN
+             (SELECT max(m.created_at) FROM public.message m
+              WHERE m.session_id = p.session_id AND m.sender_user_id = p.user_id AND m.role = 'USER' AND m.kind = 'CHAT')
+           END
+    FROM public.participant p
+    LEFT JOIN public.conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
+    LEFT JOIN public.user_preferences up ON up.user_id = p.user_id
+    CROSS JOIN LATERAL (SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows) v
+    WHERE p.session_id = co_participant_presence.session AND p.user_id = co_participant_presence."user"
+      AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = co_participant_presence.session AND me.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.co_participant_presence(uuid, uuid) IS 'A co-participant''s presence instants (last viewed, last active and last turn — the latter two NULL when they hide their activity) and whether they show it, for a caller seated in the same session. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): participant-resolver getCoParticipantPresence (session-state.ts).
+REVOKE EXECUTE ON FUNCTION app.co_participant_presence(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.co_participant_presence(uuid, uuid) TO app_access;
+
+-- Content-free facts of empathy attempts the caller is a party of (author or subject): who wrote it, about whom,
+-- the round and its status (with status_version, the optimistic check of app.empathy_set_status) — never content.
+-- The subject of an unrevealed attempt does not see its row (empathy_attempt app_select, P0-2), yet answers a share
+-- offer on it, which moves its round (reconciler.ts, reconciler/sharing.ts, notifications.ts). work-k5fk.10.7.
+CREATE FUNCTION app.attempt_meta(attempts uuid[])
+  RETURNS TABLE (id uuid, session_id uuid, author_user_id uuid, subject_user_id uuid, round integer,
+                 status public.empathy_status, status_version integer, revealed_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT a.id, a.session_id, a.author_user_id, a.subject_user_id, a.round, a.status, a.status_version, a.revealed_at
+    FROM public.empathy_attempt a
+    WHERE a.id = ANY (attempt_meta.attempts)
+      AND app.current_user_id() IN (a.author_user_id, a.subject_user_id)
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.attempt_meta(uuid[]) IS 'Who wrote each attempt, about whom, its round and status (status_version) — never its content — for an attempt the caller is the author or the subject of. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): empathy-store attemptMetaOf (the subject's share-offer paths).
+REVOKE EXECUTE ON FUNCTION app.attempt_meta(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.attempt_meta(uuid[]) TO app_access;
+
+-- Content-free facts of reconciler results behind the guidance the caller may read (reconciler_guidance app_select:
+-- author or subject): which attempt each analysed, its iteration and whether it was superseded — never the analysis.
+-- The author of the attempt reads its guidance but not the result (reconciler_result app_select is the subject's,
+-- R6), yet picks the current guidance by the result's superseded_at (context-assembler, empathy-status, stage2,
+-- reconciler/state). For a result the caller is the subject of, or of an attempt the caller authored. work-k5fk.10.7.
+CREATE FUNCTION app.result_facts(results uuid[])
+  RETURNS TABLE (id uuid, attempt_id uuid, iteration integer, superseded_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT r.id, r.attempt_id, r.iteration, r.superseded_at
+    FROM public.reconciler_result r
+    JOIN public.empathy_attempt a ON a.id = r.attempt_id
+    WHERE r.id = ANY (result_facts.results)
+      AND app.current_user_id() IN (r.subject_user_id, a.author_user_id)
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.result_facts(uuid[]) IS 'Which attempt each reconciler result analysed, its iteration and superseded_at — never the analysis — for a result the caller is the subject of or whose attempt the caller authored. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): empathy-store resultFactsOf (the author's current guidance).
+REVOKE EXECUTE ON FUNCTION app.result_facts(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.result_facts(uuid[]) TO app_access;
+
+-- What reached the caller as an attempt's AUTHOR through a share: the offers on attempts the caller authored whose
+-- shared text was delivered (DELIVERED / SEEN) — the shared text, its status and instants, never the offer the
+-- subject was shown (suggested_* / offer_message; R6). The offer row is the subject's (context_share_offer
+-- app_select), and the author already holds the text as the delivered SHARED_CONTEXT line; the context assembler
+-- reads it here (work-k5fk.10.7).
+CREATE FUNCTION app.shares_delivered_to_me(session uuid)
+  RETURNS TABLE (id uuid, subject_user_id uuid, status public.share_offer_status, delivery_status public.delivery_status,
+                 shared_content text, shared_at timestamptz, delivered_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT o.id, o.subject_user_id, o.status, o.delivery_status, o.shared_content, o.shared_at, o.delivered_at
+    FROM public.context_share_offer o
+    JOIN public.empathy_attempt a ON a.id = o.attempt_id
+    WHERE o.session_id = shares_delivered_to_me.session AND a.author_user_id = app.current_user_id()
+      AND o.shared_content IS NOT NULL AND o.delivery_status IN ('DELIVERED', 'SEEN')
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+  $$;
+COMMENT ON FUNCTION app.shares_delivered_to_me(uuid) IS 'The shared text (ciphertext), status and instants of the delivered share offers on attempts the caller authored — never the offer the subject was shown. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): context-assembler buildSharedVessel.
+REVOKE EXECUTE ON FUNCTION app.shares_delivered_to_me(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.shares_delivered_to_me(uuid) TO app_access;
+
+-- When each of the caller's own attempts was first validated by its subject (the earliest validated review): the
+-- verdict reaches the author through their round's status, and the context assembler dates it (review rows are the
+-- reviewer's until feedback is sent — empathy_review app_own / app_author_sent; work-k5fk.10.7).
+CREATE FUNCTION app.validated_at(attempts uuid[])
+  RETURNS TABLE (attempt_id uuid, validated_at timestamptz)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT v.attempt_id, min(v.created_at)
+    FROM public.empathy_review v
+    JOIN public.empathy_attempt a ON a.id = v.attempt_id
+    WHERE v.attempt_id = ANY (validated_at.attempts) AND v.validated AND a.author_user_id = app.current_user_id()
+      AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+    GROUP BY v.attempt_id
+  $$;
+COMMENT ON FUNCTION app.validated_at(uuid[]) IS 'The instant each of the caller''s own attempts was first validated (its earliest validated review''s created_at), nothing else of the review. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): context-assembler buildSharedVessel.
+REVOKE EXECUTE ON FUNCTION app.validated_at(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.validated_at(uuid[]) TO app_access;
+
+-- requireSessionAccess for a caller with no participant row (middleware/auth.ts): 'missing' when the session does
+-- not exist, 'invited' when it has an invitation the caller did not send that is PENDING and unexpired, or that
+-- the caller accepted (the acceptance timing gap; Phase 3 §7 W6 schedules its removal), else 'denied'. Under RLS a
+-- non-participant sees neither the session nor its invitation.
+-- Review F13 (accepted, documented): 'missing' against 'denied' tells any signed-in caller whether a session id
+-- exists. The route needs it (404 for no session, 403 for someone else's); the ids are UUIDv7 and nothing else of
+-- the session is answered.
+CREATE FUNCTION app.session_invitee_access(session uuid) RETURNS text
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT CASE
+      WHEN app.current_user_id() IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN 'denied'
+      WHEN NOT EXISTS (SELECT 1 FROM public.session s WHERE s.id = session_invitee_access.session) THEN 'missing'
+      WHEN EXISTS (SELECT 1 FROM public.invitation i
+                   WHERE i.session_id = session_invitee_access.session AND i.invited_by_user_id <> app.current_user_id()
+                     AND ((i.status = 'PENDING' AND i.expires_at > CURRENT_TIMESTAMP)
+                          OR (i.status = 'ACCEPTED' AND i.accepted_by_user_id = app.current_user_id()))) THEN 'invited'
+      ELSE 'denied' END
+  $$;
+COMMENT ON FUNCTION app.session_invitee_access(uuid) IS 'For a caller with no participant row in the session: missing (no such session), invited (a PENDING unexpired invitation they did not send, or one they accepted) or denied. Identity-bound, app_access (work-k5fk.10.7).';
+-- mwf_app (app_access): middleware/auth.ts requireSessionAccess.
+REVOKE EXECUTE ON FUNCTION app.session_invitee_access(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_invitee_access(uuid) TO app_access;
+
+-- One participant's presence as a co-participant sees it (v_participant, below): their MAIN conversation's id, their
+-- read state, their last activity (unless their privacy preference hides it from others) and their latest mood.
+-- Each lives in an own-row table under RLS (conversation, conversation_read_state, user_preferences, mood_reading;
+-- work-k5fk.10.7), so the view reads them here — for a participant of a session the caller is in, and nothing else.
+CREATE FUNCTION app.participant_presence(session uuid, "user" uuid)
+  RETURNS TABLE (main_conversation_id public.uuid7, last_viewed_at public.ts_ms, last_seen_conversation_id public.uuid7,
+                 last_seen_seq integer, last_viewed_share_tab_at public.ts_ms, archived_at public.ts_ms,
+                 last_active_at public.ts_ms, last_mood integer, user_name text, is_tombstone boolean)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    -- review F2: a co-participant gets only what the app reads about a partner — the MAIN conversation's id, the
+    -- shared-frame seen instant (reconciler/sharing.ts: the author saw the context shared with them) and the last
+    -- activity when their privacy preference shows it. Their read state, archive flag and mood are the caller's own
+    -- only (own-row tables), never a partner's.
+    SELECT c.id,
+           CASE WHEN v_self THEN r.last_viewed_at END,
+           CASE WHEN v_self THEN r.last_seen_conversation_id END,
+           CASE WHEN v_self THEN r.last_seen_seq END,
+           r.last_viewed_share_tab_at,
+           CASE WHEN v_self THEN r.archived_at END,
+           CASE WHEN v_self OR coalesce((up.doc -> 'privacy' ->> 'showActivityStatus')::boolean, true)
+                THEN r.last_active_at END,
+           CASE WHEN v_self THEN
+             (SELECT m.intensity::integer FROM public.mood_reading m
+              WHERE m.session_id = participant_presence.session AND m.user_id = participant_presence."user"
+              ORDER BY m.recorded_at DESC, m.id DESC LIMIT 1)
+           END,
+           -- review F7: the name the app calls them by (first name, else what "user".name holds without one); no email,
+           -- no last name beside a first name, no deletion instant — only whether the row is a tombstone.
+           CASE WHEN u.deleted_at IS NULL THEN coalesce(nullif(u.first_name, ''), u.name) END,
+           u.deleted_at IS NOT NULL
+    FROM public.participant p
+    LEFT JOIN public."user" u ON u.id = p.user_id
+    LEFT JOIN public.conversation c ON c.session_id = p.session_id AND c.user_id = p.user_id AND c.kind = 'MAIN'
+    LEFT JOIN public.conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
+    LEFT JOIN public.user_preferences up ON up.user_id = p.user_id
+    CROSS JOIN LATERAL (SELECT participant_presence."user" = app.current_user_id() AS v_self) me_
+    WHERE p.session_id = participant_presence.session AND p.user_id = participant_presence."user"
+      AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = participant_presence.session AND me.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.participant_presence(uuid, uuid) IS 'A participant''s presence for a caller seated in the same session; behind v_participant. The caller''s own row: MAIN conversation id, read state, last activity, latest mood. A co-participant''s: MAIN conversation id, shared-frame seen instant, last activity only if their privacy preference shows it (work-k5fk.10.7, review F2); for either, the name the app calls them by and whether they are a tombstone (review F7).';
+-- mwf_app (app_access): v_participant.
+REVOKE EXECUTE ON FUNCTION app.participant_presence(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.participant_presence(uuid, uuid) TO app_access;
+
+-- The parties of the caller's sessions (review F7/F8): each participant's seat, the name the app calls them by,
+-- whether they are a tombstone, and their MAIN conversation's id — the address the AI's deliveries and notes to them
+-- go to. "user" and conversation are own-row tables for the app (a co-participant's email, last name, deletion
+-- instant and conversation row — its next_seq — stay out of reach); this is the one read of a partner's names and
+-- conversation id: empathy-store sessionParties/departedCounterpart, contacts.ts, listPeople, the invitee's inviter
+-- name, the Stage 4 announcement. Only for sessions the caller is seated in (leavers included, as app.is_member).
+CREATE FUNCTION app.session_parties(sessions uuid[])
+  RETURNS TABLE (session_id public.uuid7, user_id public.uuid7, kind public.user_kind, display_name text,
+                 joined_at public.ts_ms, left_at public.ts_ms, user_name text, is_tombstone boolean,
+                 main_conversation_id public.uuid7)
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT p.session_id, p.user_id, p.kind, p.display_name, p.joined_at, p.left_at,
+           CASE WHEN u.deleted_at IS NULL THEN coalesce(nullif(u.first_name, ''), u.name) END,
+           u.deleted_at IS NOT NULL,
+           c.id
+    FROM public.participant p
+    LEFT JOIN public."user" u ON u.id = p.user_id
+    LEFT JOIN public.conversation c ON c.session_id = p.session_id AND c.user_id = p.user_id AND c.kind = 'MAIN'
+    WHERE p.session_id = ANY (session_parties.sessions)
+      AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = p.session_id AND me.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.session_parties(uuid[]) IS 'Every participant of the given sessions the caller is seated in: seat, kind, display name, join/leave instants, the name the app calls them by (first name, else name), tombstone flag, MAIN conversation id. No email, no deletion instant, no conversation row (work-k5fk.10.7, review F7/F8).';
+-- mwf_app (app_access): empathy-store.ts, contacts.ts, invitations.ts listPeople, messages.ts, stage3.ts.
+REVOKE EXECUTE ON FUNCTION app.session_parties(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_parties(uuid[]) TO app_access;
+
+-- Has the Stage 4 transition started under the own-request rule (services/stage4-transition.ts)? True once some
+-- participant of the session holds their STAGE4_TRANSITION line — the one the request that completed the mutual
+-- share writes for its own user. A co-participant's next read then writes theirs. A session that reached
+-- needs_shared any other way (a fixture, a migrated session whose lines predate the key) holds none, so no read
+-- writes a second line into it. Content-free: one boolean, for a caller seated in the session.
+CREATE FUNCTION app.stage4_transition_started(session uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (
+      SELECT 1 FROM public.message m JOIN public.conversation c ON c.id = m.conversation_id
+      WHERE c.session_id = stage4_transition_started.session AND c.kind = 'MAIN' AND m.dedupe_key = 'STAGE4_TRANSITION'
+    ) AND EXISTS (SELECT 1 FROM public.participant me
+                  WHERE me.session_id = stage4_transition_started.session AND me.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.stage4_transition_started(uuid) IS 'True when a participant of the session holds a STAGE4_TRANSITION line (the own-request rule has begun) and the caller is seated in it. No content (owner decision 2026-11-18, review r1).';
+-- mwf_app (app_access): services/stage4-transition.ts ensureOwnStage4TransitionLine.
+REVOKE EXECUTE ON FUNCTION app.stage4_transition_started(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.stage4_transition_started(uuid) TO app_access;
 
 -- Content-free status of every empathy direction in the caller's sessions
 -- (the latest round per direction): what both parties may see while neither
@@ -3272,7 +3807,8 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     END IF;
     -- The AI arm (the reconciler's moves and the reveal): only within the attempt's session (app.session_scope).
     v_job := session_user = 'mwf_migrator'
-             OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false));
+             OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false)
+                  AND app.scope_actor_is_member());
     -- review F2: the AI arm makes the reconciler's moves and the reveal only; resubmitting (the author's next round)
     -- and reviewing a revealed round (the subject's) are never the AI's.
     v_mig := session_user = 'mwf_migrator';
@@ -3282,8 +3818,11 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     WHERE p.session_id = a.session_id AND p.user_id = a.author_user_id;
     SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p
     WHERE p.session_id = a.session_id AND p.user_id = a.subject_user_id;
-    v_is_author  := v_app AND v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
-    v_is_subject := v_app AND v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user;
+    -- review r2 N1: the author's / subject's moves are a PRESENT participant's (a leaver moves no round).
+    v_is_author  := v_app AND v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user
+                    AND v_author_left IS NULL;
+    v_is_subject := v_app AND v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user
+                    AND v_subject_left IS NULL;
     IF NOT (v_job OR v_is_author OR v_is_subject) THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
@@ -3388,7 +3927,9 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
   BEGIN
     IF NOT (session_user = 'mwf_migrator'
             OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
-                  SELECT 1 FROM public.need n WHERE n.id = need_share.need AND n.user_id = app.current_user_id()))) THEN
+                  SELECT 1 FROM public.need n WHERE n.id = need_share.need AND n.user_id = app.current_user_id()
+                    AND app.is_current_member(n.session_id)))) THEN
+      -- review r2 N1: the owner, while a present participant of the need's session (a leaver shares nothing).
       RAISE EXCEPTION 'need_share is the need owner''s' USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.need n
@@ -3421,7 +3962,8 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
     v_me  uuid := app.current_user_id();
   BEGIN
     IF NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND v_me IS NOT NULL AND EXISTS (
-              SELECT 1 FROM public.need n WHERE n.id = need_revoke_share.need AND n.user_id = v_me))) THEN
+              SELECT 1 FROM public.need n WHERE n.id = need_revoke_share.need AND n.user_id = v_me
+                AND app.is_current_member(n.session_id)))) THEN  -- review r2 N1: a present participant only
       RAISE EXCEPTION 'need not found' USING ERRCODE = 'P0002';
     END IF;
     UPDATE public.need_share SET revoked_at = now() WHERE need_id = need_revoke_share.need AND revoked_at IS NULL;
@@ -3670,7 +4212,8 @@ CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind publ
     v_at      timestamptz := coalesce(deliver_message.instant, CURRENT_TIMESTAMP);
   BEGIN
     SELECT c.session_id, c.user_id INTO v_session, v_to FROM public.conversation c WHERE c.id = deliver_message.conversation;
-    v_ai := pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false);
+    v_ai := pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false)
+                  AND app.scope_actor_is_member();
     v_app := pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
              AND coalesce(app.current_user_id() = deliver_message.from_user, false)
              AND EXISTS (SELECT 1 FROM public.participant p
@@ -3742,8 +4285,10 @@ CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery
     FROM public.empathy_attempt e WHERE e.id = empathy_mark_delivery.attempt FOR NO KEY UPDATE;
     IF v_session IS NULL OR NOT (
          session_user = 'mwf_migrator'
-         OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false))
-         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND coalesce(app.current_user_id() = v_subject, false))) THEN
+         OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false)
+                  AND app.scope_actor_is_member())
+         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND coalesce(app.current_user_id() = v_subject, false)
+             AND app.is_current_member(v_session))) THEN  -- review r2 N1: a present subject only
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
     -- review F10: only a revealed round is delivered or seen, and the stamp moves forward only (PENDING → DELIVERED →
@@ -3850,6 +4395,9 @@ CREATE FUNCTION app.choices_unshare(session uuid) RETURNS integer
     IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
       RAISE EXCEPTION 'choices_unshare is identity-bound' USING ERRCODE = 'insufficient_privilege';
     END IF;
+    IF NOT app.is_current_member(choices_unshare.session) THEN
+      RETURN 0;  -- review r2 N1: a leaver changes nothing in the session
+    END IF;
     DELETE FROM public.participant_milestone pm
     WHERE pm.session_id = choices_unshare.session AND pm.user_id = v_me AND pm.milestone_key = 'choices_shared';
     GET DIAGNOSTICS n = ROW_COUNT;
@@ -3906,10 +4454,12 @@ CREATE FUNCTION app.share_offers_mark_notified(offers uuid[], seen boolean) RETU
     END IF;
     IF share_offers_mark_notified.seen THEN
       UPDATE public.context_share_offer o SET seen_notified_at = now()
-      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me;
+      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me
+        AND app.is_current_member(o.session_id);  -- review r2 N1
     ELSE
       UPDATE public.context_share_offer o SET delivery_notified_at = now()
-      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me;
+      WHERE o.id = ANY (share_offers_mark_notified.offers) AND o.subject_user_id = v_me
+        AND app.is_current_member(o.session_id);
     END IF;
     GET DIAGNOSTICS n = ROW_COUNT;
     RETURN n;
@@ -3983,7 +4533,26 @@ GRANT EXECUTE ON FUNCTION app.identity_subject(public.identity_provider) TO app_
 -- byte-identical).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.is_member(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.is_current_member(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.partner_user_id(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.session_unseated(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.shares_session_with(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.owns_persona(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.scope_actor_is_member() OWNER TO mwf_definer;
+ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
+ALTER FUNCTION app.session_invitee_access(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.shares_delivered_to_me(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.validated_at(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.result_facts(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.attempt_meta(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.co_participant_presence(uuid, uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.actor_name_for(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.invitation_repoint_drafts(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.participant_presence(uuid, uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.session_parties(uuid[]) OWNER TO mwf_definer;
+ALTER FUNCTION app.stage4_transition_started(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.empathy_direction_status() OWNER TO mwf_definer;
 ALTER FUNCTION app.session_set_status(uuid, public.session_status) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_archive(uuid) OWNER TO mwf_definer;
@@ -4292,6 +4861,99 @@ COMMENT ON FUNCTION app.t_session_purge() IS 'The worker deletes only ARCHIVED s
 CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
   FOR EACH ROW EXECUTE FUNCTION app.t_session_purge();
 
+-- T-proposal-app-moves (work-k5fk.10.9, owner decisions 2026-11-18, review F5): what a plain app UPDATE of a proposal
+-- may not do, since a row policy cannot compare OLD with NEW.
+--  * Its creator is fixed. The one creator move is the edit that turns a proposal into the editor's own individual
+--    commitment (Stage 4 capture): created_by_user_id becomes the acting user AND kind becomes INDIVIDUAL_COMMITMENT
+--    in the same UPDATE. Any other change — a re-assignment from the model's output, to the partner or to oneself —
+--    is refused.
+--  * A move into INDIVIDUAL_COMMITMENT names the acting user as creator (the same rule from the kind's side).
+--  * CONVERTED_TO_AGREEMENT is the agreement path's (the worker's createAgreementsAsJob, with its agreement rows),
+--    never an app edit's.
+--  * A removal is attributed to the acting user: removed_by_user_id moves only with the status — into REMOVED it
+--    names the acting user, out of REMOVED (a restore) it returns to NULL — and is otherwise immutable (review r2 N4).
+-- Exempt, as t_session_scope: any current_user that is not a member of app_access (the worker's conversion, every
+-- definer body) and any that holds the database owner's privileges.
+CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me uuid;
+  BEGIN
+    IF NOT pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      RETURN NEW;
+    END IF;
+    v_me := app.current_user_id();
+    IF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id
+       AND NOT (NEW.created_by_user_id = v_me
+                AND NEW.kind = 'INDIVIDUAL_COMMITMENT' AND OLD.kind IS DISTINCT FROM 'INDIVIDUAL_COMMITMENT') THEN
+      RAISE EXCEPTION 'a proposal''s creator changes only when it becomes the editor''s own commitment'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    -- owner decision 2026-11-18 (after review r1): a move into INDIVIDUAL_COMMITMENT makes the actor its creator in the
+    -- same UPDATE; a kind-only change never hands someone else a commitment.
+    IF NEW.kind = 'INDIVIDUAL_COMMITMENT' AND OLD.kind IS DISTINCT FROM 'INDIVIDUAL_COMMITMENT'
+       AND NEW.created_by_user_id IS DISTINCT FROM v_me THEN
+      RAISE EXCEPTION 'a proposal becomes an individual commitment only as the editor''s own'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NEW.status = 'CONVERTED_TO_AGREEMENT' AND OLD.status IS DISTINCT FROM 'CONVERTED_TO_AGREEMENT' THEN
+      RAISE EXCEPTION 'a proposal becomes an agreement only through the agreement path'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    -- review r2 N4: removed_by_user_id moves only with the status — into REMOVED (to the acting user) or out of it
+    -- (back to NULL, a restore); otherwise it is immutable.
+    IF (NEW.status = 'REMOVED' AND OLD.status IS DISTINCT FROM 'REMOVED'
+        AND NEW.removed_by_user_id IS DISTINCT FROM v_me)
+       OR (OLD.status = 'REMOVED' AND NEW.status IS DISTINCT FROM 'REMOVED' AND NEW.removed_by_user_id IS NOT NULL)
+       OR (NEW.status IS NOT DISTINCT FROM OLD.status
+           AND NEW.removed_by_user_id IS DISTINCT FROM OLD.removed_by_user_id) THEN
+      RAISE EXCEPTION 'a proposal''s removal is attributed to the acting user'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_proposal_app_moves() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_proposal_app_moves() IS 'For mwf_app: proposal.created_by_user_id changes only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT, and no proposal becomes an INDIVIDUAL_COMMITMENT of anyone else; status never becomes CONVERTED_TO_AGREEMENT; a removal names the acting user. work-k5fk.10.9, review F5.';
+CREATE TRIGGER t_proposal_app_moves BEFORE UPDATE ON public.proposal
+  FOR EACH ROW EXECUTE FUNCTION app.t_proposal_app_moves();
+
+-- T-session-link-moves (review r2 N2): on an own-row table with an optional session link (TG_ARGV[0] names the
+-- column), mwf_app may keep or clear the link whatever its membership, and may change it only to a session it is a
+-- present participant of. Exempt as t_proposal_app_moves: a current_user outside app_access, the database owner.
+CREATE FUNCTION app.t_session_link_moves() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_new uuid := (pg_catalog.to_jsonb(NEW) ->> TG_ARGV[0])::uuid;
+    v_old uuid := (pg_catalog.to_jsonb(OLD) ->> TG_ARGV[0])::uuid;
+  BEGIN
+    IF NOT pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      RETURN NEW;
+    END IF;
+    IF v_new IS NOT NULL AND v_new IS DISTINCT FROM v_old AND NOT app.is_current_member(v_new) THEN
+      RAISE EXCEPTION 'a row links only to a session its owner is a present participant of'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_link_moves() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_session_link_moves() IS 'For mwf_app: an optional session link (TG_ARGV[0]) is kept or cleared freely and changed only to a session the caller is a present participant of. Review r2 N2.';
+CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.reflection
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('linked_session_id');
+CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.ai_memory
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
+CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.user_memory
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
+
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
 -- message with no ids (N-4).
@@ -4386,8 +5048,11 @@ CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
 -- T-result-live-attempt: no result on a SUPERSEDED round. (The subject = the attempt's
 -- subject half is a key since work-k5fk.3 (6a): reconciler_result (attempt_id,
 -- session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).)
+-- SECURITY DEFINER (owned by mwf_definer, handed over with the k5fk.2 trigger functions below; work-k5fk.10.33):
+-- it asks whether a row exists, and under the writer's RLS a row the writer may not see would read as absent — the
+-- answer must be the table's, not the caller's view of it.
 CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
-  LANGUAGE plpgsql
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
@@ -4433,8 +5098,11 @@ CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
   $$;
 -- No caller needs EXECUTE on the predicate of T-agreement-parties.
 REVOKE EXECUTE ON FUNCTION app.agreement_parties_ok(uuid) FROM PUBLIC;
+-- SECURITY DEFINER (owned by mwf_definer; work-k5fk.10.33): its EXCEPT and NOT EXISTS terms ask what rows exist,
+-- and under the writer's RLS a party, a participant or a choice the writer may not see would read as absent — and
+-- the check pass vacuously. The answer must be the tables', not the writer's view of them.
 CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
-  LANGUAGE plpgsql
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
@@ -4589,8 +5257,10 @@ CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
     IF NEW.added_by_user_id IS NULL THEN
       RETURN NEW;  -- the initiator (sql_participant_one_initiator: one per session)
     END IF;
+    -- review F4: the adder is present (a leaver adds no one).
     IF NOT EXISTS (SELECT 1 FROM public.participant a
-                   WHERE a.session_id = NEW.session_id AND a.user_id = NEW.added_by_user_id AND a.kind = 'human') THEN
+                   WHERE a.session_id = NEW.session_id AND a.user_id = NEW.added_by_user_id AND a.kind = 'human'
+                     AND a.left_at IS NULL) THEN
       RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     IF EXISTS (SELECT 1 FROM public.persona x WHERE x.user_id = NEW.user_id AND x.owner_user_id <> NEW.added_by_user_id) THEN
@@ -4670,6 +5340,8 @@ CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
 -- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_agreement_parties() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
@@ -4784,21 +5456,14 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_preferences FOR EACH ROW E
 -- over an invisible row; this view then serves only the caller's own rows.
 CREATE VIEW v_participant WITH (security_invoker = true) AS
 SELECT p.session_id, p.user_id, p.kind,
-       coalesce(p.display_name, CASE WHEN u.deleted_at IS NULL THEN u.name END) AS display_name,
-       (u.deleted_at IS NOT NULL) AS is_tombstone,
+       coalesce(p.display_name, x.user_name) AS display_name,
+       coalesce(x.is_tombstone, false) AS is_tombstone,
        p.joined_at, p.left_at,
-       c.id AS main_conversation_id,
-       r.last_viewed_at, r.last_seen_conversation_id, r.last_seen_seq, r.last_viewed_share_tab_at, r.archived_at,
-       CASE WHEN p.user_id = app.current_user_id()
-              OR coalesce((up.doc -> 'privacy' ->> 'showActivityStatus')::boolean, true)
-            THEN r.last_active_at END AS last_active_at,
-       (SELECT m.intensity::integer FROM mood_reading m WHERE m.session_id = p.session_id AND m.user_id = p.user_id
-        ORDER BY m.recorded_at DESC, m.id DESC LIMIT 1) AS last_mood
+       x.main_conversation_id,
+       x.last_viewed_at, x.last_seen_conversation_id, x.last_seen_seq, x.last_viewed_share_tab_at, x.archived_at,
+       x.last_active_at, x.last_mood
 FROM participant p
-LEFT JOIN "user" u ON u.id = p.user_id
-LEFT JOIN conversation c ON c.session_id = p.session_id AND c.user_id = p.user_id AND c.kind = 'MAIN'
-LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
-LEFT JOIN user_preferences up ON up.user_id = p.user_id;
+LEFT JOIN LATERAL app.participant_presence(p.session_id, p.user_id) x ON true;
 GRANT SELECT ON v_participant TO app_access;
 
 -- Every other participant of the same session, one row per ordered pair (N-safe).
@@ -5041,109 +5706,157 @@ $$;
 -- mwf_definer) holds on every table, so a grant can never be silently dead — nor added without its policy.
 -- Policies target capabilities, never logins (Q16), and call app.session_scope() as (SELECT …) so the planner
 -- evaluates it once per statement (an initplan), not once per row. The policies, per capability:
---   app_access    app_interim: USING (true) / WITH CHECK (true) on every table it holds a grant on — exactly its
---                 pre-RLS reach, so no request moves (the goldens are the assertion). Each carries a COMMENT; rows
---                 9d–9g replace them with the §6 per-table predicates (own rows, membership).
+--   app_access    the §6 per-table predicates (rows 9d–9g, work-k5fk.10.7), each with a COMMENT: app_own (the
+--                 caller's own rows: user_id = app.current_user_id()), app_select / app_insert / app_update /
+--                 app_delete where the commands differ (membership through app.is_member, the partner's rows only
+--                 as §6 lets a member see them), app_read / app_reference on reference data. Every predicate is
+--                 written (SELECT app.fn()) — an initplan — or as a definer helper of the row (T4), never an inline
+--                 read of participant (spec P1-1). The goldens are the assertion that no request moved. A fact of
+--                 a row the caller may not see (the invitee's invitation, an unrevealed attempt's author, a
+--                 co-participant's presence …) is a content-free definer's answer (T4). No 9c interim is left.
 --   ai_access     ai_session: the row's session is app.session_scope() — the one session the AI's transaction acts
---                 on (Q20). Required: unset is NULL, which matches no row, so an unscoped AI statement reads and
---                 writes nothing (t_session_scope already refused its writes). session: its id; "user": the
---                 participants of that session; brain_activity: also the sessionless rows (an inner-work call's
---                 telemetry, as t_session_scope lets through); app.json_schema: reference data (ai_reference).
---                 Rows 9d–9g add the §6 row predicates (the acting user is a member) on top.
+--                 on (Q20) — and its acting user (app.current_user_id(), which the AI connection binds too) is a
+--                 participant of it (app.scope_actor_is_member(), rows 9d–9g). Required: unset is NULL, which
+--                 matches no row, so an unscoped or actorless AI statement reads and writes nothing (t_session_scope
+--                 already refused its writes). session: its id; "user": the participants of that session;
+--                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and,
+--                 FINDING, the unattributed ones (ai_unattributed; work-k5fk.10.33); app.json_schema: reference
+--                 data (ai_reference).
 --   worker_access worker_session on the Stage 4 closure's tables (agreement, agreement_party, session_closure,
 --                 proposal, proposal_choice, proposal_revision) and on the follow-ups it schedules (INSERT): the
 --                 closure runs scoped to its session (stage4-closure.ts, withSessionScope). worker_all / worker_read /
 --                 worker_update elsewhere: its cross-session jobs (retention, due follow-ups and reminders, push
---                 tokens) read and change rows of every session — the grants narrow them to columns.
+--                 tokens) read and change rows of every session — the grants narrow them to columns, and where a
+--                 call site writes one value only, the policy says so (work-k5fk.10.29: worker_clear_token,
+--                 worker_purge_blobs, worker_purge).
 --   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions; Q10 narrows message.content
 --                 at §7 row 10, by column).
 --   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
 --   auth_access, clinician_access: no table grant, so no policy.
 -- Each table below says which capabilities hold which commands (S I U D) on it.
--- agreement: app_access S, worker_access SIU
+-- agreement: app_access S, mwf_definer S, worker_access SIU
 ALTER TABLE agreement ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON agreement TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON agreement IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON agreement TO mwf_definer USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON agreement FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON agreement IS 'The agreements of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON agreement TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
--- agreement_party: app_access S, worker_access SI
+-- agreement_party: app_access S, mwf_definer S, worker_access SI
 ALTER TABLE agreement_party ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON agreement_party TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON agreement_party IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY definer_all ON agreement_party TO mwf_definer USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON agreement_party FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON agreement_party IS 'The parties of the agreements of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON agreement_party TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD, ops_access S
 ALTER TABLE ai_memory ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON ai_memory TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON ai_memory IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON ai_memory TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_own ON ai_memory TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON ai_memory IS 'The caller''s own rows: their summaries and facts, session or global (design note §6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON ai_memory TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY ops_read ON ai_memory FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON ai_memory TO mwf_definer USING (true) WITH CHECK (true);
 
 -- brain_activity: ai_access SIU, mwf_definer SD, ops_access S, worker_access SUD
 ALTER TABLE brain_activity ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY ai_session ON brain_activity TO ai_access
-  USING (session_id IS NULL OR session_id = (SELECT app.session_scope())) WITH CHECK (session_id IS NULL OR session_id = (SELECT app.session_scope()));
-CREATE POLICY worker_all ON brain_activity TO worker_access USING (true) WITH CHECK (true);
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
+CREATE POLICY ai_reflection ON brain_activity TO ai_access
+  USING (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id))
+  WITH CHECK (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id));
+COMMENT ON POLICY ai_reflection ON brain_activity IS 'An inner-work call''s telemetry: the acting user''s own reflection only (work-k5fk.10.33).';
+CREATE POLICY ai_unattributed ON brain_activity TO ai_access
+  USING (session_id IS NULL AND reflection_id IS NULL) WITH CHECK (session_id IS NULL AND reflection_id IS NULL);
+COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
+CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
+CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
+  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL AND structured_output IS NULL);
+COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the four blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
+CREATE POLICY worker_delete ON brain_activity FOR DELETE TO worker_access USING (true);
 CREATE POLICY ops_read ON brain_activity FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON brain_activity TO mwf_definer USING (true) WITH CHECK (true);
 
 -- consent: app_access SIU, mwf_definer SU
 ALTER TABLE consent ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON consent TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON consent IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON consent TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON consent IS 'The caller''s own rows: the deciders (no requester arm, P1-4) (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON consent TO mwf_definer USING (true) WITH CHECK (true);
 
 -- context_share_offer: ai_access SIU, app_access SU, mwf_definer SU
 ALTER TABLE context_share_offer ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON context_share_offer TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON context_share_offer IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON context_share_offer TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON context_share_offer FOR SELECT TO app_access USING (subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON context_share_offer IS 'The share offers made to the caller (the subject); the author sees the shared text only as its delivered copy (design note §6, R6; work-k5fk.10.7).';
+CREATE POLICY app_update ON context_share_offer FOR UPDATE TO app_access USING (subject_user_id = (SELECT app.current_user_id())) WITH CHECK (subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON context_share_offer IS 'The subject answers their own offer (status, shared / declined; work-k5fk.10.7).';
+CREATE POLICY ai_session ON context_share_offer TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY definer_all ON context_share_offer TO mwf_definer USING (true) WITH CHECK (true);
 
 -- conversation: ai_access S, app_access SIU, mwf_definer SUD, ops_access S
 ALTER TABLE conversation ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON conversation TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON conversation IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON conversation TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON conversation FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON conversation IS 'The caller''s own conversations (design note §6). A co-participant''s MAIN conversation id — the address a delivery to them goes to — comes from app.session_parties / v_participant; their row (next_seq) is never the app''s (work-k5fk.10.7, review F8).';
+CREATE POLICY app_insert ON conversation FOR INSERT TO app_access WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_insert ON conversation IS 'The caller''s own conversation (their MAIN at create / accept, a sub-chat; work-k5fk.10.7).';
+CREATE POLICY app_update ON conversation FOR UPDATE TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON conversation IS 'The caller''s own conversation (status, resolved_at; work-k5fk.10.7).';
+CREATE POLICY ai_session ON conversation TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY ops_read ON conversation FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON conversation TO mwf_definer USING (true) WITH CHECK (true);
 
 -- conversation_read_state: app_access SIU, mwf_definer SD
 ALTER TABLE conversation_read_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON conversation_read_state TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON conversation_read_state IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON conversation_read_state TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()) AND (last_seen_conversation_id IS NULL OR EXISTS (SELECT 1 FROM conversation c WHERE c.id = conversation_read_state.last_seen_conversation_id AND c.user_id = (SELECT app.current_user_id()))));
+COMMENT ON POLICY app_own ON conversation_read_state IS 'The caller''s own rows: their read state (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON conversation_read_state TO mwf_definer USING (true) WITH CHECK (true);
 
 -- draft: app_access SIUD, mwf_definer SD
 ALTER TABLE draft ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON draft TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON draft IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON draft TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON draft IS 'The caller''s own rows: their drafts (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON draft TO mwf_definer USING (true) WITH CHECK (true);
 
 -- empathy_attempt: ai_access SU, app_access SI, mwf_definer SIUD
 ALTER TABLE empathy_attempt ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON empathy_attempt TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON empathy_attempt IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON empathy_attempt TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON empathy_attempt FOR SELECT TO app_access
+  USING (author_user_id = (SELECT app.current_user_id()) OR (subject_user_id = (SELECT app.current_user_id()) AND revealed_at IS NOT NULL));
+COMMENT ON POLICY app_select ON empathy_attempt IS 'The caller''s own attempts; the ones about the caller only once revealed — before that its subject reads the direction''s status through v_empathy_direction_status (design note §6, P0-2; work-k5fk.10.7).';
+CREATE POLICY app_insert ON empathy_attempt FOR INSERT TO app_access WITH CHECK (author_user_id = (SELECT app.current_user_id()) AND status = 'HELD');
+COMMENT ON POLICY app_insert ON empathy_attempt IS 'The caller''s own new attempt, HELD; every move after is app.empathy_set_status (design note §6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON empathy_attempt TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY definer_all ON empathy_attempt TO mwf_definer USING (true) WITH CHECK (true);
 
 -- empathy_review: app_access SIU, mwf_definer S
 ALTER TABLE empathy_review ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON empathy_review TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON empathy_review IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON empathy_review TO app_access USING (reviewer_user_id = (SELECT app.current_user_id()))
+  WITH CHECK (reviewer_user_id = (SELECT app.current_user_id())
+              AND EXISTS (SELECT 1 FROM empathy_attempt a WHERE a.id = empathy_review.attempt_id AND a.revealed_at IS NOT NULL));
+COMMENT ON POLICY app_own ON empathy_review IS 'The caller''s own rows: their reviews of an attempt about them, written only once that attempt is revealed (the subject reads it then; design note §6; work-k5fk.10.7, review F9).';
+CREATE POLICY app_author_sent ON empathy_review FOR SELECT TO app_access
+  USING (feedback_sent_at IS NOT NULL
+         AND EXISTS (SELECT 1 FROM empathy_attempt a WHERE a.id = empathy_review.attempt_id AND a.author_user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_author_sent ON empathy_review IS 'The author of the attempt reads its review once the feedback was sent — before that nothing, the validated flag included (spec §1.2 RLS, fix1 m2; empathy-store reviewVisibleToAuthor; work-k5fk.10.7).';
 CREATE POLICY definer_all ON empathy_review TO mwf_definer USING (true) WITH CHECK (true);
 
 -- feature_state: app_access SIU, mwf_definer SD
 ALTER TABLE feature_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON feature_state TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON feature_state IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON feature_state TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON feature_state IS 'The caller''s own rows: their wellbeing features (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON feature_state TO mwf_definer USING (true) WITH CHECK (true);
 
 -- follow_up: app_access SIU, mwf_definer S, worker_access SIU
 ALTER TABLE follow_up ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON follow_up TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON follow_up IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON follow_up FOR SELECT TO app_access
+  USING (app.is_member(session_id) AND (scope = 'SHARED' OR owner_user_id = (SELECT app.current_user_id()) OR opted_in_shared));
+COMMENT ON POLICY app_select ON follow_up IS 'In a session the caller is in: the shared follow-ups, the caller''s own individual ones, and a partner''s individual one only once its owner opted it in to sharing (design note §6 narrowed; work-k5fk.10.7, review F11).';
+CREATE POLICY app_insert ON follow_up FOR INSERT TO app_access
+  WITH CHECK (app.is_member(session_id) AND (owner_user_id IS NULL OR owner_user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_insert ON follow_up IS 'A follow-up of a session of the caller''s, the caller''s own when it has an owner (work-k5fk.10.7).';
+CREATE POLICY app_update ON follow_up FOR UPDATE TO app_access USING (owner_user_id = (SELECT app.current_user_id())) WITH CHECK (owner_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON follow_up IS 'The owner of an individual entry shares it or not (opted_in_shared; tending setIndividualEntryShare; work-k5fk.10.7).';
 CREATE POLICY worker_read ON follow_up FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_update ON follow_up FOR UPDATE TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY worker_session ON follow_up FOR INSERT TO worker_access WITH CHECK (session_id = (SELECT app.session_scope()));
@@ -5151,81 +5864,108 @@ CREATE POLICY definer_all ON follow_up TO mwf_definer USING (true) WITH CHECK (t
 
 -- follow_up_checkin: app_access SI, mwf_definer SD
 ALTER TABLE follow_up_checkin ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON follow_up_checkin TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON follow_up_checkin IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON follow_up_checkin FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM follow_up f WHERE f.id = follow_up_checkin.follow_up_id AND f.scope = 'SHARED' AND f.status IN ('COMPLETED', 'PARTIAL'))));
+COMMENT ON POLICY app_select ON follow_up_checkin IS 'The caller''s own check-ins; a co-participant''s on a SHARED follow-up once it is COMPLETED or PARTIAL (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON follow_up_checkin FOR INSERT TO app_access
+  WITH CHECK (user_id = (SELECT app.current_user_id())
+              AND EXISTS (SELECT 1 FROM follow_up f WHERE f.id = follow_up_checkin.follow_up_id
+                            AND (f.scope = 'SHARED' OR f.owner_user_id = (SELECT app.current_user_id()))));
+COMMENT ON POLICY app_insert ON follow_up_checkin IS 'The caller''s own check-in, on a shared follow-up or the caller''s own individual one (design note §6; work-k5fk.10.7, review F11).';
 CREATE POLICY definer_all ON follow_up_checkin TO mwf_definer USING (true) WITH CHECK (true);
 
 -- follow_up_note: app_access SIU, mwf_definer SD
 ALTER TABLE follow_up_note ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON follow_up_note TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON follow_up_note IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON follow_up_note TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON follow_up_note IS 'The caller''s own rows: their between-period notes (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON follow_up_note TO mwf_definer USING (true) WITH CHECK (true);
 
 -- invitation: app_access SIU, mwf_definer S, ops_access S
 ALTER TABLE invitation ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON invitation TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON invitation IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON invitation FOR SELECT TO app_access USING (invited_by_user_id = (SELECT app.current_user_id()) OR accepted_by_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON invitation IS 'The invitations the caller sent or accepted; before accepting, app.invitation_peek (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON invitation FOR INSERT TO app_access WITH CHECK (invited_by_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_insert ON invitation IS 'The inviter''s own invitation (createSession; work-k5fk.10.7).';
+CREATE POLICY app_update ON invitation FOR UPDATE TO app_access USING (invited_by_user_id = (SELECT app.current_user_id())) WITH CHECK (invited_by_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON invitation IS 'The inviter confirms the message (message_confirmed_at) and locks it for a pre-join draft save; the invitee''s answer is app.invitation_answer (work-k5fk.10.7).';
 CREATE POLICY ops_read ON invitation FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON invitation TO mwf_definer USING (true) WITH CHECK (true);
 
 -- json_schema: ai_access S, app_access S
 ALTER TABLE app.json_schema ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON app.json_schema TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON app.json_schema IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_reference ON app.json_schema FOR SELECT TO app_access USING (true);
+COMMENT ON POLICY app_reference ON app.json_schema IS 'Reference data: the seeded document schemas t_doc_schema reads with the writer''s rights (work-k5fk.10.7).';
 CREATE POLICY ai_reference ON app.json_schema FOR SELECT TO ai_access USING (true);
 
 -- live_session_pair: app_access S, mwf_definer SID
 ALTER TABLE live_session_pair ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON live_session_pair TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON live_session_pair IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON live_session_pair FOR SELECT TO app_access USING ((SELECT app.current_user_id()) IN (user_a, user_b));
+COMMENT ON POLICY app_select ON live_session_pair IS 'The caller''s own pairs (createSession''s pre-check, contacts.ts findLiveSessionWith; work-k5fk.10.7).';
 CREATE POLICY definer_all ON live_session_pair TO mwf_definer USING (true) WITH CHECK (true);
 
 -- message: ai_access SI, app_access SID, mwf_definer SI, ops_access S, worker_access S
 ALTER TABLE message ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON message TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON message IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON message TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON message FOR SELECT TO app_access USING (sender_user_id = (SELECT app.current_user_id()) OR EXISTS (SELECT 1 FROM conversation c WHERE c.id = message.conversation_id AND c.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_select ON message IS 'The lines of the caller''s own conversations, and the caller''s own lines (design note §6, Q9; work-k5fk.10.7).';
+CREATE POLICY app_insert ON message FOR INSERT TO app_access
+  WITH CHECK (role = 'USER' AND sender_user_id = (SELECT app.current_user_id()) AND kind IN ('CHAT', 'EMPATHY_STATEMENT') AND EXISTS (SELECT 1 FROM conversation c WHERE c.id = message.conversation_id AND c.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_insert ON message IS 'The caller''s own USER turn (CHAT) and own copy of their empathy statement, in their own conversation; every other line is a definer''s or the AI''s (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_delete ON message FOR DELETE TO app_access
+  USING (EXISTS (SELECT 1 FROM conversation c WHERE c.id = message.conversation_id AND c.user_id = (SELECT app.current_user_id())) AND ((role = 'USER' AND kind = 'CHAT' AND sender_user_id = (SELECT app.current_user_id())) OR kind = 'SHARE_SUGGESTION'));
+COMMENT ON POLICY app_delete ON message IS 'In the caller''s own conversation: their failed USER turn, or a share suggestion (declined or accepted; work-k5fk.10.7).';
+CREATE POLICY ai_session ON message TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY worker_all ON message TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY ops_read ON message FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON message TO mwf_definer USING (true) WITH CHECK (true);
 
 -- milestone: app_access S, mwf_definer S, ops_access S
 ALTER TABLE milestone ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON milestone TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON milestone IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_read ON milestone FOR SELECT TO app_access USING (true);
+COMMENT ON POLICY app_read ON milestone IS 'Reference data: the seeded milestone keys (work-k5fk.10.7).';
 CREATE POLICY ops_read ON milestone FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON milestone TO mwf_definer USING (true) WITH CHECK (true);
 
 -- mood_reading: app_access SI, mwf_definer SD, ops_access S
 ALTER TABLE mood_reading ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON mood_reading TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON mood_reading IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON mood_reading TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON mood_reading IS 'The caller''s own rows: their mood readings (design note §6; work-k5fk.10.7).';
 CREATE POLICY ops_read ON mood_reading FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON mood_reading TO mwf_definer USING (true) WITH CHECK (true);
 
 -- need: app_access SIU, mwf_definer SD
 ALTER TABLE need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON need TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON need IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON need TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON need IS 'The caller''s own rows: their needs (a soft delete is deleted_at) (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON need TO mwf_definer USING (true) WITH CHECK (true);
 
 -- need_disposition: app_access SIUD, mwf_definer SD
 ALTER TABLE need_disposition ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON need_disposition TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON need_disposition IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON need_disposition TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON need_disposition IS 'The caller''s own rows: their dispositions of a need (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON need_disposition TO mwf_definer USING (true) WITH CHECK (true);
 
 -- need_share: app_access S, mwf_definer SIU
 ALTER TABLE need_share ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON need_share TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON need_share IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON need_share FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (revoked_at IS NULL AND app.is_member(session_id)));
+COMMENT ON POLICY app_select ON need_share IS 'The caller''s own shares, and every unrevoked share of a session the caller is in; a share is written by app.need_share (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON need_share TO mwf_definer USING (true) WITH CHECK (true);
 
 -- participant: ai_access S, app_access SI, mwf_definer SU, ops_access S, worker_access S
 ALTER TABLE participant ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON participant TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON participant IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON participant TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON participant FOR SELECT TO app_access USING (user_id = (SELECT app.current_user_id()) OR app.is_member(session_id));
+COMMENT ON POLICY app_select ON participant IS 'The caller''s seats and every seat of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON participant FOR INSERT TO app_access
+  WITH CHECK ((user_id = (SELECT app.current_user_id()) AND added_by_user_id IS NULL AND app.session_unseated(session_id))
+              OR (user_id = (SELECT app.current_user_id()) AND EXISTS (SELECT 1 FROM invitation i
+                                              WHERE i.session_id = participant.session_id
+                                                AND i.invited_by_user_id = participant.added_by_user_id
+                                                AND i.accepted_by_user_id = (SELECT app.current_user_id())))
+              OR (added_by_user_id = (SELECT app.current_user_id()) AND kind <> 'human' AND app.is_current_member(session_id)));
+COMMENT ON POLICY app_insert ON participant IS 'Three seats only: the caller as the initiator of a session nobody is seated in (createSession, the linked process); the caller as the invitee of an invitation they accepted, added by its inviter (acceptInvitation); the AI or a persona the caller brings in (t_participant_added_by checks the adder and the owner). Nobody seats another human (work-k5fk.10.7).';
+CREATE POLICY ai_session ON participant TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY worker_all ON participant TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY ops_read ON participant FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON participant TO mwf_definer USING (true) WITH CHECK (true);
@@ -5236,9 +5976,13 @@ CREATE POLICY definer_all ON participant_key TO mwf_definer USING (true) WITH CH
 
 -- participant_milestone: ai_access S, app_access SI, mwf_definer SID, ops_access S, worker_access S
 ALTER TABLE participant_milestone ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON participant_milestone TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON participant_milestone IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON participant_milestone TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON participant_milestone FOR SELECT TO app_access USING (user_id = (SELECT app.current_user_id()) OR app.is_member(session_id));
+COMMENT ON POLICY app_select ON participant_milestone IS 'Progress of every participant of the caller''s sessions (the stage shim reads both; design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON participant_milestone FOR INSERT TO app_access
+  WITH CHECK (user_id = (SELECT app.current_user_id()) AND EXISTS (SELECT 1 FROM milestone m WHERE m.key = milestone_key AND m.self_assertable));
+COMMENT ON POLICY app_insert ON participant_milestone IS 'The caller''s own self-assertable milestones only; every other key, and any for the partner, is app.reach_milestone''s (work-k5fk.10.28; work-k5fk.10.7).';
+CREATE POLICY ai_session ON participant_milestone TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY worker_all ON participant_milestone TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY ops_read ON participant_milestone FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON participant_milestone TO mwf_definer USING (true) WITH CHECK (true);
@@ -5249,80 +5993,124 @@ CREATE POLICY definer_all ON persona TO mwf_definer USING (true) WITH CHECK (tru
 
 -- proposal: app_access SIU, mwf_definer S, worker_access SU
 ALTER TABLE proposal ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON proposal IS 'The proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal FOR INSERT TO app_access
+  WITH CHECK (created_by_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
+              AND status = 'ACTIVE' AND removed_by_user_id IS NULL);
+COMMENT ON POLICY app_insert ON proposal IS 'A proposal the caller makes, in a session of theirs, starting ACTIVE and unremoved — never born converted or removed (design note §6; work-k5fk.10.7, review r2 N3).';
+CREATE POLICY app_update ON proposal FOR UPDATE TO app_access
+  USING (app.is_member(session_id) AND status <> 'CONVERTED_TO_AGREEMENT'
+         AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'))
+  WITH CHECK (app.is_member(session_id) AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'));
+COMMENT ON POLICY app_update ON proposal IS 'A shared proposal is the pair''s (either edits, refines or removes it: Stage 4 capture, the sub-chat); an individual commitment only its creator''s. Never one converted to an agreement (the worker''s; closes work-k5fk.10.9''s revival). Design note §6 says created_by = me; a shared proposal''s co-editing is the app''s behaviour (stage4-capture / stage4-subchat target tests). work-k5fk.10.7.';
 CREATE POLICY worker_session ON proposal TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 CREATE POLICY definer_all ON proposal TO mwf_definer USING (true) WITH CHECK (true);
 
 -- proposal_choice: app_access SIU, mwf_definer SD, worker_access S
 ALTER TABLE proposal_choice ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal_choice TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal_choice IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal_choice FOR SELECT TO app_access
+  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM participant_milestone m WHERE m.session_id = proposal_choice.session_id AND m.user_id = proposal_choice.user_id AND m.milestone_key = 'choices_shared')));
+COMMENT ON POLICY app_select ON proposal_choice IS 'The caller''s own choices; a co-participant''s once they shared them (choices_shared) (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal_choice FOR INSERT TO app_access WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_insert ON proposal_choice IS 'The caller''s own choice (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_update ON proposal_choice FOR UPDATE TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON proposal_choice IS 'The caller revises their own choice (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON proposal_choice TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 CREATE POLICY definer_all ON proposal_choice TO mwf_definer USING (true) WITH CHECK (true);
 
 -- proposal_need: app_access SID
 ALTER TABLE proposal_need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal_need TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal_need IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal_need FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON proposal_need IS 'The need links of the proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal_need FOR INSERT TO app_access
+  WITH CHECK (app.is_member(session_id)
+              AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_need.proposal_id
+                            AND (p.created_by_user_id = (SELECT app.current_user_id()) OR p.kind = 'SHARED_PROPOSAL')));
+COMMENT ON POLICY app_insert ON proposal_need IS 'A need link of a proposal the caller may edit: their own, or a shared one (as proposal_revision; design note §6; work-k5fk.10.7, review F10).';
+CREATE POLICY app_delete ON proposal_need FOR DELETE TO app_access
+  USING (app.is_member(session_id)
+         AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_need.proposal_id
+                       AND (p.created_by_user_id = (SELECT app.current_user_id()) OR p.kind = 'SHARED_PROPOSAL')));
+COMMENT ON POLICY app_delete ON proposal_need IS 'A need link of a proposal the caller may edit: their own, or a shared one (work-k5fk.10.7, review F10).';
 
 -- proposal_revision: app_access SI, worker_access I
 ALTER TABLE proposal_revision ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON proposal_revision TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON proposal_revision IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON proposal_revision FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON proposal_revision IS 'The revision history of the proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_insert ON proposal_revision FOR INSERT TO app_access
+  WITH CHECK (actor_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
+              AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id
+                            AND (p.created_by_user_id = (SELECT app.current_user_id()) OR p.kind = 'SHARED_PROPOSAL')));
+COMMENT ON POLICY app_insert ON proposal_revision IS 'A revision the caller made, in a session of theirs (design note §6: member + actor = me), of a proposal they may edit (their own, or a shared one) — never of the partner''s individual commitment (work-k5fk.10.11, in part; work-k5fk.10.7).';
 CREATE POLICY worker_session ON proposal_revision TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- reconciler_guidance: ai_access SI, app_access S
 ALTER TABLE reconciler_guidance ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reconciler_guidance TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reconciler_guidance IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON reconciler_guidance TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY app_select ON reconciler_guidance FOR SELECT TO app_access USING (author_user_id = (SELECT app.current_user_id()) OR subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON reconciler_guidance IS 'Guidance in a direction the caller is a party of (design note §6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON reconciler_guidance TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 
--- reconciler_result: ai_access SIU, app_access S
+-- reconciler_result: ai_access SIU, app_access S, mwf_definer S
 ALTER TABLE reconciler_result ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reconciler_result TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reconciler_result IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON reconciler_result TO ai_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
+CREATE POLICY definer_all ON reconciler_result TO mwf_definer USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON reconciler_result FOR SELECT TO app_access USING (subject_user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_select ON reconciler_result IS 'The reconciler''s analysis of an attempt about the caller — never its author''s (design note §6, R6; work-k5fk.10.7).';
+CREATE POLICY ai_session ON reconciler_result TO ai_access
+  USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 
 -- reflection: app_access SIU, mwf_definer SD, ops_access S
 ALTER TABLE reflection ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reflection TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reflection IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON reflection TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()) AND (linked_session_id IS NULL OR app.is_member(linked_session_id)));
+COMMENT ON POLICY app_own ON reflection IS 'The caller''s own rows: their inner work (a linked session is one of the callers) (design note §6; work-k5fk.10.7).';
 CREATE POLICY ops_read ON reflection FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON reflection TO mwf_definer USING (true) WITH CHECK (true);
 
 -- reflection_message: app_access SI, ops_access S
 ALTER TABLE reflection_message ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reflection_message TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reflection_message IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON reflection_message TO app_access USING (EXISTS (SELECT 1 FROM reflection r WHERE r.id = reflection_message.reflection_id AND r.user_id = (SELECT app.current_user_id()))) WITH CHECK (EXISTS (SELECT 1 FROM reflection r WHERE r.id = reflection_message.reflection_id AND r.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_own ON reflection_message IS 'The messages of the caller''s own reflections (design note §6; work-k5fk.10.7).';
 CREATE POLICY ops_read ON reflection_message FOR SELECT TO ops_access USING (true);
 
 -- regulation_event: app_access SI, mwf_definer SD
 ALTER TABLE regulation_event ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON regulation_event TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON regulation_event IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON regulation_event TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON regulation_event IS 'The caller''s own rows: their regulation exercises (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON regulation_event TO mwf_definer USING (true) WITH CHECK (true);
 
 -- reminder: app_access SID, mwf_definer SD, worker_access SU
 ALTER TABLE reminder ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON reminder TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON reminder IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON reminder TO app_access USING (user_id = (SELECT app.current_user_id()))
+  WITH CHECK (user_id = (SELECT app.current_user_id())
+              AND (follow_up_id IS NULL OR EXISTS (SELECT 1 FROM follow_up f WHERE f.id = reminder.follow_up_id)));
+COMMENT ON POLICY app_own ON reminder IS 'The caller''s own rows: their reminders, pointing only at a follow-up the caller can read (follow_up''s own policy: a session they are in; design note §6; work-k5fk.10.7, review F14).';
 CREATE POLICY worker_all ON reminder TO worker_access USING (true) WITH CHECK (true);
 CREATE POLICY definer_all ON reminder TO mwf_definer USING (true) WITH CHECK (true);
 
 -- session: ai_access SU, app_access SIU, mwf_definer SU, ops_access S, worker_access SD
 ALTER TABLE session ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON session TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON session IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY ai_session ON session TO ai_access USING (id = (SELECT app.session_scope())) WITH CHECK (id = (SELECT app.session_scope()));
-CREATE POLICY worker_all ON session TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY app_select ON session FOR SELECT TO app_access
+  USING (app.is_member(id) OR (status = 'CREATED' AND app.session_unseated(id)));
+COMMENT ON POLICY app_select ON session IS 'A session the caller is (or was) seated in; and a CREATED session nobody is seated in yet — createSession''s INSERT … RETURNING, before the initiator''s participant row (work-k5fk.10.7).';
+CREATE POLICY app_insert ON session FOR INSERT TO app_access
+  WITH CHECK (status = 'CREATED' AND (previous_session_id IS NULL OR app.is_current_member(previous_session_id)));
+COMMENT ON POLICY app_insert ON session IS 'A new session starts CREATED, continuing (previous_session_id) only a session of the caller''s; its initiator''s participant row follows in the same transaction (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_update ON session FOR UPDATE TO app_access USING (app.is_member(id)) WITH CHECK (app.is_member(id));
+COMMENT ON POLICY app_update ON session IS 'A participant''s session: the topic frame and its confirmation (the grant''s columns); status moves only through app.session_set_status (work-k5fk.10.7).';
+CREATE POLICY ai_session ON session TO ai_access
+  USING (id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
+CREATE POLICY worker_read ON session FOR SELECT TO worker_access USING (true);
+CREATE POLICY worker_purge ON session FOR DELETE TO worker_access
+  USING (status = 'ARCHIVED' AND updated_at < CURRENT_TIMESTAMP - interval '90 days');
+COMMENT ON POLICY worker_purge ON session IS 'The worker hard-deletes only a session ARCHIVED and untouched for the purge window (90 days: session-retention.ts ARCHIVED_SESSION_PURGE_MS, by updated_at, which the archive''s status write stamps — the call site''s own filter) — never one it archived in the same transaction (work-k5fk.10.29 R3; t_session_purge refuses a non-ARCHIVED one).';
 CREATE POLICY ops_read ON session FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON session TO mwf_definer USING (true) WITH CHECK (true);
 
 -- session_closure: app_access S, worker_access I
 ALTER TABLE session_closure ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON session_closure TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON session_closure IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON session_closure FOR SELECT TO app_access USING (app.is_member(session_id));
+COMMENT ON POLICY app_select ON session_closure IS 'The closure of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON session_closure TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- session_key: no grant, so no policy: no runtime role reads or writes a row
@@ -5330,34 +6118,39 @@ ALTER TABLE session_key ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 
 -- takeaway: app_access SIUD
 ALTER TABLE takeaway ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON takeaway TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON takeaway IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON takeaway TO app_access USING (EXISTS (SELECT 1 FROM reflection r WHERE r.id = takeaway.reflection_id AND r.user_id = (SELECT app.current_user_id()))) WITH CHECK (EXISTS (SELECT 1 FROM reflection r WHERE r.id = takeaway.reflection_id AND r.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_own ON takeaway IS 'The takeaways of the caller''s own reflections (design note §6; work-k5fk.10.7).';
 
 -- takeaway_link: app_access SID
 ALTER TABLE takeaway_link ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON takeaway_link TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON takeaway_link IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON takeaway_link TO app_access USING (EXISTS (SELECT 1 FROM takeaway t JOIN reflection r ON r.id = t.reflection_id WHERE t.id = takeaway_link.source_id AND r.user_id = (SELECT app.current_user_id()))) WITH CHECK (EXISTS (SELECT 1 FROM takeaway t JOIN reflection r ON r.id = t.reflection_id WHERE t.id = takeaway_link.source_id AND r.user_id = (SELECT app.current_user_id())) AND EXISTS (SELECT 1 FROM takeaway t JOIN reflection r ON r.id = t.reflection_id WHERE t.id = takeaway_link.target_id AND r.user_id = (SELECT app.current_user_id())));
+COMMENT ON POLICY app_own ON takeaway_link IS 'Links from the caller''s own takeaways, and only to their own (design note §6; work-k5fk.10.7).';
 
 -- user: ai_access S, app_access SU, mwf_definer SIU, ops_access S
 ALTER TABLE "user" ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON "user" TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON "user" IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_select ON "user" FOR SELECT TO app_access
+  USING (id = (SELECT app.current_user_id()) OR kind = 'ai' OR app.owns_persona(id));
+COMMENT ON POLICY app_select ON "user" IS 'The caller, the AI principal and the caller''s personas (design note §6). A co-participant''s row stays out of reach: the name the app calls them by comes from app.session_parties / v_participant, never their email, last name or deletion instant (work-k5fk.10.7, review F7).';
+CREATE POLICY app_update ON "user" FOR UPDATE TO app_access USING (id = (SELECT app.current_user_id())) WITH CHECK (id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_update ON "user" IS 'The caller''s own names (controllers/auth.ts profile edit; work-k5fk.10.7).';
 CREATE POLICY ai_session ON "user" FOR SELECT TO ai_access
-  USING (EXISTS (SELECT 1 FROM participant p WHERE p.session_id = (SELECT app.session_scope()) AND p.user_id = "user".id));
+  USING ((SELECT app.scope_actor_is_member()) AND EXISTS (SELECT 1 FROM participant p WHERE p.session_id = (SELECT app.session_scope()) AND p.user_id = "user".id));
 CREATE POLICY ops_read ON "user" FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON "user" TO mwf_definer USING (true) WITH CHECK (true);
 
 -- user_contact: app_access SIU, mwf_definer SD
 ALTER TABLE user_contact ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON user_contact TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON user_contact IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON user_contact TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON user_contact IS 'The caller''s own rows: what the caller calls other people (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON user_contact TO mwf_definer USING (true) WITH CHECK (true);
 
 -- user_device: app_access SIU, mwf_definer SD, worker_access SU
 ALTER TABLE user_device ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON user_device TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON user_device IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
-CREATE POLICY worker_all ON user_device TO worker_access USING (true) WITH CHECK (true);
+CREATE POLICY app_own ON user_device TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON user_device IS 'The caller''s own rows: their devices (design note §6; work-k5fk.10.7).';
+CREATE POLICY worker_read ON user_device FOR SELECT TO worker_access USING (true);
+CREATE POLICY worker_clear_token ON user_device FOR UPDATE TO worker_access USING (true) WITH CHECK (push_token IS NULL);
+COMMENT ON POLICY worker_clear_token ON user_device IS 'The worker only clears a token Expo reports unregistered (user-settings.ts clearPushTokenAsWorker); it can never set one (work-k5fk.10.29 R1).';
 CREATE POLICY definer_all ON user_device TO mwf_definer USING (true) WITH CHECK (true);
 
 -- user_identity: mwf_definer SID
@@ -5370,15 +6163,110 @@ CREATE POLICY definer_all ON user_key TO mwf_definer USING (true) WITH CHECK (tr
 
 -- user_memory: app_access SIUD, mwf_definer SD
 ALTER TABLE user_memory ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON user_memory TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON user_memory IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON user_memory TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON user_memory IS 'The caller''s own rows: their memories (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON user_memory TO mwf_definer USING (true) WITH CHECK (true);
 
 -- user_preferences: app_access SIU, mwf_definer SD
 ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_interim ON user_preferences TO app_access USING (true) WITH CHECK (true);
-COMMENT ON POLICY app_interim ON user_preferences IS 'Interim (design note §7 row 9c): app_access keeps exactly its pre-RLS reach, every row its grants allow. Rows 9d–9g replace it with the §6 row predicates.';
+CREATE POLICY app_own ON user_preferences TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY app_own ON user_preferences IS 'The caller''s own rows: their preferences (design note §6; work-k5fk.10.7).';
 CREATE POLICY definer_all ON user_preferences TO mwf_definer USING (true) WITH CHECK (true);
+
+-- Review F4: a participant who left keeps reading the session (app.is_member counts leavers: what was shared stays
+-- readable, spec §1.1) but writes nothing in it. Every session-scoped table mwf_app writes carries one RESTRICTIVE
+-- policy per write command it holds: the row's session must be one the caller is a PRESENT participant of
+-- (app.is_current_member). Restrictive, so it narrows the permissive §6 policies above without restating them; a
+-- row outside any session (a NULL session_id / linked_session_id) is the caller's own and unaffected. participant
+-- itself is guarded in its policy (the adder arm) and t_participant_added_by; session INSERT by its
+-- previous_session_id (below).
+-- Review r2 N2: an own-row table whose session link is optional (reflection.linked_session_id, ai_memory /
+-- user_memory.session_id) is the user's own, not the session's: a leaver keeps editing, unlinking and deleting it.
+-- Only a NEW link (an INSERT naming a session, or an UPDATE that changes the link to one) needs present
+-- membership: app_active_insert below, and t_session_link_moves for the UPDATE (a policy cannot compare OLD with
+-- NEW).
+CREATE POLICY app_active_insert ON ai_memory AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
+COMMENT ON POLICY app_active_insert ON ai_memory IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON consent AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON consent IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON consent AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON consent IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON context_share_offer AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON context_share_offer IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON conversation AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON conversation IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON conversation AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON conversation IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON conversation_read_state AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON conversation_read_state IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON conversation_read_state AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON conversation_read_state IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON draft AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON draft IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON draft AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON draft IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_delete ON draft AS RESTRICTIVE FOR DELETE TO app_access USING (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_delete ON draft IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON empathy_attempt AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON empathy_attempt IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON empathy_review AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON empathy_review IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON empathy_review AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON empathy_review IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON follow_up AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON follow_up IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON follow_up AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON follow_up IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON follow_up_checkin AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON follow_up_checkin IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON follow_up_note AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON follow_up_note IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON follow_up_note AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON follow_up_note IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON invitation AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON invitation IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON invitation AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON invitation IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON message AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON message IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_delete ON message AS RESTRICTIVE FOR DELETE TO app_access USING (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_delete ON message IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON mood_reading AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
+COMMENT ON POLICY app_active_insert ON mood_reading IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON need AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON need IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON need AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON need IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON need_disposition AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON need_disposition IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON need_disposition AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON need_disposition IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_delete ON need_disposition AS RESTRICTIVE FOR DELETE TO app_access USING (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_delete ON need_disposition IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON participant_milestone AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON participant_milestone IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON proposal AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON proposal IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON proposal AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON proposal IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON proposal_choice AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON proposal_choice IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON proposal_choice AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(session_id)) WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_update ON proposal_choice IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON proposal_need AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON proposal_need IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_delete ON proposal_need AS RESTRICTIVE FOR DELETE TO app_access USING (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_delete ON proposal_need IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON proposal_revision AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK (app.is_current_member(session_id));
+COMMENT ON POLICY app_active_insert ON proposal_revision IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON reflection AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((linked_session_id IS NULL OR app.is_current_member(linked_session_id)));
+COMMENT ON POLICY app_active_insert ON reflection IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON regulation_event AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
+COMMENT ON POLICY app_active_insert ON regulation_event IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_update ON session AS RESTRICTIVE FOR UPDATE TO app_access USING (app.is_current_member(id)) WITH CHECK (app.is_current_member(id));
+COMMENT ON POLICY app_active_update ON session IS 'Writes only by a present participant of the row''s session (review F4).';
+CREATE POLICY app_active_insert ON user_memory AS RESTRICTIVE FOR INSERT TO app_access WITH CHECK ((session_id IS NULL OR app.is_current_member(session_id)));
+COMMENT ON POLICY app_active_insert ON user_memory IS 'Writes only by a present participant of the row''s session (review F4).';
 
 -- T7c. Diagnostics (work-k5fk.10.30; owner decision 2026-11-17: "diagnostics, no content"). diag_access is the
 -- operations bot's capability (login slam_bot_readonly, its only member; infra/aws/roles.sql). It reads, on every
@@ -5718,8 +6606,8 @@ BEGIN
     -- definer bug, or an injection into one, can change.
     v_definer_writes CONSTANT text[] := ARRAY[
       'ai_memory:DELETE', 'brain_activity:DELETE', 'consent:UPDATE', 'conversation:DELETE', 'conversation:UPDATE',
-      'conversation_read_state:DELETE', 'draft:DELETE', 'empathy_attempt:DELETE', 'empathy_attempt:INSERT',
-      'empathy_attempt:UPDATE', 'feature_state:DELETE', 'follow_up_checkin:DELETE', 'follow_up_note:DELETE',
+      'conversation_read_state:DELETE', 'draft:DELETE', 'draft:INSERT', 'empathy_attempt:DELETE', 'empathy_attempt:INSERT',
+      'empathy_attempt:UPDATE', 'feature_state:DELETE', 'invitation:UPDATE', 'follow_up_checkin:DELETE', 'follow_up_note:DELETE',
       'context_share_offer:UPDATE',
       'live_session_pair:DELETE', 'live_session_pair:INSERT', 'message:INSERT', 'mood_reading:DELETE', 'need:DELETE',
       'need_disposition:DELETE', 'need_share:INSERT', 'need_share:UPDATE', 'participant:UPDATE',
