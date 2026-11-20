@@ -1438,7 +1438,9 @@ CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery
       UPDATE public.empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, v_at)
       WHERE id = empathy_mark_delivery.attempt AND delivery_status = 'PENDING';
     ELSIF empathy_mark_delivery.delivery = 'SEEN' THEN
-      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at)
+      -- work-k5fk.9 (D4): seen implies delivered — a round seen straight from PENDING is delivered at the same instant
+      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at),
+                                        delivered_at = coalesce(delivered_at, v_at)
       WHERE id = empathy_mark_delivery.attempt AND delivery_status IN ('PENDING', 'DELIVERED');
     ELSE
       RAISE EXCEPTION 'delivery % is not a stamp', empathy_mark_delivery.delivery USING ERRCODE = 'check_violation';

@@ -1491,7 +1491,11 @@ BEGIN
     RAISE EXCEPTION 'TEST FAILED: SEEN was downgraded to DELIVERED';
   END IF;
   IF v_at < now() - interval '11 minutes' THEN RAISE EXCEPTION 'TEST FAILED: the stamp was backdated to %', v_at; END IF;
-  RAISE NOTICE 'PASS 30l the subject stamps SEEN; a later DELIVERED does not downgrade it; the instant is not backdated';
+  -- work-k5fk.9 (D4): seen implies delivered
+  IF (SELECT e.delivered_at FROM empathy_attempt e WHERE e.id = att_b) IS NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: a SEEN round has no delivered_at';
+  END IF;
+  RAISE NOTICE 'PASS 30l the subject stamps SEEN (and delivered); a later DELIVERED does not downgrade it; the instant is not backdated';
   -- 30m. the session of a declined invitation ends only while it is CREATED / INVITED: an ACTIVE one is left alone
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   PERFORM app.session_abandon_declined('00000000-0000-7e00-8000-0000000006f1');
@@ -1502,7 +1506,7 @@ BEGIN
 END $$;
 RESET SESSION AUTHORIZATION;
 -- 30n. stamping a round that was never revealed is refused (F10): B's round back to READY, A tries
-UPDATE empathy_attempt SET status = 'READY', revealed_at = NULL, delivery_status = 'PENDING', seen_at = NULL
+UPDATE empathy_attempt SET status = 'READY', revealed_at = NULL, delivery_status = 'PENDING', delivered_at = NULL, seen_at = NULL
 WHERE id = current_setting('t.att_b')::uuid;
 SET SESSION AUTHORIZATION mwf_app;
 DO $$ BEGIN

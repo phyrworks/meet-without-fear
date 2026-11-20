@@ -1282,9 +1282,10 @@ CREATE TABLE empathy_attempt (
     FOREIGN KEY (supersedes_attempt_id, session_id, author_user_id, subject_user_id)
       REFERENCES empathy_attempt (id, session_id, author_user_id, subject_user_id) ON DELETE SET NULL (supersedes_attempt_id),
     -- work-k5fk.9 (D4): the delivery group (delivery_status, delivered_at, seen_at) agrees with itself; the same three
-    -- CHECKs as context_share_offer's. PENDING → SEEN directly leaves delivered_at NULL (app.empathy_mark_delivery).
+    -- CHECKs as context_share_offer's. Seen implies delivered: PENDING → SEEN directly stamps delivered_at too
+    -- (app.empathy_mark_delivery).
     CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
-    CHECK (delivery_status <> 'DELIVERED' OR delivered_at IS NOT NULL),
+    CHECK (delivery_status = 'PENDING' OR delivered_at IS NOT NULL),
     CHECK (delivery_status <> 'PENDING' OR (delivered_at IS NULL AND seen_at IS NULL))
 );
 CREATE INDEX ON empathy_attempt (session_id, subject_user_id, revealed_at);
@@ -1292,7 +1293,7 @@ CREATE INDEX ON empathy_attempt (supersedes_attempt_id);
 -- + sql_attempt_one_live_per_direction (sql-only.sql)
 COMMENT ON TABLE empathy_attempt IS 'Stage 2: one participant''s statement of how they imagine the other feels, per direction and round; revealed to the subject once both are READY.';
 COMMENT ON CONSTRAINT empathy_attempt_check2 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): seen_at is set exactly when the item is SEEN.';
-COMMENT ON CONSTRAINT empathy_attempt_check3 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a DELIVERED item has its delivered_at (a SEEN one may lack it: PENDING straight to SEEN).';
+COMMENT ON CONSTRAINT empathy_attempt_check3 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a DELIVERED or SEEN item has its delivered_at — seen implies delivered (PENDING straight to SEEN stamps both).';
 COMMENT ON CONSTRAINT empathy_attempt_check4 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a PENDING item has neither delivery stamp.';
 COMMENT ON COLUMN empathy_attempt.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN empathy_attempt.author_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, author_user_id) references participant (session_id, user_id).';
@@ -1625,14 +1626,14 @@ CREATE TABLE context_share_offer (
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     -- work-k5fk.9 (D4): the delivery group agrees with itself (the same three CHECKs as empathy_attempt's)
     CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
-    CHECK (delivery_status <> 'DELIVERED' OR delivered_at IS NOT NULL),
+    CHECK (delivery_status = 'PENDING' OR delivered_at IS NOT NULL),
     CHECK (delivery_status <> 'PENDING' OR (delivered_at IS NULL AND seen_at IS NULL))
 );
 CREATE INDEX ON context_share_offer (session_id, subject_user_id, status);
 CREATE INDEX ON context_share_offer (result_id);
 COMMENT ON TABLE context_share_offer IS 'The suggestion to the subject of an attempt to share context with its author, and what happened to it; the shared text is delivered to the author as a message.';
 COMMENT ON CONSTRAINT context_share_offer_check2 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): seen_at is set exactly when the item is SEEN.';
-COMMENT ON CONSTRAINT context_share_offer_check3 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a DELIVERED item has its delivered_at (a SEEN one may lack it: PENDING straight to SEEN).';
+COMMENT ON CONSTRAINT context_share_offer_check3 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a DELIVERED or SEEN item has its delivered_at — seen implies delivered (PENDING straight to SEEN stamps both).';
 COMMENT ON CONSTRAINT context_share_offer_check4 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a PENDING item has neither delivery stamp.';
 COMMENT ON COLUMN context_share_offer.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN context_share_offer.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
@@ -4423,7 +4424,9 @@ CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery
       UPDATE public.empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, v_at)
       WHERE id = empathy_mark_delivery.attempt AND delivery_status = 'PENDING';
     ELSIF empathy_mark_delivery.delivery = 'SEEN' THEN
-      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at)
+      -- work-k5fk.9 (D4): seen implies delivered — a round seen straight from PENDING is delivered at the same instant
+      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at),
+                                        delivered_at = coalesce(delivered_at, v_at)
       WHERE id = empathy_mark_delivery.attempt AND delivery_status IN ('PENDING', 'DELIVERED');
     ELSE
       RAISE EXCEPTION 'delivery % is not a stamp', empathy_mark_delivery.delivery USING ERRCODE = 'check_violation';
