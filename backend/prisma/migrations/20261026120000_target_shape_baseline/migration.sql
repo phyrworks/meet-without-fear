@@ -384,8 +384,8 @@ COMMENT ON DOMAIN kek_id IS 'The id of the KMS key (the KEK) that wrapped a data
 -- last_name, user_contact.nickname. At most 100 characters and never blank; NULL, not '', is "no name" (the app
 -- trims, and clamps a longer Clerk name to 100: utils/person-name.ts). participant.display_name snapshots
 -- "user".name — two of these joined — so it carries its own bound of 201 instead.
--- "Not blank" is Unicode-wide (review r1 F9): no value made only of White_Space characters (pg_c_utf8's [[:space:]],
--- the set JavaScript's trim() removes), not just ASCII spaces.
+-- "Not blank" is one set on both sides (review r1 F9, r2 R2-4): Unicode White_Space — pg_c_utf8's [[:space:]] here,
+-- \p{White_Space} in utils/person-name.ts (not JavaScript's trim(), which differs on U+0085 and U+FEFF).
 CREATE DOMAIN person_name AS text
   CHECK (char_length(VALUE) BETWEEN 1 AND 100 AND VALUE COLLATE pg_c_utf8 !~ '^[[:space:]]*$');
 COMMENT ON DOMAIN person_name IS 'A person''s name or a nickname: 1-100 characters, not blank. NULL, never '''', means none (the app trims and clamps: utils/person-name.ts).';

@@ -27,7 +27,7 @@ import {
   setNickname,
   sharesASession,
 } from '../services/contacts';
-import { toPersonName } from '../utils/person-name';
+import { toPersonName, trimPersonName } from '../utils/person-name';
 
 // ============================================================================
 // Types
@@ -57,8 +57,9 @@ const declineInvitationSchema = z.object({
 });
 
 const updateNicknameSchema = z.object({
-  // Trimmed: a blank nickname is refused here as the user_contact CHECK would (review round 1, F8).
-  nickname: z.string().trim().min(1).max(100).nullable(),
+  // Trimmed of Unicode White_Space, as the person_name domain counts blank (review r2 R2-4): a blank nickname is
+  // refused here, a 400, never the domain's 500.
+  nickname: z.string().transform(trimPersonName).pipe(z.string().min(1).max(100)).nullable(),
 });
 
 /** A path user id must be a uuid before it reaches a uuid7 column. */
