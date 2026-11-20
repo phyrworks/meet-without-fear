@@ -1,6 +1,7 @@
 import { logger } from '../lib/logger';
 import { getAiPrisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { errorClass, sanitizeTurnTrace, type TurnTrace } from '../types/turn-trace';
 import { withSessionScope } from '../lib/request-context';
 import { getRequestContext } from '../lib/request-context';
 import { getAbly } from '../services/realtime';
@@ -210,13 +211,17 @@ export class BrainService {
    * the job — brain_activity has no mwf_app grant). One statement; a missing
    * activity is a no-op. Never throws.
    */
-  public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: unknown): Promise<void> {
+  public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: TurnTrace): Promise<void> {
     try {
+      // Review r1 F1 (work-k5fk.9): metadata is ops-readable, so only a sanitized trace is stored — known step names,
+      // template results, timings and enums (types/turn-trace.ts sanitizeTurnTrace).
+      const { trace, redacted } = sanitizeTurnTrace(turnTrace);
+      if (redacted > 0) logger.warn('[BrainService] Turn trace steps redacted', { turnId, redacted });
       await this.inScope(
         sessionId,
         async () =>
           await getAiPrisma().$executeRaw`UPDATE brain_activity
-        SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(turnTrace)}::jsonb)
+        SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(trace)}::jsonb)
         WHERE id = (SELECT b.id FROM brain_activity b
                     WHERE b.session_id = ${sessionId}::uuid AND b.turn_id = ${turnId}
                       AND b.call_type = 'ORCHESTRATED_RESPONSE'::brain_call_type
@@ -234,7 +239,8 @@ export class BrainService {
     if (!activityId) return null;
     try {
       const completedAt = new Date();
-      const metadata = { error: typeof error === 'object' ? JSON.stringify(error) : String(error) };
+      // the error's class or code only, never its message: metadata is ops-readable (review r1 F2)
+      const metadata = { error: errorClass(error) };
       const sessionId = this.activitySessions.get(activityId);
       this.activitySessions.delete(activityId);
       await this.inScope(

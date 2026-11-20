@@ -152,6 +152,104 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     ).toEqual([{ session_id: null, reflection_id: reflectionId, status: 'FAILED' }]);
   });
 
+  // Review r1 F1/F2 (work-k5fk.9): metadata is ops-readable, so the stored trace and error are telemetry only. The
+  // trace here is what the orchestrator wrote before the fix — a crisis classification and a model's free dispatch
+  // text — and the writer's guard keeps neither.
+  it('ops reading a safety turn sees no crisis category, no dispatch text and no error message', async () => {
+    const { brainService } = await import('../brain-service');
+    const ctx = await import('../../lib/request-context');
+    const turnId = `ts12-safety-${process.pid}`;
+    const seated = {
+      turnId,
+      requestId: 'r',
+      startTime: Date.now(),
+      userId: ids.bobUser,
+      sessionId: ids.session,
+      seated: true,
+    };
+    const main = await ctx.runWithContext(seated, () =>
+      brainService.startActivity({
+        sessionId: ids.session,
+        turnId,
+        activityType: 'LLM_CALL',
+        model: 'claude-sonnet',
+        input: {},
+        callType: 'ORCHESTRATED_RESPONSE' as never,
+      }),
+    );
+    expect(main.id).not.toBe('');
+    await ctx.runWithContext(seated, () =>
+      brainService.mergeTurnTrace(ids.session, turnId, {
+        totalDurationMs: 12,
+        modelUsed: 'claude-sonnet',
+        usedMock: false,
+        steps: [
+          {
+            name: 'Crisis Detection',
+            type: 'decision',
+            startMs: 0,
+            durationMs: 0,
+            result: 'severity=emergency, categories=suicide',
+            status: 'success',
+          },
+          {
+            name: 'Response Parsing',
+            type: 'parsing',
+            startMs: 1,
+            durationMs: 1,
+            result: 'thinking=true, draft=false, dispatch=SAFETY_CONCERN: PROBE_SHE_SAID',
+            status: 'success',
+          },
+          {
+            name: 'Dispatch: SAFETY_CONCERN: PROBE_SHE_SAID',
+            type: 'dispatch',
+            startMs: 2,
+            durationMs: 1,
+            result: '40 chars',
+            status: 'success',
+          },
+          {
+            name: 'Response Parsing',
+            type: 'parsing',
+            startMs: 3,
+            durationMs: 1,
+            result: 'thinking=true, draft=false, dispatch=SAFETY_CONCERN',
+            status: 'success',
+          },
+        ],
+      }),
+    );
+    const failed = await ctx.runWithContext(seated, () =>
+      brainService.startActivity({ sessionId: ids.session, activityType: 'LLM_CALL', model: 'm', input: {} }),
+    );
+    await ctx.runWithContext(seated, () =>
+      brainService.failActivity(failed.id, new Error('Unexpected token in JSON: PROBE_PROMPT_FRAGMENT')),
+    );
+
+    const [row] = await run.as<{ metadata: unknown }>(
+      'mwf_ops',
+      null,
+      `SELECT metadata FROM brain_activity WHERE id = $1`,
+      [main.id],
+    );
+    const seen = JSON.stringify(row.metadata);
+    expect(seen).not.toMatch(/suicide|emergency|severity|categories|PROBE_SHE_SAID/);
+    const steps = (row.metadata as { turnTrace: { steps: Array<{ name: string; result: string }> } }).turnTrace.steps;
+    expect(steps.map(s => [s.name, s.result])).toEqual([
+      ['Crisis Detection', '[redacted]'],
+      ['Response Parsing', '[redacted]'],
+      ['Unknown step', '[redacted]'],
+      ['Response Parsing', 'thinking=true, draft=false, dispatch=SAFETY_CONCERN'],
+    ]);
+    const [err] = await run.as<{ metadata: unknown }>(
+      'mwf_ops',
+      null,
+      `SELECT metadata FROM brain_activity WHERE id = $1`,
+      [failed.id],
+    );
+    expect(err.metadata).toEqual({ error: 'Error' });
+  });
+
   it('a telemetry failure never breaks the call: an unsaved record, and complete/fail are no-ops', async () => {
     const { brainService } = await import('../brain-service');
     const bad = await brainService.startActivity({

@@ -35,7 +35,7 @@ import { routeModel, scoreAmbiguity } from './model-router';
 import { estimateContextSizes, finalizeTurnMetrics, recordContextSizes } from './llm-telemetry';
 import { getFixtureOperationResponse, getFixtureResponseByIndex } from '../lib/e2e-fixtures';
 import { getE2EFixtureId } from '../lib/request-context';
-import type { TraceStep, TurnTrace } from '../types/turn-trace';
+import { dispatchTagKind, errorClass, type TraceStep, type TurnTrace } from '../types/turn-trace';
 import { detectCrisis } from './crisis-detector';
 // publishUserEvent and memoryService imports removed - handled in partner-session-classifier.ts
 
@@ -156,9 +156,9 @@ export async function orchestrateResponse(context: OrchestratorContext): Promise
     type: 'decision',
     startMs: 0,
     durationMs: 0,
-    result: crisisResult.detected
-      ? `severity=${crisisResult.severity}, categories=${crisisResult.categories.join(',')}`
-      : 'none',
+    // Review r1 F1 (work-k5fk.9): never the severity or categories — a per-user crisis classification is sensitive,
+    // and the trace is ops-readable telemetry. The step records only that the check ran.
+    result: 'evaluated',
     status: 'success',
   });
 
@@ -611,7 +611,8 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
         type: 'parsing',
         startMs: parseStart - startTime,
         durationMs: Date.now() - parseStart,
-        result: `thinking=${!!parsed.thinking}, draft=${!!parsed.draft}, dispatch=${parsed.dispatchTag || 'none'}`,
+        // the dispatch tag's kind only, never the model's text (review r1 F1)
+        result: `thinking=${!!parsed.thinking}, draft=${!!parsed.draft}, dispatch=${parsed.dispatchTag ? dispatchTagKind(parsed.dispatchTag) : 'none'}`,
         status: 'success',
       });
 
@@ -636,21 +637,21 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
         if (dispatchedResponse === null) {
           logger.info(`[AI Orchestrator] Unknown dispatch tag "${parsed.dispatchTag}" — using original AI response`);
           traceSteps.push({
-            name: `Dispatch (ignored): ${parsed.dispatchTag}`,
+            name: 'Dispatch (ignored)',
             type: 'dispatch',
             startMs: dispatchStart - startTime,
             durationMs: Date.now() - dispatchStart,
-            result: 'Unknown tag — fell through to normal response',
+            result: `${dispatchTagKind(parsed.dispatchTag)}: unknown tag, fell through to the normal response`,
             status: 'skipped',
           });
           // Fall through to normal response flow below
         } else {
           traceSteps.push({
-            name: `Dispatch: ${parsed.dispatchTag}`,
+            name: 'Dispatch',
             type: 'dispatch',
             startMs: dispatchStart - startTime,
             durationMs: Date.now() - dispatchStart,
-            result: `${dispatchedResponse.length} chars`,
+            result: `${dispatchTagKind(parsed.dispatchTag)}: ${dispatchedResponse.length} chars`,
             status: 'success',
           });
 
@@ -749,7 +750,8 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
       type: 'llm_call',
       startMs: responseStartTime - startTime,
       durationMs: Date.now() - responseStartTime,
-      result: String(error),
+      // the error's class or code only, never its message (review r1 F2)
+      result: `error: ${errorClass(error)}`,
       status: 'error',
     });
     logger.error('[AI Orchestrator] Response generation failed:', error);
