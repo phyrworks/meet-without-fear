@@ -53,7 +53,8 @@ export const updateProfileResponseSchema = z.object({
 // ============================================================================
 
 export const updatePushTokenRequestSchema = z.object({
-  pushToken: z.string().min(1, 'Push token is required'),
+  // 512: user_device.push_token's bound (work-k5fk.9, review r1 F7)
+  pushToken: z.string().min(1, 'Push token is required').max(512, 'Push token too long'),
   platform: z.enum(['ios', 'android']),
 });
 

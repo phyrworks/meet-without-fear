@@ -37,7 +37,7 @@ import {
   updatePrivacyPreferencesRequestSchema,
 } from '@meet-without-fear/shared';
 import { deleteAccountWithNotifications } from '../services/account-deletion';
-import { sendTestPushNotification } from '../services/push';
+import { isValidPushToken, sendTestPushNotification } from '../services/push';
 import { toPersonName } from '../utils/person-name';
 import {
   clearPushTokens,
@@ -165,6 +165,11 @@ export const updatePushToken = asyncHandler(async (req: Request, res: Response):
   }
 
   const { pushToken, platform } = parseResult.data;
+  // Every token the app registers is an Expo push token (user_device.push_provider = 'expo'): refuse anything else
+  // here, as a 400, rather than store it (review r1 F7, work-k5fk.9).
+  if (!isValidPushToken(pushToken)) {
+    throw new ValidationError('Invalid push token data', { errors: { pushToken: ['Not an Expo push token'] } });
+  }
 
   // Register this device's token (user_device; one row per device)
   await registerPushToken(user.id, pushToken, platform);

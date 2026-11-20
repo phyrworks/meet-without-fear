@@ -144,6 +144,20 @@ describe('Auth API', () => {
       expect(mockNext).toHaveBeenCalledWith(expect.any(ValidationError));
     });
 
+    // work-k5fk.9 (review r1 F7): user_device.push_token is bounded at 512 and every token is Expo's, so either
+    // violation is a 400 at the contract, never the database's 500
+    it.each([
+      ['an oversized token', `ExponentPushToken[${'a'.repeat(520)}]`],
+      ['a token that is not an Expo push token', 'FCM-token-xxx'],
+    ])('throws ValidationError for %s', async (_label, pushToken) => {
+      const req = createMockRequest({ user: mockUser, body: { pushToken, platform: 'ios' } });
+      const { res } = createMockResponse();
+
+      await updatePushToken(req as Request, res as Response, mockNext);
+
+      expect(mockNext).toHaveBeenCalledWith(expect.any(ValidationError));
+    });
+
     it('throws UnauthorizedError when no user', async () => {
       const req = createMockRequest({
         body: { pushToken: 'token', platform: 'ios' },
