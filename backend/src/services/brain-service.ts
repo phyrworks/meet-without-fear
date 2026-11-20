@@ -259,7 +259,9 @@ export class BrainService {
   }
 
   /**
-   * Helper to broadcast updates via Ably.
+   * Broadcast an activity's telemetry via Ably (the status site's live view): ids, kind, model, status, tokens, cost
+   * and timing — never input, output or metadata (the owner's follow-up to OD-1, work-k5fk.9: content leaves the
+   * app only sealed, and Ably is outside it). The dashboard fetches the rest through /brain, which opens it.
    */
   private broadcastUpdate(activity: BrainActivity) {
     if (process.env.ENABLE_AUDIT_STREAM !== 'true') return;
@@ -268,21 +270,20 @@ export class BrainService {
     if (!ably) return;
 
     const channel = ably.channels.get(this.CHANNEL_NAME);
-    // We publish 'brain-activity' event. Status site will need to listen for this.
-    channel.publish('brain-activity', activity).catch((err: Error) => {
+    channel.publish('brain-activity', telemetryOf(activity)).catch((err: Error) => {
       logger.warn('[BrainService] Telemetry push failed:', err.message);
     });
   }
 
   /**
-   * Broadcast a user/AI message to the audit stream
+   * Broadcast that a user/AI message was written, to the audit stream: its id, sender, role, stage and instant —
+   * never its text (owner decision OD-1 and its follow-up, work-k5fk.9: the monitor shows no transcript).
    */
   public broadcastMessage(message: {
     id?: string;
     sessionId?: string;
     senderId?: string | null;
     role?: string;
-    content?: string;
     stage?: number;
     timestamp?: string | Date;
   }) {
@@ -298,7 +299,6 @@ export class BrainService {
       sessionId: message.sessionId,
       senderId: message.senderId,
       role: message.role,
-      content: message.content,
       stage: message.stage,
       timestamp: message.timestamp,
     };
@@ -306,6 +306,12 @@ export class BrainService {
       logger.warn('[BrainService] Message push failed:', err.message);
     });
   }
+}
+
+/** The content-free fields of an activity: what the audit stream carries (broadcastUpdate). */
+export function telemetryOf(activity: BrainActivity): Partial<BrainActivity> {
+  const { input: _input, output: _output, metadata: _metadata, ...telemetry } = activity;
+  return telemetry;
 }
 
 export const brainService = BrainService.getInstance();

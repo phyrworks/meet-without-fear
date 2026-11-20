@@ -143,7 +143,6 @@ export async function saveAiTurnMessage(params: {
     sessionId,
     senderId: null,
     role: 'AI',
-    content: aiMessage.content,
     stage: effectiveStage,
     timestamp: aiMessage.createdAt,
   });

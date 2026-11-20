@@ -67,7 +67,9 @@ describe production.
   writer; the dashboard opens them in the app with the field key, which never enters the database, and the
   telemetry (timings, tokens, cost, status, call type) stays in plain columns. No memory at all: `ops_access` has no grant or policy on `ai_memory` (the owner's
   follow-up, work-k5fk.9), and the context endpoint (`/brain/sessions/:id/context`) cuts the notable facts,
-  session summary, global facts and "things to remember" out of the bundle it returns. `mwf_definer` —
+  session summary, global facts and "things to remember" out of the bundle it returns. The live audit stream
+  (Ably, `ENABLE_AUDIT_STREAM`) is outside the database and carries telemetry only: `brainService.broadcastUpdate`
+  drops input, output and metadata, and `broadcastMessage` drops the message text. `mwf_definer` —
   `definer_all`.
 - The database's ACL: PUBLIC has no CONNECT / TEMPORARY; the active capabilities have CONNECT.
 - Tests: `retire-mwf-job.target.test.ts` ("row-level security (9c)") and `job-path.target.test.ts`
