@@ -309,7 +309,7 @@ export class BrainService {
 }
 
 /** The content-free fields of an activity: what the audit stream carries (broadcastUpdate). */
-export function telemetryOf(activity: BrainActivity): Partial<BrainActivity> {
+export function telemetryOf(activity: BrainActivity): Omit<BrainActivity, 'input' | 'output' | 'metadata'> {
   const { input: _input, output: _output, metadata: _metadata, ...telemetry } = activity;
   return telemetry;
 }

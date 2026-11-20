@@ -6,11 +6,11 @@ interface PriorThemesSectionProps {
 }
 
 /**
- * PriorThemesSection displays themes from previous sessions.
- * Shows last session date and session count.
+ * PriorThemesSection displays how many themes previous sessions carried, the last session date and the session
+ * count. The themes are never sent to the monitor (owner decision, work-k5fk.9: "close all").
  */
 export function PriorThemesSection({ priorThemes }: PriorThemesSectionProps) {
-  const hasThemes = priorThemes?.themes && priorThemes.themes.length > 0;
+  const hasThemes = !!priorThemes && priorThemes.themeCount > 0;
   const hasPriorSessions = priorThemes?.sessionCount && priorThemes.sessionCount > 0;
 
   return (
@@ -38,9 +38,7 @@ export function PriorThemesSection({ priorThemes }: PriorThemesSectionProps) {
 
             {hasThemes && (
               <div className="themes-list">
-                {priorThemes!.themes.map((theme, idx) => (
-                  <span key={idx} className="theme-chip prior">{theme}</span>
-                ))}
+                <span className="theme-chip prior">{priorThemes!.themeCount} themes</span>
               </div>
             )}
 

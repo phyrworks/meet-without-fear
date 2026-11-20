@@ -1,6 +1,7 @@
 /**
- * Context types for the Neural Monitor dashboard.
- * These mirror the backend ContextBundle types for displaying assembled AI context.
+ * Context types for the Neural Monitor dashboard: the backend's MonitorContext (routes/brain.ts), the structure of
+ * an assembled context bundle — counts, roles, instants, stages, intent, the emotional numbers — and never a word
+ * a user or the AI wrote, nor any memory (owner decision, work-k5fk.9: "close all").
  */
 
 // ============================================================================
@@ -9,8 +10,9 @@
 
 export interface ContextMessage {
   role: 'user' | 'assistant';
-  content: string;
   timestamp: string;
+  /** The turn's length; its text is never sent. */
+  chars: number;
 }
 
 // ============================================================================
@@ -25,19 +27,7 @@ export interface EmotionalThread {
     turn: number;
     from: number;
     to: number;
-    triggerSummary?: string;
   }>;
-}
-
-// ============================================================================
-// Session Summary Types
-// ============================================================================
-
-export interface SessionSummaryContext {
-  keyThemes: string[];
-  emotionalJourney: string;
-  currentFocus: string;
-  userStatedGoals: string[];
 }
 
 // ============================================================================
@@ -45,7 +35,8 @@ export interface SessionSummaryContext {
 // ============================================================================
 
 export interface PriorThemes {
-  themes: string[];
+  /** How many themes the prior sessions carried; the themes themselves are never sent. */
+  themeCount: number;
   lastSessionDate: string | null;
   sessionCount: number;
 }
@@ -56,38 +47,10 @@ export interface PriorThemes {
 
 export interface InnerThoughtsContext {
   relevantReflections: Array<{
-    content: string;
     similarity: number;
     isFromLinkedSession: boolean;
   }>;
   hasLinkedSession: boolean;
-}
-
-// ============================================================================
-// User Memories Types
-// ============================================================================
-
-export interface UserMemoriesContext {
-  global: Array<{ content: string; category: string }>;
-  session: Array<{ content: string; category: string }>;
-}
-
-// ============================================================================
-// Notable Facts Types
-// ============================================================================
-
-export interface CategorizedFact {
-  category: string;
-  fact: string;
-}
-
-// ============================================================================
-// Global Facts Types
-// ============================================================================
-
-export interface GlobalFact {
-  category: string;
-  fact: string;
 }
 
 // ============================================================================
@@ -125,6 +88,7 @@ export interface ContextBundle {
     recentTurns: ContextMessage[];
     turnCount: number;
     sessionDurationMinutes: number;
+    timeSinceLastUserTurnMs?: number | null;
   };
 
   // Emotional state
@@ -133,22 +97,8 @@ export interface ContextBundle {
   // Prior session context
   priorThemes?: PriorThemes;
 
-  // Memory fields (globalFacts, sessionSummary, userMemories, notableFacts): the backend's context endpoint no
-  // longer sends them to the monitor (owner decision, work-k5fk.9); kept optional so the bundle type matches.
-  // Global facts across all sessions
-  globalFacts?: GlobalFact[];
-
-  // Session summary
-  sessionSummary?: SessionSummaryContext;
-
   // Inner Thoughts reflections
   innerThoughtsContext?: InnerThoughtsContext;
-
-  // User memories
-  userMemories?: UserMemoriesContext;
-
-  // Notable facts from this session
-  notableFacts?: CategorizedFact[];
 
   // Stage-specific data
   stageContext: {
@@ -156,6 +106,9 @@ export interface ContextBundle {
     /** The prompt owner's reached milestones: key → reachedAt ISO. */
     milestones: Record<string, string>;
   };
+
+  /** Whether the session has a confirmed topic frame (its text is never sent). */
+  hasTopicFrame: boolean;
 
   // User info
   userName: string;

@@ -60,7 +60,7 @@ Build profiles are defined in `mobile/eas.json`. Most profiles set `EXPO_PUBLIC_
 | Docs site | `docs-site/` | `npm run docs:deploy` (runs Vercel deploy in docs-site workspace) |
 | Status dashboard | `tools/status-dashboard/` | `npm run deploy:status` (runs `cd tools/status-dashboard && vercel --prod`) |
 
-The internal Neural Monitor dashboard is a standalone Vercel project served at `monitor.meetwithoutfear.com`. It is protected by Clerk in the browser and by backend API allowlists on `/api/brain/*`; production should set `DASHBOARD_ALLOWED_USER_IDS` and `DASHBOARD_ALLOWED_EMAILS`, and should not set `DASHBOARD_API_SECRET`. It shows telemetry, not content (owner decisions, work-k5fk.9): no transcript, no participant memory, and a call's input and output only as the backend opens them; its live Ably feed (`ENABLE_AUDIT_STREAM`) carries ids, statuses, tokens, cost and timing only. See `docs/backend/security/rls-policies.md`.
+The internal Neural Monitor dashboard is a standalone Vercel project served at `monitor.meetwithoutfear.com`. It is protected by Clerk in the browser and by backend API allowlists on `/api/brain/*`; production should set `DASHBOARD_ALLOWED_USER_IDS` and `DASHBOARD_ALLOWED_EMAILS`, and should not set `DASHBOARD_API_SECRET`. It shows telemetry and structure, never text a user or the AI wrote (owner decisions, work-k5fk.9: "close all"): no transcript, no participant memory, no reflection titles, no prompt or response text (the prompt inspector shows sizes, roles, cache flags and tags); its live Ably feed (`ENABLE_AUDIT_STREAM`) carries ids, statuses, tokens, cost and timing only. See `docs/backend/security/rls-policies.md`.
 
 ### Web App: Vercel (Expo Web)
 

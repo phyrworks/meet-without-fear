@@ -9,7 +9,7 @@ import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../u
 import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
-import { fieldEncryptionEnabled } from '../utils/field-encryption';
+import { telemetryOf } from '../services/brain-service';
 import { foldEmail } from '@meet-without-fear/shared';
 
 /**
@@ -180,8 +180,13 @@ const activityKey = (a: { sessionId: string | null; reflectionId?: string | null
   a.sessionId ?? a.reflectionId ?? null;
 
 /** An activity as the dashboard reads it (cost as a number). */
+/**
+ * An activity as the monitor sees it: its telemetry (ids, kind, model, status, tokens, cost, timing) and its
+ * metadata (call options, cache counts, the turn trace) — never input or output, which carry what a user or the AI
+ * wrote (owner decision, work-k5fk.9: "close all"). The prompt route below gives their structure.
+ */
 function activityDTO(a: BrainActivity) {
-  return { ...a, cost: num(a.cost) };
+  return { ...telemetryOf(a), metadata: a.metadata, cost: num(a.cost) };
 }
 
 /** "A & B" per session from its participants' display names (falling back to the user's name). */
@@ -275,10 +280,87 @@ async function activityStats(
 // Response Types
 // ============================================================================
 
+/**
+ * What the monitor sees of an assembled context bundle: its structure — counts, roles, instants, stages, the
+ * intent and the emotional numbers — and never a word a user or the AI wrote (owner decision, work-k5fk.9:
+ * "close all"). Built field by field from the bundle (a whitelist), so a new bundle field stays out until it is
+ * added here. Memory (facts, summaries, things to remember) is not represented at all.
+ */
+interface MonitorContext {
+  conversationContext: {
+    recentTurns: Array<{ role: 'user' | 'assistant'; timestamp: string; chars: number }>;
+    turnCount: number;
+    sessionDurationMinutes: number;
+    timeSinceLastUserTurnMs?: number | null;
+  };
+  emotionalThread: {
+    initialIntensity: number | null;
+    currentIntensity: number | null;
+    trend: ContextBundle['emotionalThread']['trend'];
+    notableShifts: Array<{ turn: number; from: number; to: number }>;
+  };
+  priorThemes?: { themeCount: number; lastSessionDate: string | null; sessionCount: number };
+  innerThoughtsContext?: {
+    hasLinkedSession: boolean;
+    relevantReflections: Array<{ similarity: number; isFromLinkedSession: boolean }>;
+  };
+  stageContext: ContextBundle['stageContext'];
+  hasTopicFrame: boolean;
+  userName: string;
+  partnerName?: string;
+  intent: ContextBundle['intent'];
+  assembledAt: string;
+}
+
+/** The monitor's view of a bundle (MonitorContext): structure only, no text. */
+function monitorContext(b: ContextBundle): MonitorContext {
+  const c = b.conversationContext;
+  return {
+    conversationContext: {
+      recentTurns: c.recentTurns.map(t => ({ role: t.role, timestamp: t.timestamp, chars: t.content.length })),
+      turnCount: c.turnCount,
+      sessionDurationMinutes: c.sessionDurationMinutes,
+      timeSinceLastUserTurnMs: c.timeSinceLastUserTurnMs,
+    },
+    emotionalThread: {
+      initialIntensity: b.emotionalThread.initialIntensity,
+      currentIntensity: b.emotionalThread.currentIntensity,
+      trend: b.emotionalThread.trend,
+      notableShifts: b.emotionalThread.notableShifts.map(s => ({ turn: s.turn, from: s.from, to: s.to })),
+    },
+    ...(b.priorThemes
+      ? {
+          priorThemes: {
+            themeCount: b.priorThemes.themes.length,
+            lastSessionDate: b.priorThemes.lastSessionDate,
+            sessionCount: b.priorThemes.sessionCount,
+          },
+        }
+      : {}),
+    ...(b.innerThoughtsContext
+      ? {
+          innerThoughtsContext: {
+            hasLinkedSession: b.innerThoughtsContext.hasLinkedSession,
+            relevantReflections: b.innerThoughtsContext.relevantReflections.map(r => ({
+              similarity: r.similarity,
+              isFromLinkedSession: r.isFromLinkedSession,
+            })),
+          },
+        }
+      : {}),
+    stageContext: b.stageContext,
+    hasTopicFrame: !!b.topicFrame,
+    userName: b.userName,
+    ...(b.partnerName !== undefined ? { partnerName: b.partnerName } : {}),
+    intent: b.intent,
+    assembledAt: b.assembledAt,
+  };
+}
+
 interface ContextUserData {
   userId: string;
   userName: string;
-  context: ContextBundle;
+  context: MonitorContext;
 }
 
 interface ContextResponse {
@@ -826,62 +908,39 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
     const output = activity.output as ActivityBlob;
     const metadata = activity.metadata as ActivityBlob;
 
-    // Parse system prompt blocks
-    const systemPromptBlocks: Array<{ type: string; content: string; tokenCount: number; cached: boolean }> = [];
+    // Structure only (owner decision, work-k5fk.9: "close all" — the monitor never gets a word a user or the AI
+    // wrote): each system-prompt block's kind, size and cache flag, each message's role and size, and which tags the
+    // response carried — never their text. bedrock.ts writes sizes into input today; the shapes below also cover a
+    // call site that would write the prompt itself.
+    const systemPromptBlocks: Array<{ type: string; chars: number; tokenCount: number; cached: boolean }> = [];
+    const block = (type: string, text: string, cached: boolean) =>
+      systemPromptBlocks.push({ type, chars: text.length, tokenCount: Math.ceil(text.length / 4), cached });
     if (input?.systemPrompt) {
       const sysPrompt = input.systemPrompt;
-      if (typeof sysPrompt === 'string') {
-        systemPromptBlocks.push({
-          type: 'static',
-          content: sysPrompt,
-          tokenCount: Math.ceil(sysPrompt.length / 4), // rough estimate
-          cached: true,
-        });
-      } else if (sysPrompt.staticBlock || sysPrompt.dynamicBlock) {
-        if (sysPrompt.staticBlock) {
-          systemPromptBlocks.push({
-            type: 'static',
-            content: sysPrompt.staticBlock,
-            tokenCount: Math.ceil(sysPrompt.staticBlock.length / 4),
-            cached: true,
-          });
-        }
-        if (sysPrompt.dynamicBlock) {
-          systemPromptBlocks.push({
-            type: 'dynamic',
-            content: sysPrompt.dynamicBlock,
-            tokenCount: Math.ceil(sysPrompt.dynamicBlock.length / 4),
-            cached: false,
-          });
-        }
+      if (typeof sysPrompt === 'string') block('static', sysPrompt, true);
+      else {
+        if (typeof sysPrompt.staticBlock === 'string') block('static', sysPrompt.staticBlock, true);
+        if (typeof sysPrompt.dynamicBlock === 'string') block('dynamic', sysPrompt.dynamicBlock, false);
       }
     }
 
-    // Parse messages
     const messages = Array.isArray(input?.messages)
       ? input.messages.map((m: ActivityBlob) => ({
-          role: m.role || 'unknown',
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          role: typeof m.role === 'string' ? m.role : 'unknown',
+          chars: (typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')).length,
           hasCacheControl: !!m.cache_control,
         }))
       : [];
 
-    // Parse response - extract thinking/draft/dispatch tags
-    const responseText = output?.text || output?.streaming ? output?.text || '' : '';
-    let thinking: string | null = null;
-    let draft: string | null = null;
-    let dispatch: string | null = null;
-
-    if (typeof responseText === 'string') {
-      const thinkMatch = responseText.match(/<thinking>([\s\S]*?)<\/thinking>/);
-      if (thinkMatch) thinking = thinkMatch[1].trim();
-
-      const draftMatch = responseText.match(/<draft>([\s\S]*?)<\/draft>/);
-      if (draftMatch) draft = draftMatch[1].trim();
-
-      const dispatchMatch = responseText.match(/<dispatch>([\s\S]*?)<\/dispatch>/);
-      if (dispatchMatch) dispatch = dispatchMatch[1].trim();
-    }
+    const responseText = typeof output?.text === 'string' ? output.text : '';
+    const response = {
+      chars: responseText.length,
+      stopReason: typeof output?.stopReason === 'string' ? output.stopReason : null,
+      streaming: !!output?.streaming,
+      hasThinking: /<thinking>[\s\S]*?<\/thinking>/.test(responseText),
+      hasDraft: /<draft>[\s\S]*?<\/draft>/.test(responseText),
+      hasDispatch: /<dispatch>[\s\S]*?<\/dispatch>/.test(responseText),
+    };
 
     // Token breakdown
     const { cacheRead, cacheWrite } = extractCacheTokens(metadata);
@@ -899,12 +958,7 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
     return successResponse(res, {
       systemPrompt: { blocks: systemPromptBlocks },
       messages,
-      response: {
-        text: responseText,
-        thinking,
-        draft,
-        dispatch,
-      },
+      response,
       tokens: {
         input: activity.tokenCountInput,
         output: activity.tokenCountOutput,
@@ -992,20 +1046,6 @@ router.get('/activity/:sessionId', async (req, res) => {
   }
 });
 
-/**
- * The bundle the dashboard may show: everything but the participant's memory — notable facts, the session summary,
- * global facts and "things to always remember" (owner decision, work-k5fk.9 follow-up: ops obtains no decrypted
- * memory). The bundle is assembled by the app's context builder, so this is where the monitor's copy is cut.
- */
-function withoutMemory(context: ContextBundle): ContextBundle {
-  const cut = { ...context };
-  delete cut.notableFacts;
-  delete cut.sessionSummary;
-  delete cut.globalFacts;
-  delete cut.userMemories;
-  return cut;
-}
-
 // Get assembled context bundle for a session
 // This endpoint assembles the full context bundle for each user in the session,
 // allowing the Neural Monitor dashboard to display exactly what context the AI receives.
@@ -1027,7 +1067,7 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
 
       const contextResults = await Promise.all(
         participants.map(
-          async (member): Promise<{ userId: string; userName: string; context: ContextBundle | null }> => {
+          async (member): Promise<{ userId: string; userName: string; context: MonitorContext | null }> => {
             const userId = member.userId;
             const userName = member.displayName || member.user?.name || 'Unknown';
             const stage = states.get(member)?.current.stage || 1;
@@ -1058,7 +1098,7 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
               // Assemble the context bundle — the app's single context builder, per
               // participant (TODO(TS-16): under RLS it reads as that participant's
               // identity; the dashboard has none, so it needs a definer path).
-              const context = withoutMemory(await assembleContextBundle(sessionId, userId, stage, intent));
+              const context = monitorContext(await assembleContextBundle(sessionId, userId, stage, intent));
 
               return { userId, userName, context };
             } catch (error) {
@@ -1115,6 +1155,7 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
                 stage: 0,
                 milestones: {},
               },
+              hasTopicFrame: false,
               userName: innerWorkSession.user.name || 'Unknown',
               intent: {
                 intent: 'avoid_recall',
@@ -1219,13 +1260,8 @@ router.get('/sessions', async (req, res) => {
       innerWhere.createdAt = { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) };
     if (statusValues) innerWhere.status = { in: statusValues as ReflectionStatus[] };
 
-    // Search filter - partner sessions by a participant's name/email or the session id; reflections also by title
-    // (by title only while content is unencrypted — see below)
-    const titleSearch: 'applied' | 'unavailable-when-encrypted' | undefined = search
-      ? fieldEncryptionEnabled()
-        ? 'unavailable-when-encrypted'
-        : 'applied'
-      : undefined;
+    // Search filter - sessions and reflections by a participant's name/email or the id. Never by a reflection's
+    // title: the monitor reads no text a user or the AI wrote (owner decision, work-k5fk.9: "close all").
     if (search) {
       const isId = /^[0-9a-f-]{36}$/i.test(search);
       partnerWhere.OR = [
@@ -1239,11 +1275,6 @@ router.get('/sessions', async (req, res) => {
         ...(isId ? [{ id: search }] : []),
         { user: { name: { contains: search, mode: 'insensitive' } } },
         { user: { email: { contains: foldEmail(search) } } },
-        // reflection.title is encrypted with a random IV (TS-13): with a key set,
-        // SQL cannot match it, so the arm is skipped explicitly and the response
-        // says so (ruling R45) rather than silently matching nothing. Restoring it
-        // means decrypt-then-filter in the app, which W13 (per-user keys) decides.
-        ...(titleSearch === 'applied' ? [{ title: { contains: search, mode: 'insensitive' as const } }] : []),
       ];
     }
 
@@ -1274,7 +1305,6 @@ router.get('/sessions', async (req, res) => {
     let innerWorkSessions: Array<{
       id: string;
       status: string;
-      title: string | null;
       createdAt: Date;
       updatedAt: Date;
       user: { id: string; name: string | null; email: string | null };
@@ -1287,7 +1317,6 @@ router.get('/sessions', async (req, res) => {
         select: {
           id: true,
           status: true,
-          title: true,
           createdAt: true,
           updatedAt: true,
           user: { select: { id: true, name: true, email: true } },
@@ -1331,7 +1360,7 @@ router.get('/sessions', async (req, res) => {
         stage: 0, // Inner work doesn't have stages
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        title: session.title || 'Untitled Session',
+        title: null, // a reflection's title is user- or AI-written text (work-k5fk.9)
         participants: session.user?.name || 'Unknown',
         relationship: null,
         user: session.user,
@@ -1379,7 +1408,6 @@ router.get('/sessions', async (req, res) => {
     return successResponse(res, {
       sessions: allSessions,
       nextCursor,
-      ...(titleSearch ? { titleSearch } : {}),
     });
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch sessions:', error);
@@ -1434,7 +1462,6 @@ router.get('/sessions/:sessionId', async (req, res) => {
       select: {
         id: true,
         status: true,
-        title: true,
         createdAt: true,
         updatedAt: true,
         user: { select: { id: true, name: true, email: true } },
@@ -1455,7 +1482,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
         stage: 0,
         createdAt: innerSession.createdAt,
         updatedAt: innerSession.updatedAt,
-        title: innerSession.title || 'Untitled Session',
+        title: null, // a reflection's title is user- or AI-written text (work-k5fk.9)
         participants: innerSession.user?.name || 'Unknown',
         relationship: null,
         user: innerSession.user,

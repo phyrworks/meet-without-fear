@@ -6,8 +6,8 @@ interface InnerThoughtsSectionProps {
 }
 
 /**
- * InnerThoughtsSection displays inner thoughts as styled quote blocks.
- * Shows similarity scores and linked session indicators.
+ * InnerThoughtsSection displays the relevant inner thoughts' similarity scores and linked-session indicators. The
+ * reflections' text is never sent to the monitor (owner decision, work-k5fk.9: "close all").
  */
 export function InnerThoughtsSection({ innerThoughtsContext }: InnerThoughtsSectionProps) {
   const hasReflections = innerThoughtsContext?.relevantReflections &&
@@ -29,7 +29,6 @@ export function InnerThoughtsSection({ innerThoughtsContext }: InnerThoughtsSect
           <div className="reflections-list">
             {innerThoughtsContext!.relevantReflections.map((reflection, idx) => (
               <blockquote key={idx} className="reflection-quote">
-                <p className="reflection-content">{reflection.content}</p>
                 <footer className="reflection-meta">
                   <span className="similarity-badge">
                     {Math.round(reflection.similarity * 100)}% match

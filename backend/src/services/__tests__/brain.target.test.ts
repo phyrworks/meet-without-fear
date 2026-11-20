@@ -181,7 +181,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       ),
     ).toBe(true);
 
-    // keyless (no FIELD_ENCRYPTION_KEY): the title search arm applies (TS-13, ruling R45)
+    // work-k5fk.9 ("close all"): a reflection's title is user- or AI-written text — never returned, never searched
     const [{ title }] = await run.sql<{ title: string | null }>(`SELECT title FROM reflection WHERE id = $1`, [
       reflectionId,
     ]);
@@ -189,8 +189,8 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const searched = await request(app).get(
       `/api/v1/brain/sessions?type=INNER_WORK&search=${encodeURIComponent(title!)}`,
     );
-    expect(searched.body.data.titleSearch).toBe('applied');
-    expect(searched.body.data.sessions.map((s: { id: string }) => s.id)).toContain(reflectionId);
+    expect(searched.body.data.sessions.map((s: { id: string }) => s.id)).not.toContain(reflectionId);
+    expect(list.body.data.sessions.find((s: { id: string }) => s.id === reflectionId)).toMatchObject({ title: null });
 
     // work-k5fk.5: user.email is stored canonical (lowercase); the email arm canonicalizes the
     // search term, so the search stays case-insensitive. Only the email arm can match 'ADA@E2E'.
@@ -205,6 +205,11 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const activity = await request(app).get(`/api/v1/brain/activity/${ids.session}`);
     expect(activity.status).toBe(200);
     expect(activity.body.data.activities.every((a: { cost: unknown }) => typeof a.cost === 'number')).toBe(true);
+    // work-k5fk.9 ("close all"): telemetry and structure only — no call's input or output, no transcript, no memory
+    expect(activity.body.data.activities.filter((a: Record<string, unknown>) => 'input' in a || 'output' in a)).toEqual(
+      [],
+    );
+    expect(Object.keys(activity.body.data).sort()).toEqual(['activities', 'summary']);
 
     const costs = await request(app).get('/api/v1/brain/costs?period=7d');
     expect(costs.status).toBe(200);
@@ -264,6 +269,12 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const context = await request(app).get(`/api/v1/brain/sessions/${ids.session}/context`);
     expect(context.status).toBe(200);
     expect(context.body.data).toMatchObject({ sessionId: ids.session, sessionType: 'partner' });
+    // work-k5fk.9 ("close all"): the monitor's context is structure — no turn's text, no memory
+    for (const u of context.body.data.users as Array<{ context: Record<string, unknown> }>) {
+      const turns = (u.context.conversationContext as { recentTurns: Array<Record<string, unknown>> }).recentTurns;
+      expect(turns.filter(t => 'content' in t)).toEqual([]);
+      expect(Object.keys(u.context).filter(k => /facts|summary|memories|topicFrame/i.test(k))).toEqual([]);
+    }
   });
 
   it('dashboard auth: a configured secret is required (header compared timing-safely)', async () => {

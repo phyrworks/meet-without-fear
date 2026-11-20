@@ -65,7 +65,11 @@ describe production.
   Monitor counts turns and shows telemetry, with no transcript panel. `brain_activity.input` and `.output` (a
   call's input, such as a retrieval's search queries, and the model's text) are jsonb envelopes sealed by the AI's
   writer; the dashboard opens them in the app with the field key, which never enters the database, and the
-  telemetry (timings, tokens, cost, status, call type) stays in plain columns. No memory at all: `ops_access` has no grant or policy on `ai_memory` (the owner's
+  telemetry (timings, tokens, cost, status, call type) stays in plain columns. The `/brain/*` responses carry
+  telemetry and structure only, never text a user or the AI wrote ("close all", work-k5fk.9): an activity has no
+  input or output, the prompt inspector gives sizes, roles, cache flags and which tags a response carried, a
+  reflection's title is neither returned nor searched, and the context endpoint returns a whitelisted
+  `MonitorContext` (turn roles, instants and lengths; emotional numbers; stage; intent) built in `routes/brain.ts`. No memory at all: `ops_access` has no grant or policy on `ai_memory` (the owner's
   follow-up, work-k5fk.9), and the context endpoint (`/brain/sessions/:id/context`) cuts the notable facts,
   session summary, global facts and "things to remember" out of the bundle it returns. The live audit stream
   (Ably, `ENABLE_AUDIT_STREAM`) is outside the database and carries telemetry only: `brainService.broadcastUpdate`

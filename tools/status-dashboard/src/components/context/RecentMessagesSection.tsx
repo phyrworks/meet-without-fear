@@ -8,8 +8,8 @@ interface RecentMessagesSectionProps {
 }
 
 /**
- * RecentMessagesSection displays the sliding window of recent messages.
- * Messages are shown as a list with role labels.
+ * RecentMessagesSection displays the sliding window of recent messages: each turn's role and length. The text is
+ * never sent to the monitor (owner decision, work-k5fk.9: "close all").
  */
 export function RecentMessagesSection({
   recentTurns,
@@ -36,7 +36,7 @@ export function RecentMessagesSection({
                 <span className="message-role">
                   {msg.role === 'user' ? 'USER' : 'ASSISTANT'}:
                 </span>
-                <span className="message-content">{msg.content}</span>
+                <span className="message-content text-muted">{msg.chars.toLocaleString()} chars</span>
               </li>
             ))}
           </ul>
