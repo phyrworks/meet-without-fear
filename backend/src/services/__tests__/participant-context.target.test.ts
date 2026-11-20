@@ -120,7 +120,7 @@ describeTarget('participant resolution and the single context entry point (targe
       [ids.bobUser, ids.adaUser, BOB_PRIVATE.draft, ids.session],
     );
     const [refl] = await sql<{ id: string }>(
-      `INSERT INTO reflection (user_id, title, summary, linked_session_id) VALUES ($1, $2, $2, $3) RETURNING id`,
+      `INSERT INTO reflection (user_id, title, summary, linked_session_id, linked_at) VALUES ($1, $2, $2, $3, now()) RETURNING id`,
       [ids.bobUser, BOB_PRIVATE.reflection, ids.session],
     );
     await sql(`INSERT INTO reflection_message (reflection_id, role, content) VALUES ($1, 'USER', $2)`, [

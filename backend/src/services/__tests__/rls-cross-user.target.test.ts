@@ -492,10 +492,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('rls');
       // …nor links his reflection to a session he is not in
       expect(
-        await code('mwf_app', carol, `INSERT INTO reflection (user_id, linked_session_id) VALUES ($1, $2)`, [
+        await code(
+          'mwf_app',
           carol,
-          session,
-        ]),
+          `INSERT INTO reflection (user_id, linked_session_id, linked_at) VALUES ($1, $2, now())`,
+          [carol, session],
+        ),
       ).toBe('rls');
     });
 
@@ -1296,7 +1298,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [gh, hal, gil],
       );
       [{ id: halReflection }] = await run.sql<{ id: string }>(
-        `INSERT INTO reflection (user_id, title, linked_session_id) VALUES ($1, 'PROBE_R2_REFLECTION', $2) RETURNING id::text`,
+        `INSERT INTO reflection (user_id, title, linked_session_id, linked_at) VALUES ($1, 'PROBE_R2_REFLECTION', $2, now()) RETURNING id::text`,
         [hal, gh],
       );
       await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [gh, hal]);
@@ -1331,10 +1333,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         await code('mwf_app', hal, `UPDATE reflection SET linked_session_id = $2 WHERE id = $1`, [halReflection, gh]),
       ).toBe('42501');
       expect(
-        await code('mwf_app', hal, `INSERT INTO reflection (user_id, title, linked_session_id) VALUES ($1, 'x', $2)`, [
+        await code(
+          'mwf_app',
           hal,
-          gh,
-        ]),
+          `INSERT INTO reflection (user_id, title, linked_session_id, linked_at) VALUES ($1, 'x', $2, now())`,
+          [hal, gh],
+        ),
       ).toBe('rls');
     });
 

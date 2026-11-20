@@ -267,7 +267,8 @@ export class BrainService {
   /**
    * Broadcast an activity's telemetry via Ably (the status site's live view): ids, kind, model, status, tokens, cost
    * and timing — never input, output or metadata (the owner's follow-up to OD-1, work-k5fk.9: content leaves the
-   * app only sealed, and Ably is outside it). The dashboard fetches the rest through /brain, which opens it.
+   * app only sealed, and Ably is outside it). Nothing on the ops path reads input or output: /brain returns telemetry
+   * and metadata only, and mwf_ops holds no grant on them.
    */
   private broadcastUpdate(activity: BrainActivity) {
     if (process.env.ENABLE_AUDIT_STREAM !== 'true') return;

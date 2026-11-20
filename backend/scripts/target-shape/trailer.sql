@@ -2093,6 +2093,27 @@ CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.ai_memory
 CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.user_memory
   FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
 
+-- T-reflection-unlink (review r1 F8, work-k5fk.9): the C6 key's ON DELETE SET NULL (linked_session_id) can null only
+-- columns of the key, so a session's deletion would leave linked_at behind and fail reflection_check. This BEFORE
+-- trigger clears linked_at whenever an UPDATE clears the link, the referential action's included.
+CREATE FUNCTION app.t_reflection_unlink() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NEW.linked_session_id IS NULL THEN
+      NEW.linked_at := NULL;
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_reflection_unlink() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_reflection_unlink() IS 'Clears reflection.linked_at when an UPDATE clears linked_session_id (the C6 SET NULL (col) included), so reflection_check holds. Review r1 F8, work-k5fk.9.';
+CREATE TRIGGER t_reflection_unlink BEFORE UPDATE OF linked_session_id ON public.reflection
+  FOR EACH ROW EXECUTE FUNCTION app.t_reflection_unlink();
+COMMENT ON TRIGGER t_reflection_unlink ON public.reflection IS 'linked_at goes with the link (review r1 F8).';
+
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
 -- message with no ids (N-4).

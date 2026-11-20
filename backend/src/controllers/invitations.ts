@@ -27,6 +27,7 @@ import {
   setNickname,
   sharesASession,
 } from '../services/contacts';
+import { toPersonName } from '../utils/person-name';
 
 // ============================================================================
 // Types
@@ -362,7 +363,8 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       });
       // A known person's invite name is the inviter's own nickname for them (written with the session, so a failed
       // create leaves no nickname behind).
-      const nickname = inviteName?.trim().slice(0, 100);
+      // person_name: trimmed, clamped by code points, NULL when blank (review r1 F9)
+      const nickname = toPersonName(inviteName);
       if (personId && nickname) await setNickname(user.id, personId, nickname, tx);
 
       await tx.participant.create({

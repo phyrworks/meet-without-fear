@@ -291,8 +291,8 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   Reminder: { table: 'reminder', fields: { note: text('note', 'user', undefined, true) } },
   FeatureState: { table: 'feature_state', fields: { doc: { column: 'doc', kind: 'jsonb-envelope', key: 'user' } } },
   // Owner decision OD-1 and its follow-up (work-k5fk.9): a call's input (a retrieval's search queries) and output
-  // (the model's text) are content, sealed like any other. The ops dashboard opens them through this extension
-  // (routes/brain.ts), so the key never leaves the app; the telemetry stays in plain columns.
+  // (the model's text) are content, sealed like any other. The ops path never reads them (mwf_ops holds no grant on
+  // either); the telemetry stays in plain columns.
   BrainActivity: {
     table: 'brain_activity',
     fields: {

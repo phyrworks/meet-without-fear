@@ -148,7 +148,7 @@ REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 148 named objects, all lower-case; 157 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 149 named objects, all lower-case; 157 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -384,7 +384,10 @@ COMMENT ON DOMAIN kek_id IS 'The id of the KMS key (the KEK) that wrapped a data
 -- last_name, user_contact.nickname. At most 100 characters and never blank; NULL, not '', is "no name" (the app
 -- trims, and clamps a longer Clerk name to 100: utils/person-name.ts). participant.display_name snapshots
 -- "user".name — two of these joined — so it carries its own bound of 201 instead.
-CREATE DOMAIN person_name AS text CHECK (char_length(VALUE) BETWEEN 1 AND 100 AND btrim(VALUE) <> '');
+-- "Not blank" is Unicode-wide (review r1 F9): no value made only of White_Space characters (pg_c_utf8's [[:space:]],
+-- the set JavaScript's trim() removes), not just ASCII spaces.
+CREATE DOMAIN person_name AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 100 AND VALUE COLLATE pg_c_utf8 !~ '^[[:space:]]*$');
 COMMENT ON DOMAIN person_name IS 'A person''s name or a nickname: 1-100 characters, not blank. NULL, never '''', means none (the app trims and clamps: utils/person-name.ts).';
 
 -- work-k5fk.6: a milestone key (milestone.key, participant_milestone.milestone_key):
@@ -2575,13 +2578,17 @@ CREATE TABLE reflection (
     -- work-k5fk.9 (C6): the linked session is one the owner is a participant of, for every role (the app_access RLS
     -- WITH CHECK says so for mwf_app only); deleting the participant (the session cascade) nulls the link alone
     -- (PG15 SET NULL (col); step 20 pins the column list). An FK out of reflection, never into it.
-    FOREIGN KEY (linked_session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE SET NULL (linked_session_id)
+    FOREIGN KEY (linked_session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE SET NULL (linked_session_id),
+    -- review r1 F8: linked_at is the link's instant, so it is set exactly with linked_session_id; the writers set both,
+    -- and t_reflection_unlink (trailer.sql) clears it when the FK's SET NULL (col) clears the link
+    CHECK ((linked_session_id IS NULL) = (linked_at IS NULL))
 );
 CREATE INDEX ON reflection (user_id, updated_at);
 CREATE INDEX ON reflection (linked_session_id);
 CREATE INDEX ON reflection (user_id, theme);
 COMMENT ON TABLE reflection IS 'A private Inner Work reflection thread, outside any session (user-scoped); optionally linked to a session.';
 COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way. One its owner is a participant of: (linked_session_id, user_id) references participant (session_id, user_id).';
+COMMENT ON CONSTRAINT reflection_check ON reflection IS 'linked_at is set exactly when linked_session_id is: the instant of the link (review r1 F8).';
 COMMENT ON COLUMN reflection.distilled_at IS 'When takeaways were last distilled from the thread.';
 COMMENT ON COLUMN reflection.theme IS 'Free LLM text ("a single word or short phrase", e.g. anxiety), not a taxonomy; v_reflection_theme groups by the exact string.';
 COMMENT ON COLUMN reflection.title IS 'encrypted (user): the reflection''s title, typed (max 200) or AI-generated (3-6 words).';
@@ -2822,8 +2829,9 @@ CREATE TABLE brain_activity (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.8 brain_activity [P28c]
-    CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
-    CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
+    -- input / output are jsonb envelopes, always objects (the t_jsonb_envelope trigger refuses anything else; review r1 F6)
+    CHECK (input IS NULL OR jsonb_typeof(input) = 'object'),
+    CHECK (output IS NULL OR jsonb_typeof(output) = 'object'),
     CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
@@ -2840,7 +2848,7 @@ COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the ro
 COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn.';
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
 COMMENT ON COLUMN brain_activity.input IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: what the call was given — sizes and options, a retrieval''s search queries and detected references; the same key as output (owner decision, work-k5fk.9 follow-up). Timings, tokens, cost, status and call type are plain columns.';
-COMMENT ON COLUMN brain_activity.output IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: the call''s outcome — the model''s text and stop reason, a retrieval''s matches; the participant key when attributed, the session key for a call over both parties, the user key for a reflection''s (owner decision OD-1, work-k5fk.9). The ops dashboard opens it in the app; the key never enters the database.';
+COMMENT ON COLUMN brain_activity.output IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: the call''s outcome — the model''s text and stop reason, a retrieval''s matches; the participant key when attributed, the session key for a call over both parties, the user key for a reflection''s (owner decision OD-1, work-k5fk.9). Nothing on the ops path reads it: mwf_ops holds no grant on it, and the key never enters the database.';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
@@ -5090,6 +5098,27 @@ CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.ai_memory
   FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
 CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.user_memory
   FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
+
+-- T-reflection-unlink (review r1 F8, work-k5fk.9): the C6 key's ON DELETE SET NULL (linked_session_id) can null only
+-- columns of the key, so a session's deletion would leave linked_at behind and fail reflection_check. This BEFORE
+-- trigger clears linked_at whenever an UPDATE clears the link, the referential action's included.
+CREATE FUNCTION app.t_reflection_unlink() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NEW.linked_session_id IS NULL THEN
+      NEW.linked_at := NULL;
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_reflection_unlink() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_reflection_unlink() IS 'Clears reflection.linked_at when an UPDATE clears linked_session_id (the C6 SET NULL (col) included), so reflection_check holds. Review r1 F8, work-k5fk.9.';
+CREATE TRIGGER t_reflection_unlink BEFORE UPDATE OF linked_session_id ON public.reflection
+  FOR EACH ROW EXECUTE FUNCTION app.t_reflection_unlink();
+COMMENT ON TRIGGER t_reflection_unlink ON public.reflection IS 'linked_at goes with the link (review r1 F8).';
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed

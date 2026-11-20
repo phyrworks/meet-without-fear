@@ -26,7 +26,7 @@ step-20 assertions).
 | `proposal_revision.after` | `controllers/stage4.ts` (legacy agreement marks `{ <mark>: true, type, followUpDate }` / `{ <mark>: true, confirmed }`), `stage4-subchat.service.ts` (`{ description, duration, measureOfSuccess }`), `stage4-capture.service.ts` (fields + `capturedFromUserMessage`, `reasonText`), `stage4-store.ts` (`{ agreementId, status }`) | envelope of one of those | typeof CHECK + **envelope trigger** |
 | `brain_activity.metadata` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | typeof CHECK only (telemetry) |
 | `brain_activity.input` | `brain-service.ts` `startActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / a retrieval's `{ searchQueries, referencesDetected, … }` (the owner's follow-up to OD-1, work-k5fk.9) | typeof CHECK + **envelope trigger** |
-| `brain_activity.output` | `brain-service.ts` `completeActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ text, stopReason }` / `{ streaming, stopReason }` / `{ success }` / a retrieval's matches; read by the ops dashboard through the encryption extension (owner decision OD-1, work-k5fk.9) | typeof CHECK + **envelope trigger** |
+| `brain_activity.output` | `brain-service.ts` `completeActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ text, stopReason }` / `{ streaming, stopReason }` / `{ success }` / a retrieval's matches; never read on the ops path — mwf_ops holds no grant on it (owner decision OD-1, work-k5fk.9) | typeof CHECK + **envelope trigger** |
 
 Writers in the test suites follow the same shapes (golden `tombstone` and the target tests seed
 `ai_memory` and `user_preferences` rows directly; the tombstone seed's GLOBAL_FACTS fact was a bare
@@ -34,7 +34,7 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
 
 ## 2. What validates what
 
-- **Every column: `jsonb_typeof` CHECK** (object, or object/array for `brain_activity`). Step 20
+- **Every column: `jsonb_typeof` CHECK** (object; `brain_activity.metadata` also array). Step 20
   asserts one on every jsonb column.
 - **The seven `jsonb-envelope` columns** of `SENSITIVE_FIELD_MAP` (`brain_activity.input` and `.output` since work-k5fk.9): the BEFORE INSERT / UPDATE trigger
   `t_jsonb_envelope` (`app.jsonb_envelope_violation`). A document *with* a `"$enc"` key must be
