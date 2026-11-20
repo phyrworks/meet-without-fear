@@ -6,6 +6,9 @@
  * recording timing, status, and result for every pipeline stage.
  */
 
+import type { ModelType } from '../lib/bedrock';
+import type { MemoryIntent, RetrievalDepth, SurfaceStyle } from '../services/memory-intent';
+
 export type TraceStepType = 'decision' | 'llm_call' | 'retrieval' | 'parsing' | 'dispatch';
 
 export type TraceStepStatus = 'success' | 'error' | 'skipped';
@@ -61,50 +64,122 @@ export function dispatchTagKind(tag: string): DispatchTagKind {
   return (DISPATCH_TAG_KINDS as readonly string[]).includes(head) ? (head as DispatchTagKind) : 'other';
 }
 
-/** An error as telemetry: its code (error.code), else its class (error.name), at most 64 identifier characters. */
+/**
+ * The error codes and classes the monitor may see (review r2 R2-1): JavaScript's built-in errors, the Anthropic SDK's
+ * and AWS Bedrock's error classes, Prisma's request errors, and Node's network codes. A closed set, so no thrown
+ * value can carry text into ops-readable metadata.
+ */
+export const ERROR_CLASSES = new Set<string>([
+  // JavaScript
+  'Error',
+  'TypeError',
+  'RangeError',
+  'SyntaxError',
+  'ReferenceError',
+  'AbortError',
+  'TimeoutError',
+  // Anthropic SDK (Bedrock client)
+  'APIError',
+  'APIConnectionError',
+  'APIConnectionTimeoutError',
+  'APIUserAbortError',
+  'BadRequestError',
+  'AuthenticationError',
+  'PermissionDeniedError',
+  'NotFoundError',
+  'ConflictError',
+  'UnprocessableEntityError',
+  'RateLimitError',
+  'InternalServerError',
+  // AWS Bedrock runtime
+  'ThrottlingException',
+  'ValidationException',
+  'AccessDeniedException',
+  'ModelTimeoutException',
+  'ModelErrorException',
+  'ModelNotReadyException',
+  'ServiceUnavailableException',
+  'InternalServerException',
+  'ResourceNotFoundException',
+  'ServiceQuotaExceededException',
+  // Prisma
+  'PrismaClientKnownRequestError',
+  'PrismaClientUnknownRequestError',
+  'PrismaClientValidationError',
+  'PrismaClientInitializationError',
+  'PrismaClientRustPanicError',
+  // Node network codes
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EPIPE',
+  'EAI_AGAIN',
+]);
+
+/** An error as telemetry: its code (error.code), else its class (error.name), if in ERROR_CLASSES; else 'other'. */
 export function errorClass(error: unknown): string {
   const e = error !== null && typeof error === 'object' ? (error as { code?: unknown; name?: unknown }) : null;
-  const raw = (typeof e?.code === 'string' && e.code) || (typeof e?.name === 'string' && e.name) || 'Error';
-  return raw.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64) || 'Error';
+  for (const v of [e?.code, e?.name]) if (typeof v === 'string' && ERROR_CLASSES.has(v)) return v;
+  return 'other';
 }
 
+// Closed sets for every enum slot (review r2 R2-1). A Record over each union makes the compiler require every member.
+const MEMORY_INTENTS: Record<MemoryIntent, true> = {
+  emotional_validation: true,
+  stage_enforcement: true,
+  recall_commitment: true,
+  offer_continuity: true,
+  avoid_recall: true,
+};
+const RETRIEVAL_DEPTHS: Record<RetrievalDepth, true> = { none: true, minimal: true, light: true, full: true };
+const MODELS: Record<ModelType, true> = { haiku: true, sonnet: true };
+const SURFACE_STYLES: Record<SurfaceStyle, true> = { silent: true, tentative: true, explicit: true };
+const alt = (o: object) => `(?:${Object.keys(o).join('|')})`;
 const KIND = `(?:none|other|${DISPATCH_TAG_KINDS.join('|')})`;
-const ID = '[A-Za-z0-9_.:-]{1,128}';
+const MODEL = alt(MODELS);
+const ERROR = `(?:other|${[...ERROR_CLASSES].join('|')})`;
 const RETRIEVAL_PART =
   '\\d+ (?:messages in current conversation|pre-session messages|relevant from other sessions|' +
   'relevant from earlier in session|references detected)';
 
-/** Each step name the orchestrator writes → the only results it may carry. */
-const STEP_RESULTS: Record<string, RegExp> = {
-  'Crisis Detection': /^evaluated$/,
-  'Memory Intent': /^[a-z_]+ \([a-z]+\)$/,
-  'Context Assembly': /^\d+ turns$/,
-  'Context Retrieval': new RegExp(
-    `^(?:skipped|No additional context retrieved|${RETRIEVAL_PART}(?:; ${RETRIEVAL_PART})*)$`,
-  ),
-  'Shared Content': /^(?:loaded|none)$/,
-  Milestones: /^(?:loaded|none)$/,
-  'Surfacing Policy': /^shouldSurface=(?:true|false), style=[a-z_]+$/,
-  'Retrieval Planning': /^(?:\d+ queries|failed, using mock|skipped \(depth != full or no context\))$/,
-  'Prompt Building': /^stage=\d+, \d+ chars$/,
-  'Token Budget': /^\d+ msgs, \d+ truncated$/,
-  'Model Routing': new RegExp(`^model=${ID}, score=-?[0-9.]+$`),
-  'LLM Call': new RegExp(`^(?:${ID}, \\d+ chars|null response|error: [A-Za-z0-9_.-]{1,64})$`),
-  'Response Parsing': new RegExp(`^thinking=(?:true|false), draft=(?:true|false), dispatch=${KIND}$`),
-  Dispatch: new RegExp(`^${KIND}: \\d+ chars$`),
-  'Dispatch (ignored)': new RegExp(`^${KIND}: unknown tag, fell through to the normal response$`),
-};
+/** Each step name the orchestrator writes → the only results it may carry. A Map, so no prototype key matches. */
+const STEP_RESULTS = new Map<string, RegExp>(
+  Object.entries({
+    'Crisis Detection': /^evaluated$/,
+    'Memory Intent': new RegExp(`^${alt(MEMORY_INTENTS)} \\(${alt(RETRIEVAL_DEPTHS)}\\)$`),
+    'Context Assembly': /^\d+ turns$/,
+    'Context Retrieval': new RegExp(
+      `^(?:skipped|No additional context retrieved|${RETRIEVAL_PART}(?:; ${RETRIEVAL_PART})*)$`,
+    ),
+    'Shared Content': /^(?:loaded|none)$/,
+    Milestones: /^(?:loaded|none)$/,
+    'Surfacing Policy': new RegExp(`^shouldSurface=(?:true|false), style=${alt(SURFACE_STYLES)}$`),
+    'Retrieval Planning': /^(?:\d+ queries|failed, using mock|skipped \(depth != full or no context\))$/,
+    'Prompt Building': /^stage=\d+, \d+ chars$/,
+    'Token Budget': /^\d+ msgs, \d+ truncated$/,
+    'Model Routing': new RegExp(`^model=${MODEL}, score=-?[0-9.]+$`),
+    'LLM Call': new RegExp(`^(?:${MODEL}, \\d+ chars|null response|error: ${ERROR})$`),
+    'Response Parsing': new RegExp(`^thinking=(?:true|false), draft=(?:true|false), dispatch=${KIND}$`),
+    Dispatch: new RegExp(`^${KIND}: \\d+ chars$`),
+    'Dispatch (ignored)': new RegExp(`^${KIND}: unknown tag, fell through to the normal response$`),
+  }),
+);
 const STEP_TYPES: readonly TraceStepType[] = ['decision', 'llm_call', 'retrieval', 'parsing', 'dispatch'];
 const STEP_STATUSES: readonly TraceStepStatus[] = ['success', 'error', 'skipped'];
-const MODEL_ID = new RegExp(`^${ID}$`);
+const MODEL_ID = new RegExp(`^${MODEL}$`);
 
 const ms = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 /** The trace as it may be stored: known step names, template results, timings and enums only (see above). */
 export function sanitizeTurnTrace(trace: TurnTrace): { trace: TurnTrace; redacted: number } {
   let redacted = 0;
-  const steps = (Array.isArray(trace.steps) ? trace.steps : []).map((s): TraceStep => {
-    const pattern = typeof s.name === 'string' ? STEP_RESULTS[s.name] : undefined;
+  // review r2 R2-3: a step that is not an object is skipped, and a name is looked up in the Map only
+  const raw: unknown[] = Array.isArray(trace.steps) ? trace.steps : [];
+  const objects = raw.filter((s): s is TraceStep => s !== null && typeof s === 'object' && !Array.isArray(s));
+  redacted += raw.length - objects.length;
+  const steps = objects.map((s): TraceStep => {
+    const pattern = typeof s.name === 'string' ? STEP_RESULTS.get(s.name) : undefined;
     const ok = !!pattern && typeof s.result === 'string' && pattern.test(s.result);
     if (!ok) redacted++;
     return {
@@ -125,4 +200,62 @@ export function sanitizeTurnTrace(trace: TurnTrace): { trace: TurnTrace; redacte
     },
     redacted,
   };
+}
+
+// ============================================================================
+// Activity metadata (review r2 R2-2)
+// ============================================================================
+//
+// brain_activity.metadata is ops-readable, so every writer stores a whitelisted ActivityMetadata: numbers, the names of
+// the tools the app declares, and the context window sizes. sanitizeActivityMetadata is the guard in brain-service's
+// startActivity / completeActivity; anything else is dropped. (The turn trace and the error class have their own.)
+
+/** The tools the app declares to the model (stage-tools.ts); any other name is 'other'. */
+const TOOL_NAMES = new Set(['update_session_state']);
+
+export interface ActivityMetadata {
+  maxTokens?: number;
+  toolCount?: number;
+  queryCount?: number;
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  toolInvocations?: Array<{ name: string }>;
+  contextSizes?: { pinnedTokens: number; summaryTokens: number; recentTokens: number; ragTokens: number };
+}
+
+const NUMBER_KEYS = ['maxTokens', 'toolCount', 'queryCount', 'cacheReadInputTokens', 'cacheWriteInputTokens'] as const;
+const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/** The metadata as it may be stored: the ActivityMetadata keys with values of their type; the rest is dropped. */
+export function sanitizeActivityMetadata(meta: unknown): { metadata: ActivityMetadata; dropped: number } {
+  const out: ActivityMetadata = {};
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    return { metadata: out, dropped: meta === undefined || meta === null ? 0 : 1 };
+  }
+  const m = meta as Record<string, unknown>;
+  let kept = 0;
+  for (const k of NUMBER_KEYS) {
+    if (num(m[k])) {
+      out[k] = m[k] as number;
+      kept++;
+    }
+  }
+  if (Array.isArray(m.toolInvocations)) {
+    out.toolInvocations = m.toolInvocations.map(t => {
+      const name = t !== null && typeof t === 'object' ? (t as { name?: unknown }).name : undefined;
+      return { name: typeof name === 'string' && TOOL_NAMES.has(name) ? name : 'other' };
+    });
+    kept++;
+  }
+  const cs = m.contextSizes as Record<string, unknown> | undefined;
+  if (cs && typeof cs === 'object' && !Array.isArray(cs)) {
+    out.contextSizes = {
+      pinnedTokens: num(cs.pinnedTokens) ? cs.pinnedTokens : 0,
+      summaryTokens: num(cs.summaryTokens) ? cs.summaryTokens : 0,
+      recentTokens: num(cs.recentTokens) ? cs.recentTokens : 0,
+      ragTokens: num(cs.ragTokens) ? cs.ragTokens : 0,
+    };
+    kept++;
+  }
+  return { metadata: out, dropped: Object.keys(m).length - kept };
 }

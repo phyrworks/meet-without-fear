@@ -1,7 +1,13 @@
 import { logger } from '../lib/logger';
 import { getAiPrisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
-import { errorClass, sanitizeTurnTrace, type TurnTrace } from '../types/turn-trace';
+import {
+  errorClass,
+  sanitizeActivityMetadata,
+  sanitizeTurnTrace,
+  type ActivityMetadata,
+  type TurnTrace,
+} from '../types/turn-trace';
 import { withSessionScope } from '../lib/request-context';
 import { getRequestContext } from '../lib/request-context';
 import { getAbly } from '../services/realtime';
@@ -19,7 +25,8 @@ export type ActivityInput = {
   activityType: ActivityType;
   model: string;
   input: unknown;
-  metadata?: unknown;
+  /** ops-readable: numbers, declared tool names and context sizes only (sanitizeActivityMetadata; review r2 R2-2) */
+  metadata?: ActivityMetadata;
   callType?: BrainActivityCallType;
   /** R40: attribute the row to the request's participant (their own content only). */
   attributeToCaller?: boolean;
@@ -114,7 +121,8 @@ export class BrainService {
       model: params.model,
       input: params.input ?? {},
       output: null,
-      metadata: params.metadata ?? {},
+      // review r2 R2-2: the whitelisted metadata only (types/turn-trace.ts sanitizeActivityMetadata)
+      metadata: this.cleanMetadata(params.metadata, params.turnId) as Prisma.JsonValue,
       tokenCountInput: 0,
       tokenCountOutput: 0,
       durationMs: 0,
@@ -166,7 +174,7 @@ export class BrainService {
       tokenCountOutput?: number;
       cost?: number;
       durationMs?: number;
-      metadata?: unknown;
+      metadata?: ActivityMetadata;
     },
   ): Promise<BrainActivity | null> {
     if (!activityId) return null;
@@ -185,7 +193,7 @@ export class BrainService {
             duration_ms = ${result.durationMs ?? 0},
             status = 'COMPLETED'::activity_status,
             completed_at = ${completedAt}
-            ${result.metadata ? Prisma.sql`, metadata = ${json(result.metadata)}::jsonb` : Prisma.empty}
+            ${result.metadata ? Prisma.sql`, metadata = ${json(this.cleanMetadata(result.metadata, activityId))}::jsonb` : Prisma.empty}
         WHERE id = ${activityId}::uuid`,
       );
       const activity = {
@@ -203,6 +211,13 @@ export class BrainService {
       logger.error(`[BrainService] Failed to complete activity ${activityId}:`, error);
       return null;
     }
+  }
+
+  /** The metadata as it may be stored (review r2 R2-2): ActivityMetadata's keys and types; the rest dropped, logged. */
+  private cleanMetadata(meta: unknown, ref: string | undefined): ActivityMetadata {
+    const { metadata, dropped } = sanitizeActivityMetadata(meta);
+    if (dropped > 0) logger.warn('[BrainService] Activity metadata keys dropped', { ref, dropped });
+    return metadata;
   }
 
   /**
