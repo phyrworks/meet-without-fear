@@ -134,7 +134,8 @@ export class BrainService {
            status)
         VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.turnId},
                 ${params.activityType}::activity_type, ${record.callType}::brain_call_type, ${params.model},
-                ${json(record.input)}::jsonb, ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
+                ${JSON.stringify(encryptColumnValue('brain_activity', 'input', record.input ?? {}))}::jsonb,
+                ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
         RETURNING id, created_at`,
       );
       record.id = rows[0].id;

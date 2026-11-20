@@ -87,9 +87,9 @@ const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
  * CHECK, so a refusal never echoes the row). Step 20 ties the triggers to the
  * columns whose COMMENT says 'jsonb envelope' and requires this many;
  * encryption-at-rest-schema.target.test.ts ties them to the map.
- * 6 since work-k5fk.9 (owner decision OD-1): brain_activity.output.
+ * 6 since work-k5fk.9 (owner decision OD-1): brain_activity.output; 7 (its follow-up): brain_activity.input.
  */
-export const JSONB_ENVELOPES = 6;
+export const JSONB_ENVELOPES = 7;
 const JSONB_ENVELOPES_PLACEHOLDER = '@@JSONB_ENVELOPES@@';
 
 /**

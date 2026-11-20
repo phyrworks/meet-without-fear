@@ -177,7 +177,8 @@ COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'Tr
 REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO app_access;
 
--- The envelope rule for the six jsonb-envelope columns (t_jsonb_envelope, T5; brain_activity.output since work-k5fk.9).
+-- The envelope rule for the seven jsonb-envelope columns (t_jsonb_envelope, T5; brain_activity.input and output since
+-- work-k5fk.9).
 -- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
 -- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
 -- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
@@ -210,7 +211,7 @@ CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
   $$;
 COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
 -- app_access, worker_access (mwf_app's and mwf_worker's: proposal_revision.before / after, and the app's enveloped
--- columns), ai_access (mwf_ai's: brain_activity.output, brain-service completeActivity; owner decision OD-1,
+-- columns), ai_access (mwf_ai's: brain_activity.input / output, brain-service start/completeActivity; owner decision OD-1,
 -- work-k5fk.9): the t_jsonb_envelope trigger calls it with the writer's rights.
 REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
@@ -2368,9 +2369,9 @@ COMMENT ON TRIGGER t_jsonb_envelope ON public.reflection IS 'summary_doc is a we
 CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF doc ON public.feature_state
   FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('doc');
 COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
-CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF output ON public.brain_activity
-  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('output');
-COMMENT ON TRIGGER t_jsonb_envelope ON public.brain_activity IS 'output is a well-formed envelope (or keyless plaintext); owner decision OD-1, work-k5fk.9.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF input, output ON public.brain_activity
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('input', 'output');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.brain_activity IS 'input and output are well-formed envelopes (or keyless plaintext); owner decision OD-1 and its follow-up, work-k5fk.9.';
 
 -- ---------------------------------------------------------------------------
 -- work-k5fk.2: who is in a session, without relationship. Four trigger

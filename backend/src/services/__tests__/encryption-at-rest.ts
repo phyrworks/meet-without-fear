@@ -123,7 +123,8 @@ export const COVERAGE: Record<string, string[]> = {
     'reconciler_result.suggested_share_focus',
     'reconciler_result.suggested_share_content',
     'reconciler_result.suggested_share_reason',
-    // owner decision OD-1 (work-k5fk.9)
+    // owner decision OD-1 and its follow-up (work-k5fk.9)
+    'brain_activity.input',
     'brain_activity.output',
   ],
   repair: [

@@ -24,7 +24,8 @@ step-20 assertions).
 | `reflection.summary_doc` | `conversation-summarizer.ts` (inner-thoughts summary; mwf_app, Prisma update) | envelope of `{ text, messageCount, oldestMessageAt, newestMessageAt, tokenCount, generatedAt, keyThemes[], emotionalJourney, unresolvedTopics[] }` | typeof CHECK + **envelope trigger** |
 | `proposal_revision.before` | `stage4-capture.service.ts` (mwf_app, Prisma create); `stage4-store.ts` conversion (mwf_worker, raw) | envelope of the proposal fields before the change, or `{ status }` at conversion; often NULL | typeof CHECK + **envelope trigger** |
 | `proposal_revision.after` | `controllers/stage4.ts` (legacy agreement marks `{ <mark>: true, type, followUpDate }` / `{ <mark>: true, confirmed }`), `stage4-subchat.service.ts` (`{ description, duration, measureOfSuccess }`), `stage4-capture.service.ts` (fields + `capturedFromUserMessage`, `reasonText`), `stage4-store.ts` (`{ agreementId, status }`) | envelope of one of those | typeof CHECK + **envelope trigger** |
-| `brain_activity.input`, `.metadata` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: input `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / retrieval queries; metadata `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | typeof CHECK only (telemetry) |
+| `brain_activity.metadata` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | typeof CHECK only (telemetry) |
+| `brain_activity.input` | `brain-service.ts` `startActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / a retrieval's `{ searchQueries, referencesDetected, … }` (the owner's follow-up to OD-1, work-k5fk.9) | typeof CHECK + **envelope trigger** |
 | `brain_activity.output` | `brain-service.ts` `completeActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ text, stopReason }` / `{ streaming, stopReason }` / `{ success }` / a retrieval's matches; read by the ops dashboard through the encryption extension (owner decision OD-1, work-k5fk.9) | typeof CHECK + **envelope trigger** |
 
 Writers in the test suites follow the same shapes (golden `tombstone` and the target tests seed
@@ -35,7 +36,7 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
 
 - **Every column: `jsonb_typeof` CHECK** (object, or object/array for `brain_activity`). Step 20
   asserts one on every jsonb column.
-- **The six `jsonb-envelope` columns** of `SENSITIVE_FIELD_MAP` (`brain_activity.output` since work-k5fk.9): the BEFORE INSERT / UPDATE trigger
+- **The seven `jsonb-envelope` columns** of `SENSITIVE_FIELD_MAP` (`brain_activity.input` and `.output` since work-k5fk.9): the BEFORE INSERT / UPDATE trigger
   `t_jsonb_envelope` (`app.jsonb_envelope_violation`). A document *with* a `"$enc"` key must be
   exactly `{"$enc": <a v1 ciphertext>}` — `"$enc"` the only key, a string, starting `enc:` and
   castable to the `ciphertext` domain. Plaintext in the envelope, a malformed ciphertext, a
@@ -66,9 +67,9 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
   reports that as P2003 "Foreign key constraint failed". A refused document is `23514`
   (`check_violation`). The other `MW` codes: `MWA0x` session archive (`app.session_archive`),
   `MWF0x` sign-in (`app.create_user`).
-- **`brain_activity.input` / `.metadata`** stay at `jsonb_typeof`: telemetry, written only by the AI and
-  read only by the ops dashboard, whose shape is each call site's and changes with them. `output` is an
-  envelope (above): the model's text is content (owner decision OD-1, work-k5fk.9).
+- **`brain_activity.metadata`** stays at `jsonb_typeof`: telemetry, written only by the AI and read only by the
+  ops dashboard, whose shape is each call site's and changes with them. `input` and `output` are envelopes
+  (above): a retrieval's queries and the model's text are content (owner decision OD-1 and its follow-up).
 
 `ai_memory.doc` is leaf-encrypted: with a key every string leaf is a ciphertext, so its schemas
 check keys, types, numbers and array shape, and never put an `enum` or a format on a string.
@@ -116,7 +117,7 @@ zod), so it has no Prisma model and is not one of the 49 tables. It is reference
 the writer's rights (invoker, as every T5 trigger), so the roles whose writes fire them read the
 schemas; a schema restates the published `shared/` contract, so the read is harmless. `ops_access`
 and `auth_access` get nothing. The validator functions' EXECUTE (`app.jsonb_violation`,
-`app.jsonb_matches`, `app.jsonb_envelope_violation`) goes to the same two capabilities, and `app.jsonb_envelope_violation` to `ai_access` too since `brain_activity.output` became an envelope (work-k5fk.9). **A new
+`app.jsonb_matches`, `app.jsonb_envelope_violation`) goes to the same two capabilities, and `app.jsonb_envelope_violation` to `ai_access` too since `brain_activity.input` / `.output` became envelopes (work-k5fk.9). **A new
 writer capability (`ai_access`, `worker_access`, when design note §7 row 9b gives them writes) needs
 SELECT on `app.json_schema` and EXECUTE on `app.jsonb_violation` and `app.jsonb_envelope_violation`**,
 or its first write of a validated column fails with a permission error from inside the trigger. The

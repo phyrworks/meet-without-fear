@@ -178,10 +178,10 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- A strict variant (every value an envelope) is planned for when
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
 -- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
--- CHECK (app.all_ciphertext(col)) instead. Of the seven jsonb columns in the map,
--- the six jsonb-envelope ones carry the t_jsonb_envelope trigger (brain_activity.output
--- since work-k5fk.9, OD-1) and ai_memory.doc (jsonb-leaves) the structural t_doc_schema
--- trigger (work-k5fk.8, trailer.sql T5); all seven have a COMMENT starting 'encrypted'.
+-- CHECK (app.all_ciphertext(col)) instead. Of the eight jsonb columns in the map,
+-- the seven jsonb-envelope ones carry the t_jsonb_envelope trigger (brain_activity.input
+-- and output since work-k5fk.9, OD-1) and ai_memory.doc (jsonb-leaves) the structural
+-- t_doc_schema trigger (work-k5fk.8, trailer.sql T5); all eight have a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
          OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
@@ -303,7 +303,7 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- jsonb documents (work-k5fk.8). The shapes, their writers and why each column
 -- is validated the way it is: docs/backend/data-model/jsonb-shapes-2026-11.md.
 --  * Every jsonb column keeps its jsonb_typeof CHECK (step 20).
---  * The six jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
+--  * The seven jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
 --    t_jsonb_envelope BEFORE trigger (trailer.sql T5): a sealed document is
 --    exactly {"$enc": <a v1 ciphertext>}. A trigger, not a CHECK: a CHECK
 --    refusal's DETAIL ("Failing row contains …") would echo the row — the
@@ -314,9 +314,10 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 --    of ai_memory.doc (its string leaves are encrypted; its keys, numbers and
 --    arrays are not) — are validated by a BEFORE trigger (trailer.sql T5)
 --    against app.json_schema, by the row's doc_schema_version.
---  * brain_activity.input / metadata stay at jsonb_typeof: telemetry, written
---    by the AI only, read by the ops dashboard; its shape is each call site's.
---    brain_activity.output is a jsonb envelope (owner decision OD-1, work-k5fk.9).
+--  * brain_activity.metadata stays at jsonb_typeof: telemetry, written by the
+--    AI only, read by the ops dashboard; its shape is each call site's.
+--    brain_activity.input and output are jsonb envelopes (owner decision OD-1
+--    and its follow-up, work-k5fk.9).
 -- ----------------------------------------------------------------------------
 
 -- A JSON-schema version: 1, 2, … per schema name.
@@ -2675,6 +2676,7 @@ COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retri
 COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, participant_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn.';
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
+COMMENT ON COLUMN brain_activity.input IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: what the call was given — sizes and options, a retrieval''s search queries and detected references; the same key as output (owner decision, work-k5fk.9 follow-up). Timings, tokens, cost, status and call type are plain columns.';
 COMMENT ON COLUMN brain_activity.output IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: the call''s outcome — the model''s text and stop reason, a retrieval''s matches; the participant key when attributed, the session key for a call over both parties, the user key for a reflection''s (owner decision OD-1, work-k5fk.9). The ops dashboard opens it in the app; the key never enters the database.';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).

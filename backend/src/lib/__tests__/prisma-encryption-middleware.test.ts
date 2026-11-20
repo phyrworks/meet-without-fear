@@ -101,7 +101,8 @@ const SPEC_ENCRYPTED: Record<string, string> = {
   'takeaway.content': 'user',
   'user_memory.content': 'user',
   'feature_state.doc': 'user',
-  // owner decision OD-1 (work-k5fk.9): the model's output text, sealed like other content
+  // owner decision OD-1 and its follow-up (work-k5fk.9): a call's input and the model's output, sealed like content
+  'brain_activity.input': 'per-row',
   'brain_activity.output': 'per-row',
 };
 
@@ -197,6 +198,7 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
       'feature_state.doc': 'jsonb-envelope',
       'proposal_revision.before': 'jsonb-envelope',
       'proposal_revision.after': 'jsonb-envelope',
+      'brain_activity.input': 'jsonb-envelope',
       'brain_activity.output': 'jsonb-envelope',
     });
   });

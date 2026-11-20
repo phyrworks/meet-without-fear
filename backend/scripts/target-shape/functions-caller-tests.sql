@@ -1226,8 +1226,8 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
--- 28. the envelope rule on the six jsonb-envelope documents (the t_jsonb_envelope trigger; feature_state.doc
---     as mwf_app here, step 20 asserts all six are guarded): a sealed document is exactly
+-- 28. the envelope rule on the seven jsonb-envelope documents (the t_jsonb_envelope trigger; feature_state.doc
+--     as mwf_app here, step 20 asserts all seven are guarded): a sealed document is exactly
 --     {"$enc": <a v1 ciphertext>}; a keyless plaintext document (no "$enc" key) still passes, as the
 --     ciphertext domain lets plaintext through. A refusal names the column and the reason, never the
 --     value: no DETAIL (a CHECK's "Failing row contains …" would echo the plaintext).

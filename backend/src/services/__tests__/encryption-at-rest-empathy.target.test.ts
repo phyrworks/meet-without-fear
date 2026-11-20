@@ -484,6 +484,34 @@ describeTarget(
       }).toEqual({ messageKeys: 'ok', messageContent: '42501', reflectionTurns: 'ok', reflectionContent: '42501' });
     });
 
+    // The owner's follow-up (work-k5fk.9): no memory, and a call's input text only sealed — in the database mwf_ops
+    // reads ciphertext; the telemetry columns stay plain.
+    it('ops cannot read memory or a call’s input text: ai_memory is refused, brain_activity.input is ciphertext', async () => {
+      const { brainService } = await import('../brain-service');
+      const activity = await asAi(() =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          activityType: 'RETRIEVAL',
+          model: 'system-retrieval',
+          input: { searchQueries: ['PROBE_FOLLOWUP_QUERY'] },
+        }),
+      );
+      expect(activity.id).not.toBe('');
+      await expectSealed(run, 'brain_activity', 'input', `id = $1`, [activity.id]);
+      proven.add('brain_activity.input');
+      const [row] = await run.as<{ input: unknown; activity_type: string; status: string }>(
+        'mwf_ops',
+        null,
+        `SELECT input, activity_type::text, status::text FROM brain_activity WHERE id = $1`,
+        [activity.id],
+      );
+      expect(JSON.stringify(row.input)).not.toContain('PROBE_FOLLOWUP_QUERY');
+      expect({ type: row.activity_type, status: row.status }).toEqual({ type: 'RETRIEVAL', status: 'PENDING' });
+      await expect(run.as('mwf_ops', null, `SELECT doc FROM ai_memory LIMIT 1`)).rejects.toMatchObject({
+        code: '42501',
+      });
+    });
+
     it('covers every session/chat/empathy/reconciler column of the map', () => {
       expect([...proven].sort()).toEqual([...COVERAGE.empathy].sort());
     });
