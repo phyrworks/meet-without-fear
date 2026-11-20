@@ -26,7 +26,6 @@ ai_memory app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK
 ai_memory app_own FOR ALL TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 ai_memory definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 ai_memory diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
-ai_memory ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 app.json_schema [rls true, force true]
 app.json_schema ai_reference FOR SELECT TO ai_access USING (true) CHECK (-)
 app.json_schema app_reference FOR SELECT TO app_access USING (true) CHECK (-)
@@ -562,7 +561,6 @@ table public.agreement: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, T
 table public.agreement_party: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.ai_memory: DELETE (mwf_definer)
 table public.ai_memory: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
-table public.ai_memory: SELECT (ops_access)
 table public.brain_activity: DELETE (mwf_definer)
 table public.brain_activity: DELETE (worker_access)
 table public.brain_activity: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)

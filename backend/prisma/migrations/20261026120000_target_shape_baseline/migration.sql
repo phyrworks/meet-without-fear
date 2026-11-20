@@ -1783,8 +1783,8 @@ GRANT UPDATE (doc) ON ai_memory TO ai_access;
 -- mwf_ai: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (id because a Prisma model read always
 -- selects the primary key — measured: denied without it)
 GRANT SELECT (id, session_id, user_id, kind, doc) ON ai_memory TO ai_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON ai_memory TO ops_access;
+-- mwf_ops: nothing (owner decision, work-k5fk.9 follow-up): the Neural Monitor no longer shows a participant's notable
+-- facts or summary — its memory is theirs, not the operator's.
 
 CREATE TABLE mood_reading (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -5852,7 +5852,8 @@ $$;
 --                 call site writes one value only, the policy says so (work-k5fk.10.29: worker_clear_token,
 --                 worker_purge_blobs, worker_purge).
 --   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions); its grants never include
---                 message.content or reflection_message.content (owner decision OD-1, work-k5fk.9 — §7 row 10).
+--                 message.content or reflection_message.content (owner decision OD-1, work-k5fk.9 — §7 row 10),
+--                 and nothing on ai_memory (the owner's follow-up decision: ops obtains no decrypted memory).
 --   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
 --   auth_access, clinician_access: no table grant, so no policy.
 -- Each table below says which capabilities hold which commands (S I U D) on it.
@@ -5870,13 +5871,12 @@ CREATE POLICY app_select ON agreement_party FOR SELECT TO app_access USING (app.
 COMMENT ON POLICY app_select ON agreement_party IS 'The parties of the agreements of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON agreement_party TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
--- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD, ops_access S
+-- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD (no ops_access: the monitor reads no memory, work-k5fk.9)
 ALTER TABLE ai_memory ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY app_own ON ai_memory TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
 COMMENT ON POLICY app_own ON ai_memory IS 'The caller''s own rows: their summaries and facts, session or global (design note §6; work-k5fk.10.7).';
 CREATE POLICY ai_session ON ai_memory TO ai_access
   USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
-CREATE POLICY ops_read ON ai_memory FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON ai_memory TO mwf_definer USING (true) WITH CHECK (true);
 
 -- brain_activity: ai_access SIU, mwf_definer SD, ops_access S, worker_access SUD

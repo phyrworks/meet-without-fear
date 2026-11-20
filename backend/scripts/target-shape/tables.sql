@@ -1630,8 +1630,8 @@ GRANT UPDATE (doc) ON ai_memory TO ai_access;
 -- mwf_ai: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (id because a Prisma model read always
 -- selects the primary key — measured: denied without it)
 GRANT SELECT (id, session_id, user_id, kind, doc) ON ai_memory TO ai_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON ai_memory TO ops_access;
+-- mwf_ops: nothing (owner decision, work-k5fk.9 follow-up): the Neural Monitor no longer shows a participant's notable
+-- facts or summary — its memory is theirs, not the operator's.
 
 CREATE TABLE mood_reading (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,

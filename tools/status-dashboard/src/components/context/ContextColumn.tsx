@@ -1,12 +1,8 @@
 import { ContextBundle } from '../../types';
 import { RecentMessagesSection } from './RecentMessagesSection';
-import { NotableFactsSection } from './NotableFactsSection';
 import { EmotionalThreadSection } from './EmotionalThreadSection';
-import { SessionSummarySection } from './SessionSummarySection';
-import { UserMemoriesSection } from './UserMemoriesSection';
 import { InnerThoughtsSection } from './InnerThoughtsSection';
 import { PriorThemesSection } from './PriorThemesSection';
-import { GlobalFactsSection } from './GlobalFactsSection';
 
 interface ContextColumnProps {
   userId: string;
@@ -16,7 +12,9 @@ interface ContextColumnProps {
 
 /**
  * ContextColumn displays all context sections for a single user.
- * Used in the side-by-side layout for partner sessions.
+ * Used in the side-by-side layout for partner sessions. No memory sections (notable facts, session summary,
+ * things to remember, global facts): the backend no longer sends a participant's memory to the monitor
+ * (owner decision, work-k5fk.9).
  */
 export function ContextColumn({ userName, context }: ContextColumnProps) {
   return (
@@ -30,19 +28,11 @@ export function ContextColumn({ userName, context }: ContextColumnProps) {
       </div>
 
       <div className="context-sections">
-        <NotableFactsSection facts={context.notableFacts} />
-
         <EmotionalThreadSection emotionalThread={context.emotionalThread} />
-
-        <SessionSummarySection sessionSummary={context.sessionSummary} />
-
-        <UserMemoriesSection userMemories={context.userMemories} />
 
         <InnerThoughtsSection innerThoughtsContext={context.innerThoughtsContext} />
 
         <PriorThemesSection priorThemes={context.priorThemes} />
-
-        <GlobalFactsSection globalFacts={context.globalFacts} />
 
         <RecentMessagesSection
           recentTurns={context.conversationContext.recentTurns}

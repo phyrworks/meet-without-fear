@@ -133,6 +133,8 @@ export interface ContextBundle {
   // Prior session context
   priorThemes?: PriorThemes;
 
+  // Memory fields (globalFacts, sessionSummary, userMemories, notableFacts): the backend's context endpoint no
+  // longer sends them to the monitor (owner decision, work-k5fk.9); kept optional so the bundle type matches.
   // Global facts across all sessions
   globalFacts?: GlobalFact[];
 

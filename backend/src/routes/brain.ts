@@ -971,18 +971,8 @@ router.get('/activity/:sessionId', async (req, res) => {
       })
     ).map(activityDTO);
 
-    // No transcript: mwf_ops holds no grant on message.content or reflection_message.content (owner decision OD-1,
-    // work-k5fk.9), so the dashboard shows telemetry only.
-
-    // Notable facts: every participant's NOTABLE_FACTS document of this session (ai_memory)
-    const facts = await db().aiMemory.findMany({
-      where: { kind: 'NOTABLE_FACTS', sessionId },
-      select: { doc: true },
-    });
-    const notableFacts = facts.flatMap(f => {
-      const list = (f.doc as { facts?: unknown } | null)?.facts;
-      return Array.isArray(list) ? list : [];
-    });
+    // No transcript and no memory: mwf_ops holds no grant on message.content, reflection_message.content (owner
+    // decision OD-1) or ai_memory (the owner's follow-up, work-k5fk.9), so the dashboard shows telemetry only.
 
     // Calculate summary stats
     const totalCost = activities.reduce((sum, a) => sum + a.cost, 0);
@@ -990,7 +980,6 @@ router.get('/activity/:sessionId', async (req, res) => {
 
     return successResponse(res, {
       activities,
-      notableFacts,
       summary: {
         totalCost,
         totalTokens,
@@ -1002,6 +991,20 @@ router.get('/activity/:sessionId', async (req, res) => {
     return errorResponse(res, 'INTERNAL_ERROR', 'Failed to fetch session activity', 500);
   }
 });
+
+/**
+ * The bundle the dashboard may show: everything but the participant's memory — notable facts, the session summary,
+ * global facts and "things to always remember" (owner decision, work-k5fk.9 follow-up: ops obtains no decrypted
+ * memory). The bundle is assembled by the app's context builder, so this is where the monitor's copy is cut.
+ */
+function withoutMemory(context: ContextBundle): ContextBundle {
+  const cut = { ...context };
+  delete cut.notableFacts;
+  delete cut.sessionSummary;
+  delete cut.globalFacts;
+  delete cut.userMemories;
+  return cut;
+}
 
 // Get assembled context bundle for a session
 // This endpoint assembles the full context bundle for each user in the session,
@@ -1055,7 +1058,7 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
               // Assemble the context bundle — the app's single context builder, per
               // participant (TODO(TS-16): under RLS it reads as that participant's
               // identity; the dashboard has none, so it needs a definer path).
-              const context = await assembleContextBundle(sessionId, userId, stage, intent);
+              const context = withoutMemory(await assembleContextBundle(sessionId, userId, stage, intent));
 
               return { userId, userName, context };
             } catch (error) {

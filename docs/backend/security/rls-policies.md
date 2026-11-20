@@ -64,8 +64,10 @@ describe production.
   `message` and `reflection_message` leave out `content` (owner decision OD-1, work-k5fk.9), so the Neural
   Monitor counts turns and shows telemetry, with no transcript panel. `brain_activity.output` (the model's text)
   is a jsonb envelope sealed by the AI's writer; the dashboard opens it in the app with the field key, which never
-  enters the database. Still readable by ops, for the owner: `ai_memory.doc` (leaf-encrypted, opened in the app)
-  and a retrieval row's `brain_activity.input` search queries. `mwf_definer` — `definer_all`.
+  enters the database. No memory at all: `ops_access` has no grant or policy on `ai_memory` (the owner's
+  follow-up, work-k5fk.9), and the context endpoint (`/brain/sessions/:id/context`) cuts the notable facts,
+  session summary, global facts and "things to remember" out of the bundle it returns. Still readable by ops,
+  for the owner: a retrieval row's `brain_activity.input` search queries. `mwf_definer` — `definer_all`.
 - The database's ACL: PUBLIC has no CONNECT / TEMPORARY; the active capabilities have CONNECT.
 - Tests: `retire-mwf-job.target.test.ts` ("row-level security (9c)") and `job-path.target.test.ts`
   pin the scoped reads, the owner reading nothing and the dashboard's reach;
