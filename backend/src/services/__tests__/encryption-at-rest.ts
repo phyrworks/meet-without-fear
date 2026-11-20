@@ -123,14 +123,14 @@ export const COVERAGE: Record<string, string[]> = {
     'reconciler_result.suggested_share_focus',
     'reconciler_result.suggested_share_content',
     'reconciler_result.suggested_share_reason',
-    'reconciler_guidance.area_hint',
-    'reconciler_guidance.prompt_seed',
+    // owner decision OD-1 and its follow-up (work-k5fk.9)
+    'brain_activity.input',
+    'brain_activity.output',
   ],
   repair: [
     'need.label',
     'need.evidence',
     'need_share.shared_text',
-    'need_disposition.note',
     'proposal.description',
     'proposal_choice.note',
     'agreement.description',

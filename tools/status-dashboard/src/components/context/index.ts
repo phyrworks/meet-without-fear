@@ -1,10 +1,2 @@
 export { default as ContextPage } from './ContextPage';
 export { ContextColumn } from './ContextColumn';
-export { RecentMessagesSection } from './RecentMessagesSection';
-export { NotableFactsSection } from './NotableFactsSection';
-export { EmotionalThreadSection } from './EmotionalThreadSection';
-export { SessionSummarySection } from './SessionSummarySection';
-export { UserMemoriesSection } from './UserMemoriesSection';
-export { InnerThoughtsSection } from './InnerThoughtsSection';
-export { PriorThemesSection } from './PriorThemesSection';
-export { GlobalFactsSection } from './GlobalFactsSection';

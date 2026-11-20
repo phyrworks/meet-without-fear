@@ -3,14 +3,12 @@ import { timingSafeEqual } from 'node:crypto';
 import { getOpsPrisma } from '../lib/prisma';
 import type { BrainActivity, Prisma, ReflectionStatus, SessionStatus } from '../generated/prisma/client';
 import { errorResponse, successResponse } from '../utils/response';
-import { assembleContextBundle, type ContextBundle } from '../services/context-assembler';
-import { determineMemoryIntent } from '../services/memory-intent';
+import { determineMemoryIntent, type MemoryIntentResult } from '../services/memory-intent';
 import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../utils/stage-resolver';
 import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
-import { fieldEncryptionEnabled } from '../utils/field-encryption';
-import { foldEmail, formatMessageId } from '@meet-without-fear/shared';
+import { foldEmail } from '@meet-without-fear/shared';
 
 /**
  * A brain_activity jsonb column (input / output / metadata) as the dashboard reads it: arbitrary
@@ -180,7 +178,33 @@ const activityKey = (a: { sessionId: string | null; reflectionId?: string | null
   a.sessionId ?? a.reflectionId ?? null;
 
 /** An activity as the dashboard reads it (cost as a number). */
-function activityDTO(a: BrainActivity) {
+/**
+ * An activity as the monitor sees it: its telemetry (ids, kind, model, status, tokens, cost, timing) and its
+ * metadata (call options, cache counts, the turn trace) — never input or output, which carry what a user or the AI
+ * wrote (owner decision, work-k5fk.9: "close all"); mwf_ops has no grant on them.
+ */
+/** The brain_activity columns mwf_ops may read (tables.sql: everything but input and output). */
+const OPS_ACTIVITY_SELECT = {
+  id: true,
+  sessionId: true,
+  reflectionId: true,
+  participantUserId: true,
+  turnId: true,
+  activityType: true,
+  callType: true,
+  model: true,
+  metadata: true,
+  tokenCountInput: true,
+  tokenCountOutput: true,
+  durationMs: true,
+  cost: true,
+  status: true,
+  createdAt: true,
+  completedAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.BrainActivitySelect;
+
+function activityDTO(a: Omit<BrainActivity, 'input' | 'output'>) {
   return { ...a, cost: num(a.cost) };
 }
 
@@ -275,10 +299,27 @@ async function activityStats(
 // Response Types
 // ============================================================================
 
+/**
+ * What the monitor sees of a participant's context (review r1 F3, work-k5fk.9): structure read on the ops
+ * connection from ops-granted columns only — the stage and the milestones reached, the turn count, the latest mood
+ * intensity, and the memory intent the AI would use (decided by code from those). It is NOT the AI's context bundle:
+ * that is assembled by the app's decrypting client (mwf_app, context-assembler), which an ops route must never use,
+ * and no field comes from a private or encrypted column (no partner nickname, no text).
+ */
+interface MonitorContext {
+  stage: number;
+  /** Milestone key → reachedAt ISO. */
+  milestones: Record<string, string>;
+  turnCount: number;
+  latestIntensity: number | null;
+  intent: MemoryIntentResult;
+  assembledAt: string;
+}
+
 interface ContextUserData {
   userId: string;
   userName: string;
-  context: ContextBundle;
+  context: MonitorContext;
 }
 
 interface ContextResponse {
@@ -814,74 +855,26 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
   try {
     const { activityId } = req.params;
 
+    // Telemetry and metadata only: mwf_ops holds no grant on input or output (work-k5fk.9, least privilege — they
+    // are envelopes of what a user or the AI wrote), so the inspector shows tokens, cost, timing and the context window.
     const activity = await db().brainActivity.findUnique({
       where: { id: activityId },
+      select: {
+        tokenCountInput: true,
+        tokenCountOutput: true,
+        durationMs: true,
+        model: true,
+        callType: true,
+        status: true,
+        metadata: true,
+      },
     });
 
     if (!activity) {
       return errorResponse(res, 'NOT_FOUND', 'Activity not found', 404);
     }
 
-    const input = activity.input as ActivityBlob;
-    const output = activity.output as ActivityBlob;
     const metadata = activity.metadata as ActivityBlob;
-
-    // Parse system prompt blocks
-    const systemPromptBlocks: Array<{ type: string; content: string; tokenCount: number; cached: boolean }> = [];
-    if (input?.systemPrompt) {
-      const sysPrompt = input.systemPrompt;
-      if (typeof sysPrompt === 'string') {
-        systemPromptBlocks.push({
-          type: 'static',
-          content: sysPrompt,
-          tokenCount: Math.ceil(sysPrompt.length / 4), // rough estimate
-          cached: true,
-        });
-      } else if (sysPrompt.staticBlock || sysPrompt.dynamicBlock) {
-        if (sysPrompt.staticBlock) {
-          systemPromptBlocks.push({
-            type: 'static',
-            content: sysPrompt.staticBlock,
-            tokenCount: Math.ceil(sysPrompt.staticBlock.length / 4),
-            cached: true,
-          });
-        }
-        if (sysPrompt.dynamicBlock) {
-          systemPromptBlocks.push({
-            type: 'dynamic',
-            content: sysPrompt.dynamicBlock,
-            tokenCount: Math.ceil(sysPrompt.dynamicBlock.length / 4),
-            cached: false,
-          });
-        }
-      }
-    }
-
-    // Parse messages
-    const messages = Array.isArray(input?.messages)
-      ? input.messages.map((m: ActivityBlob) => ({
-          role: m.role || 'unknown',
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-          hasCacheControl: !!m.cache_control,
-        }))
-      : [];
-
-    // Parse response - extract thinking/draft/dispatch tags
-    const responseText = output?.text || output?.streaming ? output?.text || '' : '';
-    let thinking: string | null = null;
-    let draft: string | null = null;
-    let dispatch: string | null = null;
-
-    if (typeof responseText === 'string') {
-      const thinkMatch = responseText.match(/<thinking>([\s\S]*?)<\/thinking>/);
-      if (thinkMatch) thinking = thinkMatch[1].trim();
-
-      const draftMatch = responseText.match(/<draft>([\s\S]*?)<\/draft>/);
-      if (draftMatch) draft = draftMatch[1].trim();
-
-      const dispatchMatch = responseText.match(/<dispatch>([\s\S]*?)<\/dispatch>/);
-      if (dispatchMatch) dispatch = dispatchMatch[1].trim();
-    }
 
     // Token breakdown
     const { cacheRead, cacheWrite } = extractCacheTokens(metadata);
@@ -897,14 +890,6 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
     const savings = cacheRead * (modelPrices.input - modelPrices.cacheRead);
 
     return successResponse(res, {
-      systemPrompt: { blocks: systemPromptBlocks },
-      messages,
-      response: {
-        text: responseText,
-        thinking,
-        draft,
-        dispatch,
-      },
       tokens: {
         input: activity.tokenCountInput,
         output: activity.tokenCountOutput,
@@ -968,43 +953,12 @@ router.get('/activity/:sessionId', async (req, res) => {
       await db().brainActivity.findMany({
         where: { OR: [{ sessionId }, { reflectionId: sessionId }] },
         orderBy: { createdAt: 'asc' },
+        select: OPS_ACTIVITY_SELECT,
       })
     ).map(activityDTO);
 
-    // Partner session: every participant's own chat turns (their MAIN conversation)
-    let messages: Array<{ id: string; content: string; timestamp: Date; senderId: string | null }> = (
-      await db().message.findMany({
-        where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', sessionId } },
-        orderBy: [{ createdAt: 'asc' }, { conversationId: 'asc' }, { seq: 'asc' }],
-        select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
-      })
-    ).map(m => ({
-      id: formatMessageId(m.conversationId, m.seq),
-      content: m.content,
-      timestamp: m.createdAt,
-      senderId: m.senderUserId ?? null,
-    }));
-
-    // If no messages found, it might be a reflection
-    if (messages.length === 0) {
-      messages = (
-        await db().reflectionMessage.findMany({
-          where: { reflectionId: sessionId, role: 'USER' },
-          orderBy: { createdAt: 'asc' },
-          select: { id: true, content: true, createdAt: true },
-        })
-      ).map(m => ({ id: m.id, content: m.content, timestamp: m.createdAt, senderId: null }));
-    }
-
-    // Notable facts: every participant's NOTABLE_FACTS document of this session (ai_memory)
-    const facts = await db().aiMemory.findMany({
-      where: { kind: 'NOTABLE_FACTS', sessionId },
-      select: { doc: true },
-    });
-    const notableFacts = facts.flatMap(f => {
-      const list = (f.doc as { facts?: unknown } | null)?.facts;
-      return Array.isArray(list) ? list : [];
-    });
+    // No transcript and no memory: mwf_ops holds no grant on message.content, reflection_message.content (owner
+    // decision OD-1) or ai_memory (the owner's follow-up, work-k5fk.9), so the dashboard shows telemetry only.
 
     // Calculate summary stats
     const totalCost = activities.reduce((sum, a) => sum + a.cost, 0);
@@ -1012,8 +966,6 @@ router.get('/activity/:sessionId', async (req, res) => {
 
     return successResponse(res, {
       activities,
-      messages,
-      notableFacts,
       summary: {
         totalCost,
         totalTokens,
@@ -1026,14 +978,14 @@ router.get('/activity/:sessionId', async (req, res) => {
   }
 });
 
-// Get assembled context bundle for a session
-// This endpoint assembles the full context bundle for each user in the session,
-// allowing the Neural Monitor dashboard to display exactly what context the AI receives.
+// A session's per-participant context structure (MonitorContext), on mwf_ops only. This route must never gain an
+// identity or reach the app's decrypting client (review r1 F3, work-k5fk.9).
 router.get('/sessions/:sessionId/context', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const now = new Date().toISOString();
 
-    // First try as partner session: its human participants
+    // A partner session: its human participants
     const participants = await db().participant.findMany({
       where: { sessionId, kind: 'human' },
       orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
@@ -1041,101 +993,64 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
     });
 
     if (participants.length > 0) {
-      // Partner session - assemble context for every participant
-      const now = new Date().toISOString();
       const states = await loadStageStates(participants, db());
-
-      const contextResults = await Promise.all(
-        participants.map(
-          async (member): Promise<{ userId: string; userName: string; context: ContextBundle | null }> => {
-            const userId = member.userId;
-            const userName = member.displayName || member.user?.name || 'Unknown';
-            const stage = states.get(member)?.current.stage || 1;
-
-            try {
-              // Emotional intensity: the participant's latest mood reading
-              const latestReading = await db().moodReading.findFirst({
-                where: { sessionId, userId },
-                orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
-                select: { intensity: true },
-              });
-              const emotionalIntensity = latestReading?.intensity ?? 5; // Default moderate intensity
-
-              // Turn count: the participant's own chat turns
-              const turnCount = await db().message.count({
-                where: { sessionId, senderUserId: userId, role: 'USER', kind: 'CHAT' },
-              });
-
-              // Determine memory intent (required for context assembly)
-              const intent = determineMemoryIntent({
-                stage,
-                emotionalIntensity,
-                userMessage: '', // Empty - we're just assembling current context
-                turnCount,
-                isFirstTurnInSession: turnCount === 0,
-              });
-
-              // Assemble the context bundle — the app's single context builder, per
-              // participant (TODO(TS-16): under RLS it reads as that participant's
-              // identity; the dashboard has none, so it needs a definer path).
-              const context = await assembleContextBundle(sessionId, userId, stage, intent);
-
-              return { userId, userName, context };
-            } catch (error) {
-              logger.error(`[BrainRoutes] Failed to assemble context for user ${userId}:`, error);
-              // Return placeholder for failed user
-              return { userId, userName, context: null };
-            }
-          },
-        ),
+      const users = await Promise.all(
+        participants.map(async (member): Promise<ContextUserData> => {
+          const userId = member.userId;
+          const state = states.get(member);
+          const stage = state?.current.stage || 1;
+          const latestReading = await db().moodReading.findFirst({
+            where: { sessionId, userId },
+            orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
+            select: { intensity: true },
+          });
+          const turnCount = await db().message.count({
+            where: { sessionId, senderUserId: userId, role: 'USER', kind: 'CHAT' },
+          });
+          const intent = determineMemoryIntent({
+            stage,
+            emotionalIntensity: latestReading?.intensity ?? 5, // default: moderate
+            userMessage: '', // no message: the context at rest
+            turnCount,
+            isFirstTurnInSession: turnCount === 0,
+          });
+          return {
+            userId,
+            userName: member.displayName || member.user?.name || 'Unknown',
+            context: {
+              stage,
+              milestones: Object.fromEntries((state?.milestones ?? []).map(m => [m.key, m.reachedAt.toISOString()])),
+              turnCount,
+              latestIntensity: latestReading?.intensity ?? null,
+              intent,
+              assembledAt: now,
+            },
+          };
+        }),
       );
-
-      const response: ContextResponse = {
-        sessionId,
-        sessionType: 'partner',
-        assembledAt: now,
-        users: contextResults.filter((r): r is ContextUserData => r.context !== null),
-      };
-
+      const response: ContextResponse = { sessionId, sessionType: 'partner', assembledAt: now, users };
       return successResponse(res, response);
     }
 
-    // Try as a reflection (inner work)
+    // A reflection (inner work): its owner, with no session structure
     const innerWorkSession = await db().reflection.findUnique({
       where: { id: sessionId },
       select: { userId: true, user: { select: { name: true } } },
     });
-
     if (innerWorkSession) {
-      // Inner work sessions don't use assembleContextBundle (different flow)
-      // Return a simplified response indicating this is an inner thoughts session
       const response: ContextResponse = {
         sessionId,
         sessionType: 'inner_thoughts',
-        assembledAt: new Date().toISOString(),
+        assembledAt: now,
         users: [
           {
             userId: innerWorkSession.userId,
             userName: innerWorkSession.user.name || 'Unknown',
-            // For inner work sessions, create a minimal context bundle
-            // This could be enhanced later if needed
             context: {
-              conversationContext: {
-                recentTurns: [],
-                turnCount: 0,
-                sessionDurationMinutes: 0,
-              },
-              emotionalThread: {
-                initialIntensity: null,
-                currentIntensity: null,
-                trend: 'unknown',
-                notableShifts: [],
-              },
-              stageContext: {
-                stage: 0,
-                milestones: {},
-              },
-              userName: innerWorkSession.user.name || 'Unknown',
+              stage: 0,
+              milestones: {},
+              turnCount: 0,
+              latestIntensity: null,
               intent: {
                 intent: 'avoid_recall',
                 depth: 'none',
@@ -1145,16 +1060,14 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
                 threshold: 0.5,
                 maxCrossSession: 0,
               },
-              assembledAt: new Date().toISOString(),
+              assembledAt: now,
             },
           },
         ],
       };
-
       return successResponse(res, response);
     }
 
-    // Session not found
     return errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch session context:', error);
@@ -1239,13 +1152,8 @@ router.get('/sessions', async (req, res) => {
       innerWhere.createdAt = { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) };
     if (statusValues) innerWhere.status = { in: statusValues as ReflectionStatus[] };
 
-    // Search filter - partner sessions by a participant's name/email or the session id; reflections also by title
-    // (by title only while content is unencrypted — see below)
-    const titleSearch: 'applied' | 'unavailable-when-encrypted' | undefined = search
-      ? fieldEncryptionEnabled()
-        ? 'unavailable-when-encrypted'
-        : 'applied'
-      : undefined;
+    // Search filter - sessions and reflections by a participant's name/email or the id. Never by a reflection's
+    // title: the monitor reads no text a user or the AI wrote (owner decision, work-k5fk.9: "close all").
     if (search) {
       const isId = /^[0-9a-f-]{36}$/i.test(search);
       partnerWhere.OR = [
@@ -1259,11 +1167,6 @@ router.get('/sessions', async (req, res) => {
         ...(isId ? [{ id: search }] : []),
         { user: { name: { contains: search, mode: 'insensitive' } } },
         { user: { email: { contains: foldEmail(search) } } },
-        // reflection.title is encrypted with a random IV (TS-13): with a key set,
-        // SQL cannot match it, so the arm is skipped explicitly and the response
-        // says so (ruling R45) rather than silently matching nothing. Restoring it
-        // means decrypt-then-filter in the app, which W13 (per-user keys) decides.
-        ...(titleSearch === 'applied' ? [{ title: { contains: search, mode: 'insensitive' as const } }] : []),
       ];
     }
 
@@ -1294,7 +1197,6 @@ router.get('/sessions', async (req, res) => {
     let innerWorkSessions: Array<{
       id: string;
       status: string;
-      title: string | null;
       createdAt: Date;
       updatedAt: Date;
       user: { id: string; name: string | null; email: string | null };
@@ -1307,7 +1209,6 @@ router.get('/sessions', async (req, res) => {
         select: {
           id: true,
           status: true,
-          title: true,
           createdAt: true,
           updatedAt: true,
           user: { select: { id: true, name: true, email: true } },
@@ -1351,7 +1252,7 @@ router.get('/sessions', async (req, res) => {
         stage: 0, // Inner work doesn't have stages
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        title: session.title || 'Untitled Session',
+        title: null, // a reflection's title is user- or AI-written text (work-k5fk.9)
         participants: session.user?.name || 'Unknown',
         relationship: null,
         user: session.user,
@@ -1399,7 +1300,6 @@ router.get('/sessions', async (req, res) => {
     return successResponse(res, {
       sessions: allSessions,
       nextCursor,
-      ...(titleSearch ? { titleSearch } : {}),
     });
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch sessions:', error);
@@ -1454,7 +1354,6 @@ router.get('/sessions/:sessionId', async (req, res) => {
       select: {
         id: true,
         status: true,
-        title: true,
         createdAt: true,
         updatedAt: true,
         user: { select: { id: true, name: true, email: true } },
@@ -1475,7 +1374,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
         stage: 0,
         createdAt: innerSession.createdAt,
         updatedAt: innerSession.updatedAt,
-        title: innerSession.title || 'Untitled Session',
+        title: null, // a reflection's title is user- or AI-written text (work-k5fk.9)
         participants: innerSession.user?.name || 'Unknown',
         relationship: null,
         user: innerSession.user,

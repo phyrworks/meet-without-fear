@@ -1,54 +1,62 @@
-import { ContextBundle } from '../../types';
-import { RecentMessagesSection } from './RecentMessagesSection';
-import { NotableFactsSection } from './NotableFactsSection';
-import { EmotionalThreadSection } from './EmotionalThreadSection';
-import { SessionSummarySection } from './SessionSummarySection';
-import { UserMemoriesSection } from './UserMemoriesSection';
-import { InnerThoughtsSection } from './InnerThoughtsSection';
-import { PriorThemesSection } from './PriorThemesSection';
-import { GlobalFactsSection } from './GlobalFactsSection';
+import { MonitorContext } from '../../types';
 
 interface ContextColumnProps {
   userId: string;
   userName: string;
-  context: ContextBundle;
+  context: MonitorContext;
 }
 
 /**
- * ContextColumn displays all context sections for a single user.
- * Used in the side-by-side layout for partner sessions.
+ * ContextColumn shows one participant's context structure: stage, memory intent, turn count, latest mood intensity
+ * and the milestones reached. The monitor never receives the AI's context bundle, its text or its memory (review r1
+ * F3, work-k5fk.9).
  */
 export function ContextColumn({ userName, context }: ContextColumnProps) {
+  const milestones = Object.entries(context.milestones).sort(([, a], [, b]) => a.localeCompare(b));
   return (
     <div className="context-column">
       <div className="context-column-header">
         <h3>{userName}</h3>
-        <span className="stage-badge">Stage {context.stageContext.stage}</span>
+        <span className="stage-badge">Stage {context.stage}</span>
         <span className="intent-badge" title={context.intent.reason}>
           {context.intent.intent.replace('_', ' ')}
         </span>
       </div>
 
       <div className="context-sections">
-        <NotableFactsSection facts={context.notableFacts} />
+        <div className="context-section">
+          <div className="section-header">
+            <h4>Structure</h4>
+            <span className="turn-count">{context.turnCount} turns</span>
+          </div>
+          <div className="section-content">
+            <div>Latest intensity: {context.latestIntensity ?? <span className="text-muted">none</span>}</div>
+            <div>
+              Retrieval: {context.intent.depth} · surface {context.intent.surfaceStyle}
+            </div>
+          </div>
+        </div>
 
-        <EmotionalThreadSection emotionalThread={context.emotionalThread} />
-
-        <SessionSummarySection sessionSummary={context.sessionSummary} />
-
-        <UserMemoriesSection userMemories={context.userMemories} />
-
-        <InnerThoughtsSection innerThoughtsContext={context.innerThoughtsContext} />
-
-        <PriorThemesSection priorThemes={context.priorThemes} />
-
-        <GlobalFactsSection globalFacts={context.globalFacts} />
-
-        <RecentMessagesSection
-          recentTurns={context.conversationContext.recentTurns}
-          turnCount={context.conversationContext.turnCount}
-          sessionDurationMinutes={context.conversationContext.sessionDurationMinutes}
-        />
+        <div className="context-section">
+          <div className="section-header">
+            <h4>Milestones</h4>
+            <span className="turn-count">{milestones.length}</span>
+          </div>
+          <div className="section-content">
+            {milestones.length === 0 ? (
+              <div className="empty-section">None reached</div>
+            ) : (
+              <ul className="message-list">
+                {milestones.map(([key, at]) => (
+                  <li key={key} className="message-item">
+                    <span className="message-role">{key}</span>{' '}
+                    <span className="text-muted">{new Date(at).toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

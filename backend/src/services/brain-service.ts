@@ -1,5 +1,13 @@
 import { logger } from '../lib/logger';
 import { getAiPrisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import {
+  errorClass,
+  sanitizeActivityMetadata,
+  sanitizeTurnTrace,
+  type ActivityMetadata,
+  type TurnTrace,
+} from '../types/turn-trace';
 import { withSessionScope } from '../lib/request-context';
 import { getRequestContext } from '../lib/request-context';
 import { getAbly } from '../services/realtime';
@@ -17,7 +25,8 @@ export type ActivityInput = {
   activityType: ActivityType;
   model: string;
   input: unknown;
-  metadata?: unknown;
+  /** ops-readable: numbers, declared tool names and context sizes only (sanitizeActivityMetadata; review r2 R2-2) */
+  metadata?: ActivityMetadata;
   callType?: BrainActivityCallType;
   /** R40: attribute the row to the request's participant (their own content only). */
   attributeToCaller?: boolean;
@@ -112,8 +121,8 @@ export class BrainService {
       model: params.model,
       input: params.input ?? {},
       output: null,
-      metadata: params.metadata ?? {},
-      structuredOutput: null,
+      // review r2 R2-2: the whitelisted metadata only (types/turn-trace.ts sanitizeActivityMetadata)
+      metadata: this.cleanMetadata(params.metadata, params.turnId) as Prisma.JsonValue,
       tokenCountInput: 0,
       tokenCountOutput: 0,
       durationMs: 0,
@@ -134,7 +143,8 @@ export class BrainService {
            status)
         VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.turnId},
                 ${params.activityType}::activity_type, ${record.callType}::brain_call_type, ${params.model},
-                ${json(record.input)}::jsonb, ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
+                ${JSON.stringify(encryptColumnValue('brain_activity', 'input', record.input ?? {}))}::jsonb,
+                ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
         RETURNING id, created_at`,
       );
       record.id = rows[0].id;
@@ -164,8 +174,7 @@ export class BrainService {
       tokenCountOutput?: number;
       cost?: number;
       durationMs?: number;
-      metadata?: unknown;
-      structuredOutput?: unknown;
+      metadata?: ActivityMetadata;
     },
   ): Promise<BrainActivity | null> {
     if (!activityId) return null;
@@ -177,15 +186,14 @@ export class BrainService {
         sessionId,
         async () =>
           await getAiPrisma().$executeRaw`UPDATE brain_activity
-        SET output = ${json(result.output ?? {})}::jsonb,
+        SET output = ${JSON.stringify(encryptColumnValue('brain_activity', 'output', result.output ?? {}))}::jsonb,
             token_count_input = ${result.tokenCountInput ?? 0},
             token_count_output = ${result.tokenCountOutput ?? 0},
             cost = ${result.cost ?? 0},
             duration_ms = ${result.durationMs ?? 0},
             status = 'COMPLETED'::activity_status,
-            completed_at = ${completedAt},
-            structured_output = ${json(result.structuredOutput)}::jsonb
-            ${result.metadata ? Prisma.sql`, metadata = ${json(result.metadata)}::jsonb` : Prisma.empty}
+            completed_at = ${completedAt}
+            ${result.metadata ? Prisma.sql`, metadata = ${json(this.cleanMetadata(result.metadata, activityId))}::jsonb` : Prisma.empty}
         WHERE id = ${activityId}::uuid`,
       );
       const activity = {
@@ -205,19 +213,30 @@ export class BrainService {
     }
   }
 
+  /** The metadata as it may be stored (review r2 R2-2): ActivityMetadata's keys and types; the rest dropped, logged. */
+  private cleanMetadata(meta: unknown, ref: string | undefined): ActivityMetadata {
+    const { metadata, dropped } = sanitizeActivityMetadata(meta);
+    if (dropped > 0) logger.warn('[BrainService] Activity metadata keys dropped', { ref, dropped });
+    return metadata;
+  }
+
   /**
    * Merge a turn's pipeline trace into the metadata of its latest
    * ORCHESTRATED_RESPONSE activity (ai-orchestrator storeTurnTrace; TS-12: as
    * the job — brain_activity has no mwf_app grant). One statement; a missing
    * activity is a no-op. Never throws.
    */
-  public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: unknown): Promise<void> {
+  public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: TurnTrace): Promise<void> {
     try {
+      // Review r1 F1 (work-k5fk.9): metadata is ops-readable, so only a sanitized trace is stored — known step names,
+      // template results, timings and enums (types/turn-trace.ts sanitizeTurnTrace).
+      const { trace, redacted } = sanitizeTurnTrace(turnTrace);
+      if (redacted > 0) logger.warn('[BrainService] Turn trace steps redacted', { turnId, redacted });
       await this.inScope(
         sessionId,
         async () =>
           await getAiPrisma().$executeRaw`UPDATE brain_activity
-        SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(turnTrace)}::jsonb)
+        SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(trace)}::jsonb)
         WHERE id = (SELECT b.id FROM brain_activity b
                     WHERE b.session_id = ${sessionId}::uuid AND b.turn_id = ${turnId}
                       AND b.call_type = 'ORCHESTRATED_RESPONSE'::brain_call_type
@@ -235,7 +254,8 @@ export class BrainService {
     if (!activityId) return null;
     try {
       const completedAt = new Date();
-      const metadata = { error: typeof error === 'object' ? JSON.stringify(error) : String(error) };
+      // the error's class or code only, never its message: metadata is ops-readable (review r1 F2)
+      const metadata = { error: errorClass(error) };
       const sessionId = this.activitySessions.get(activityId);
       this.activitySessions.delete(activityId);
       await this.inScope(
@@ -260,7 +280,10 @@ export class BrainService {
   }
 
   /**
-   * Helper to broadcast updates via Ably.
+   * Broadcast an activity's telemetry via Ably (the status site's live view): ids, kind, model, status, tokens, cost
+   * and timing — never input, output or metadata (the owner's follow-up to OD-1, work-k5fk.9: content leaves the
+   * app only sealed, and Ably is outside it). Nothing on the ops path reads input or output: /brain returns telemetry
+   * and metadata only, and mwf_ops holds no grant on them.
    */
   private broadcastUpdate(activity: BrainActivity) {
     if (process.env.ENABLE_AUDIT_STREAM !== 'true') return;
@@ -269,21 +292,20 @@ export class BrainService {
     if (!ably) return;
 
     const channel = ably.channels.get(this.CHANNEL_NAME);
-    // We publish 'brain-activity' event. Status site will need to listen for this.
-    channel.publish('brain-activity', activity).catch((err: Error) => {
+    channel.publish('brain-activity', telemetryOf(activity)).catch((err: Error) => {
       logger.warn('[BrainService] Telemetry push failed:', err.message);
     });
   }
 
   /**
-   * Broadcast a user/AI message to the audit stream
+   * Broadcast that a user/AI message was written, to the audit stream: its id, sender, role, stage and instant —
+   * never its text (owner decision OD-1 and its follow-up, work-k5fk.9: the monitor shows no transcript).
    */
   public broadcastMessage(message: {
     id?: string;
     sessionId?: string;
     senderId?: string | null;
     role?: string;
-    content?: string;
     stage?: number;
     timestamp?: string | Date;
   }) {
@@ -299,7 +321,6 @@ export class BrainService {
       sessionId: message.sessionId,
       senderId: message.senderId,
       role: message.role,
-      content: message.content,
       stage: message.stage,
       timestamp: message.timestamp,
     };
@@ -307,6 +328,12 @@ export class BrainService {
       logger.warn('[BrainService] Message push failed:', err.message);
     });
   }
+}
+
+/** The content-free fields of an activity: what the audit stream carries (broadcastUpdate). */
+export function telemetryOf(activity: BrainActivity): Omit<BrainActivity, 'input' | 'output' | 'metadata'> {
+  const { input: _input, output: _output, metadata: _metadata, ...telemetry } = activity;
+  return telemetry;
 }
 
 export const brainService = BrainService.getInstance();

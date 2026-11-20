@@ -141,6 +141,8 @@ export const api = {
     }
     return {
       activities: json.data.activities || [],
+      // The backend no longer sends the transcript (owner decision OD-1, work-k5fk.9: mwf_ops cannot read message
+      // content); turns show their telemetry only.
       messages: json.data.messages || [],
       summary: json.data.summary || { totalCost: 0, totalTokens: 0 },
     };

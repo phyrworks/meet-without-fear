@@ -91,7 +91,6 @@ export interface DispositionRow {
   needId: string;
   status: DispositionStatus;
   isCurrent: boolean;
-  note: string | null;
   updatedAt: Date;
 }
 
@@ -318,7 +317,7 @@ export async function loadStage4Needs(sessionId: string, viewer: Seat): Promise<
 export async function loadDispositions(seat: Seat): Promise<DispositionRow[]> {
   return (await prisma.needDisposition.findMany({
     where: { sessionId: seat.sessionId, userId: seat.userId },
-    select: { userId: true, needId: true, status: true, isCurrent: true, note: true, updatedAt: true },
+    select: { userId: true, needId: true, status: true, isCurrent: true, updatedAt: true },
   })) as DispositionRow[];
 }
 

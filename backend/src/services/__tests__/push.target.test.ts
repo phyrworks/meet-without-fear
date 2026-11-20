@@ -62,7 +62,7 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
 
   it('one notification per device, named by the recipient’s nickname for the actor', async () => {
     await run.sql(
-      `INSERT INTO user_device (user_id, push_token, last_seen_at) VALUES ($1, $2, now()), ($1, $3, now() - interval '1 day')`,
+      `INSERT INTO user_device (user_id, push_token, push_provider, last_seen_at) VALUES ($1, $2, 'expo', now()), ($1, $3, 'expo', now() - interval '1 day')`,
       [ids.bobUser, BOB_PHONE, BOB_TABLET],
     );
     // Bob's own contact entry for Ada (user_contact, work-k5fk.2)

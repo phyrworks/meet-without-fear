@@ -230,9 +230,9 @@ describeTarget(
           subjectUserId: ids.adaUser,
           result,
           guidance: {
-            areaHint: 'PROBE_TS13_AREA',
+            areaHint: 'respect and value',
             guidanceType: 'challenge_assumptions',
-            promptSeed: 'PROBE_TS13_SEED',
+            promptSeed: 'what might be different from your initial understanding',
           },
           suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
         }),
@@ -266,14 +266,11 @@ describeTarget(
         suggestedShareContent: 'PROBE_TS13_SUGGESTION',
         suggestedShareReason: 'PROBE_TS13_SUGGESTION_REASON',
       });
-      for (const column of ['area_hint', 'prompt_seed']) {
-        await expectSealed(run, 'reconciler_guidance', column, `result_id = $1`, [id]);
-        proven.add(`reconciler_guidance.${column}`);
-      }
+      // work-k5fk.9 (Q4): the guidance is no longer encrypted — the area is a guidance_area label, the seed derived.
       expect(await asAi(() => analysis.guidanceFor(id!))).toEqual({
-        areaHint: 'PROBE_TS13_AREA',
+        areaHint: 'respect and value',
         guidanceType: 'challenge_assumptions',
-        promptSeed: 'PROBE_TS13_SEED',
+        promptSeed: 'what might be different from your initial understanding',
       });
     });
 
@@ -444,6 +441,76 @@ describeTarget(
       expect(s?.topicFrame).toBe('PROBE_TS13_TOPIC chores');
       proven.add('invitation.invitee_name');
       proven.add('session.topic_frame');
+    });
+
+    // Owner decision OD-1 and its follow-ups (work-k5fk.9): the model's output is sealed, and the ops dashboard reads
+    // no content at all — no message or reflection line, no call output (column grants: least privilege).
+    it('OD-1: brain_activity.output is sealed; mwf_ops cannot read it, nor a line', async () => {
+      const { brainService } = await import('../brain-service');
+      const activity = await asAi(() =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          activityType: 'LLM_CALL',
+          model: 'claude-sonnet',
+          input: { operation: 'probe' },
+        }),
+      );
+      expect(activity.id).not.toBe('');
+      await asAi(() =>
+        brainService.completeActivity(activity.id, { output: { text: 'PROBE_OD1_OUTPUT', stopReason: 'end' } }),
+      );
+      const [sealed] = await expectSealed(run, 'brain_activity', 'output', `id = $1`, [activity.id]);
+      expect(JSON.stringify(sealed)).not.toContain('PROBE_OD1_OUTPUT');
+      proven.add('brain_activity.output');
+
+      const opsCode = async (sql: string) =>
+        run.as('mwf_ops', null, sql).then(
+          () => 'ok',
+          (e: { code?: string }) => e.code,
+        );
+      expect({
+        messageKeys: await opsCode(`SELECT conversation_id, role FROM message LIMIT 1`),
+        output: await opsCode(`SELECT output FROM brain_activity LIMIT 1`),
+        messageContent: await opsCode(`SELECT content FROM message LIMIT 1`),
+        reflectionTurns: await opsCode(`SELECT count(*) FROM reflection_message`),
+        reflectionContent: await opsCode(`SELECT content FROM reflection_message LIMIT 1`),
+      }).toEqual({
+        messageKeys: 'ok',
+        output: '42501',
+        messageContent: '42501',
+        reflectionTurns: 'ok',
+        reflectionContent: '42501',
+      });
+    });
+
+    // The owner's follow-ups (work-k5fk.9): no memory, and a call's input sealed and not granted to mwf_ops at all;
+    // the telemetry columns stay readable.
+    it('ops cannot read memory or a call’s input text: ai_memory and brain_activity.input are refused', async () => {
+      const { brainService } = await import('../brain-service');
+      const activity = await asAi(() =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          activityType: 'RETRIEVAL',
+          model: 'system-retrieval',
+          input: { searchQueries: ['PROBE_FOLLOWUP_QUERY'] },
+        }),
+      );
+      expect(activity.id).not.toBe('');
+      await expectSealed(run, 'brain_activity', 'input', `id = $1`, [activity.id]);
+      proven.add('brain_activity.input');
+      const [row] = await run.as<{ activity_type: string; status: string }>(
+        'mwf_ops',
+        null,
+        `SELECT activity_type::text, status::text FROM brain_activity WHERE id = $1`,
+        [activity.id],
+      );
+      expect({ type: row.activity_type, status: row.status }).toEqual({ type: 'RETRIEVAL', status: 'PENDING' });
+      await expect(run.as('mwf_ops', null, `SELECT input FROM brain_activity LIMIT 1`)).rejects.toMatchObject({
+        code: '42501',
+      });
+      await expect(run.as('mwf_ops', null, `SELECT doc FROM ai_memory LIMIT 1`)).rejects.toMatchObject({
+        code: '42501',
+      });
     });
 
     it('covers every session/chat/empathy/reconciler column of the map', () => {

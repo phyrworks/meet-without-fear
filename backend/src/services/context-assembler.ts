@@ -33,6 +33,7 @@ import {
 } from './stage-shim';
 import { legacyRole, MESSAGE_SELECT, withMessageId, type StoredMessage } from './message-store';
 import type { CategorizedFact as GlobalFact } from './global-memory';
+import { guidancePhrases } from './reconciler/guidance-phrases';
 
 // ============================================================================
 // Types
@@ -387,7 +388,7 @@ async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
       .findMany({
         where: { sessionId: me.sessionId, authorUserId: me.userId },
         orderBy: { createdAt: 'asc' },
-        select: { areaHint: true, guidanceType: true, promptSeed: true, resultId: true },
+        select: { areaHint: true, guidanceType: true, resultId: true },
       })
       .then(rows => currentGuidance(rows)),
   ]);
@@ -423,12 +424,8 @@ async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
       sharedText: n.shared_text,
       sharedAt: new Date(n.shared_at),
     })),
-    guidance: guidance.map(g => ({
-      areaHint: g.areaHint,
-      guidanceType: g.guidanceType,
-      promptSeed: g.promptSeed,
-      iteration: g.result.iteration,
-    })),
+    // Q4 (work-k5fk.9): the stored area label and type, as their phrases (the seed is derived from the type)
+    guidance: guidance.map(g => ({ ...guidancePhrases(g), iteration: g.result.iteration })),
   };
 }
 

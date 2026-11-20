@@ -33,7 +33,7 @@ const AI_GRANTS = [
   'ai_memory:UPDATE(doc)',
   'brain_activity:INSERT(activity_type,call_type,input,metadata,model,participant_user_id,reflection_id,session_id,status,turn_id)',
   'brain_activity:SELECT(call_type,created_at,id,metadata,session_id,turn_id)',
-  'brain_activity:UPDATE(completed_at,cost,duration_ms,metadata,output,status,structured_output,token_count_input,token_count_output)',
+  'brain_activity:UPDATE(completed_at,cost,duration_ms,metadata,output,status,token_count_input,token_count_output)',
   'context_share_offer:INSERT(attempt_id,iteration,offer_message,offered_at,result_id,session_id,status,subject_user_id,suggested_content,suggested_reason)',
   'context_share_offer:SELECT(attempt_id,delivery_status,id,iteration,result_id,session_id,status,subject_user_id,suggested_content)',
   'context_share_offer:UPDATE(delivered_at,delivery_status)',
@@ -45,9 +45,9 @@ const AI_GRANTS = [
   'message:SELECT(content,conversation_id,created_at,kind,role,sender_user_id,seq,session_id,source_attempt_id)',
   'participant:SELECT(display_name,joined_at,kind,left_at,session_id,user_id)',
   'participant_milestone:SELECT(milestone_key,reached_at,session_id,user_id)',
-  'reconciler_guidance:INSERT(area_hint,author_user_id,guidance_type,prompt_seed,result_id,session_id,subject_user_id)',
-  'reconciler_guidance:SELECT(area_hint,guidance_type,prompt_seed,result_id)',
-  'reconciler_result:INSERT(alignment_score,alignment_summary,attempt_id,circuit_breaker_tripped,correctly_identified,gap_severity,gap_summary,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason)',
+  'reconciler_guidance:INSERT(area_hint,author_user_id,guidance_type,result_id,session_id,subject_user_id)',
+  'reconciler_guidance:SELECT(area_hint,guidance_type,result_id)',
+  'reconciler_result:INSERT(alignment_score,alignment_summary,attempt_id,author_user_id,circuit_breaker_tripped,correctly_identified,gap_severity,gap_summary,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason)',
   'reconciler_result:SELECT(alignment_score,alignment_summary,attempt_id,correctly_identified,created_at,gap_severity,gap_summary,id,iteration,misattributions,missed_feelings,most_important_gap,rationale,recommended_action,session_id,sharing_would_help,subject_user_id,suggested_share_content,suggested_share_focus,suggested_share_reason,superseded_at)',
   'reconciler_result:UPDATE(superseded_at)',
   'session:SELECT(id)',
@@ -69,7 +69,7 @@ const WORKER_GRANTS = [
   'agreement_party:SELECT(agreement_id,session_id,user_id)',
   'brain_activity:DELETE',
   'brain_activity:SELECT(created_at,session_id)',
-  'brain_activity:UPDATE(input,metadata,output,structured_output)',
+  'brain_activity:UPDATE(input,metadata,output)',
   'follow_up:INSERT(agreement_id,opted_in_shared,owner_user_id,proposal_id,response_deadline_at,scheduled_for,scope,session_id,status,summary,type)',
   'follow_up:SELECT(agreement_id,id,owner_user_id,response_deadline_at,scheduled_for,scope,session_id,status,type)',
   'follow_up:UPDATE(completed_at,opened_at,response_deadline_at,status)',
@@ -85,8 +85,8 @@ const WORKER_GRANTS = [
   'session:DELETE',
   'session:SELECT(id,status,updated_at)',
   'session_closure:INSERT(check_in_at,closed_at,closed_by_user_id,kind,reason,session_id,summary)',
-  'user_device:SELECT(last_seen_at,push_token,user_id)',
-  'user_device:UPDATE(push_token)',
+  'user_device:SELECT(last_seen_at,push_provider,push_token,user_id)',
+  'user_device:UPDATE(push_provider,push_token)',
 ];
 
 /** Schema USAGE and function EXECUTE of each, by name. */
@@ -94,6 +94,8 @@ const AI_ROUTINES = [
   'deliver_message:EXECUTE',
   'empathy_mark_delivery:EXECUTE',
   'empathy_set_status:EXECUTE',
+  // owner decision OD-1 (work-k5fk.9): brain_activity.output is a jsonb envelope the AI writes
+  'jsonb_envelope_violation:EXECUTE',
   'jsonb_violation:EXECUTE',
   // work-k5fk.10.7: the AI policies' predicates (the acting user is a member of the scope; an inner-work row is
   // the acting user's reflection)

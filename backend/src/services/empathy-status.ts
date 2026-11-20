@@ -24,6 +24,7 @@ import type {
   SharedContentDeliveryStatus,
 } from '@meet-without-fear/shared';
 import { getSharedContextForGuesser, getSharedContentDeliveryStatus } from './reconciler';
+import { guidancePhrases } from './reconciler/guidance-phrases';
 import {
   currentAttempt,
   directionOf,
@@ -114,17 +115,12 @@ export async function buildEmpathyExchangeStatus(
     const [guidance] = await currentGuidance(
       await prisma.reconcilerGuidance.findMany({
         where: { sessionId, authorUserId: userId },
-        select: { areaHint: true, guidanceType: true, promptSeed: true, resultId: true },
+        select: { areaHint: true, guidanceType: true, resultId: true },
       }),
       myAttempt.id,
     );
-    if (guidance) {
-      refinementHint = {
-        areaHint: guidance.areaHint,
-        guidanceType: guidance.guidanceType,
-        promptSeed: guidance.promptSeed,
-      };
-    }
+    // Q4 (work-k5fk.9): the wire keeps the phrases; the database holds the area label and derives the seed.
+    if (guidance) refinementHint = guidancePhrases(guidance);
   }
 
   const readyForStage3 = myAttempt?.status === 'VALIDATED' && partnerAttempt?.status === 'VALIDATED';

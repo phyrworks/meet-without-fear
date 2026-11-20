@@ -301,7 +301,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       name: nellUser.first_name || nellUser.name || null,
     });
     expect(await (await import('../contacts')).getNicknameForSessionPartner(s.sessionId, ada.id)).toBeNull();
-    // A blank nickname is refused by the route (and by the CHECK).
+    // A blank nickname is refused by the route (and by the person_name domain).
     expect((await http(ada, 'patch', `/contacts/${nell.id}/nickname`, { nickname: '   ' })).status).toBe(400);
     expect(
       await failure(
@@ -310,7 +310,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
           nell.id,
         ]),
       ),
-    ).toEqual({ code: '23514', constraint: 'user_contact_nickname_check' });
+    ).toEqual({ code: '23514', constraint: 'person_name_check' }); // the person_name domain (work-k5fk.9, D1)
     const stranger = person('stranger');
     expect((await http(stranger, 'get', '/sessions')).status).toBe(200);
     expect((await http(ada, 'patch', `/contacts/${stranger.id}/nickname`, { nickname: 'S' })).status).toBe(404);

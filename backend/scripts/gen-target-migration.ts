@@ -16,8 +16,8 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_definer check; schema app;
  *      app.current_user_id();
- *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, email,
- *      milestone_key), the
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, ordinal_no, kek_id, email,
+ *      milestone_key, person_name), the
  *      enums and the 49 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
@@ -61,8 +61,9 @@ const INCLUDE = '-- @@include sql-only.sql';
  * 155 since work-k5fk.4: message.id and conversation_read_state.last_seen_message_id
  * went (-2), conversation_read_state.last_seen_conversation_id came (+1); message's
  * key is (conversation_id, seq) and seq is an integer.
+ * 156 since work-k5fk.9 (C9): reconciler_result.author_user_id came (+1); 157 (C8): reminder.session_id (+1).
  */
-export const UUID7_COLUMNS = 155;
+export const UUID7_COLUMNS = 157;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**
@@ -72,8 +73,10 @@ const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
  * UUID7_COLUMNS, checkTables() counts them and the trailer's step-20 assertion
  * gets the numbers; encryption-at-rest-schema.target.test.ts ties the catalog
  * to the map itself, in both directions.
+ * 43 since work-k5fk.9 (Q9): need_disposition.note went (-1); 41 (Q4): reconciler_guidance.area_hint became
+ * the guidance_area enum and prompt_seed went (-2).
  */
-export const CIPHERTEXT_COLUMNS = 44;
+export const CIPHERTEXT_COLUMNS = 41;
 export const CIPHERTEXT_ARRAYS = 5;
 const CIPHERTEXT_PLACEHOLDER = '@@CIPHERTEXT_COLUMNS@@';
 const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
@@ -84,8 +87,9 @@ const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
  * CHECK, so a refusal never echoes the row). Step 20 ties the triggers to the
  * columns whose COMMENT says 'jsonb envelope' and requires this many;
  * encryption-at-rest-schema.target.test.ts ties them to the map.
+ * 6 since work-k5fk.9 (owner decision OD-1): brain_activity.output; 7 (its follow-up): brain_activity.input.
  */
-export const JSONB_ENVELOPES = 5;
+export const JSONB_ENVELOPES = 7;
 const JSONB_ENVELOPES_PLACEHOLDER = '@@JSONB_ENVELOPES@@';
 
 /**

@@ -47,6 +47,7 @@ import {
   supersedeCurrentResult,
 } from '../services/reconciler';
 import { generateAbstractGuidance, getWitnessingContent } from '../services/reconciler/analysis';
+import { GUIDANCE_AREA_PHRASES, guidancePhrases } from '../services/reconciler/guidance-phrases';
 import { isSessionCreator } from '../utils/session';
 import { updateContext } from '../lib/request-context';
 import { routeModel, scoreAmbiguity } from '../services/model-router';
@@ -1283,13 +1284,15 @@ export async function refineEmpathy(req: Request, res: Response): Promise<void> 
     const [guidance] = await currentGuidance(
       await prisma.reconcilerGuidance.findMany({
         where: { sessionId, authorUserId: me.userId },
-        select: { areaHint: true, promptSeed: true, resultId: true },
+        select: { areaHint: true, guidanceType: true, resultId: true },
       }),
       attempt.id,
     );
     const partnerName = partner?.name ?? 'your partner';
-    const areaHint = guidance?.areaHint ?? 'deeper emotional experiences';
-    const promptSeed = guidance?.promptSeed ?? 'what might be underneath the surface';
+    // Q4 (work-k5fk.9): the stored area label and type, as their phrases (the seed is derived from the type)
+    const phrases = guidance ? guidancePhrases(guidance) : null;
+    const areaHint = phrases?.areaHint ?? GUIDANCE_AREA_PHRASES.deeper_emotions;
+    const promptSeed = phrases?.promptSeed ?? 'what might be underneath the surface';
 
     let sharedContextSection = '';
     if (attempt.status === 'REFINING') {

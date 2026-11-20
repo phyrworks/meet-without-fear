@@ -177,7 +177,8 @@ COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'Tr
 REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO app_access;
 
--- The envelope rule for the five jsonb-envelope columns (t_jsonb_envelope, T5).
+-- The envelope rule for the seven jsonb-envelope columns (t_jsonb_envelope, T5; brain_activity.input and output since
+-- work-k5fk.9).
 -- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
 -- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
 -- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
@@ -210,10 +211,12 @@ CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
   $$;
 COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
 -- app_access, worker_access (mwf_app's and mwf_worker's: proposal_revision.before / after, and the app's enveloped
--- columns): the t_jsonb_envelope trigger calls it with the writer's rights.
+-- columns), ai_access (mwf_ai's: brain_activity.input / output, brain-service start/completeActivity; owner decision OD-1,
+-- work-k5fk.9): the t_jsonb_envelope trigger calls it with the writer's rights.
 REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO worker_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO ai_access;
 
 -- The TS-1 helpers over participant. (work-k5fk.3: app.is_co_participant and
 -- app.my_participant went with participant.id: every session-scoped row carries
@@ -1435,7 +1438,9 @@ CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery
       UPDATE public.empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, v_at)
       WHERE id = empathy_mark_delivery.attempt AND delivery_status = 'PENDING';
     ELSIF empathy_mark_delivery.delivery = 'SEEN' THEN
-      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at)
+      -- work-k5fk.9 (D4): seen implies delivered — a round seen straight from PENDING is delivered at the same instant
+      UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at),
+                                        delivered_at = coalesce(delivered_at, v_at)
       WHERE id = empathy_mark_delivery.attempt AND delivery_status IN ('PENDING', 'DELIVERED');
     ELSE
       RAISE EXCEPTION 'delivery % is not a stamp', empathy_mark_delivery.delivery USING ERRCODE = 'check_violation';
@@ -2088,6 +2093,27 @@ CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.ai_memory
 CREATE TRIGGER t_session_link_moves BEFORE UPDATE ON public.user_memory
   FOR EACH ROW EXECUTE FUNCTION app.t_session_link_moves('session_id');
 
+-- T-reflection-unlink (review r1 F8, work-k5fk.9): the C6 key's ON DELETE SET NULL (linked_session_id) can null only
+-- columns of the key, so a session's deletion would leave linked_at behind and fail reflection_check. This BEFORE
+-- trigger clears linked_at whenever an UPDATE clears the link, the referential action's included.
+CREATE FUNCTION app.t_reflection_unlink() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NEW.linked_session_id IS NULL THEN
+      NEW.linked_at := NULL;
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_reflection_unlink() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_reflection_unlink() IS 'Clears reflection.linked_at when an UPDATE clears linked_session_id (the C6 SET NULL (col) included), so reflection_check holds. Review r1 F8, work-k5fk.9.';
+CREATE TRIGGER t_reflection_unlink BEFORE UPDATE OF linked_session_id ON public.reflection
+  FOR EACH ROW EXECUTE FUNCTION app.t_reflection_unlink();
+COMMENT ON TRIGGER t_reflection_unlink ON public.reflection IS 'linked_at goes with the link (review r1 F8).';
+
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
 -- message with no ids (N-4).
@@ -2366,6 +2392,9 @@ COMMENT ON TRIGGER t_jsonb_envelope ON public.reflection IS 'summary_doc is a we
 CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF doc ON public.feature_state
   FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('doc');
 COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF input, output ON public.brain_activity
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('input', 'output');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.brain_activity IS 'input and output are well-formed envelopes (or keyless plaintext); owner decision OD-1 and its follow-up, work-k5fk.9.';
 
 -- ---------------------------------------------------------------------------
 -- work-k5fk.2: who is in a session, without relationship. Four trigger
@@ -2652,8 +2681,10 @@ LEFT JOIN LATERAL (
   ORDER BY n.ordinal LIMIT 1
 ) nxt ON true;
 GRANT SELECT ON v_current_stage TO app_access;
--- mwf_ops: the Neural Monitor dashboard's stage column (routes/brain.ts, stage-shim.ts).
-GRANT SELECT ON v_current_stage TO ops_access;
+-- mwf_ops: the Neural Monitor dashboard's stage column (routes/brain.ts, stage-shim.ts loadCurrentStages): exactly the
+-- columns it reads (work-k5fk.9, least privilege).
+GRANT SELECT (session_id, user_id, milestone_key, ordinal, stage_label, next_milestone_key, active_stage) ON v_current_stage
+  TO ops_access;
 
 -- Per direction: the current attempt (the live row, else the latest round)
 -- with its current reconciler result, open share offer and review.
@@ -2863,8 +2894,9 @@ $$;
 --                 tokens) read and change rows of every session — the grants narrow them to columns, and where a
 --                 call site writes one value only, the policy says so (work-k5fk.10.29: worker_clear_token,
 --                 worker_purge_blobs, worker_purge).
---   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions; Q10 narrows message.content
---                 at §7 row 10, by column).
+--   ops_access    ops_read: SELECT, every row (the dashboard reads across sessions); its grants never include
+--                 message.content or reflection_message.content (owner decision OD-1, work-k5fk.9 — §7 row 10),
+--                 and nothing on ai_memory (the owner's follow-up decision: ops obtains no decrypted memory).
 --   mwf_definer   definer_all: every row; the definer bodies make their own authorisation checks (T4).
 --   auth_access, clinician_access: no table grant, so no policy.
 -- Each table below says which capabilities hold which commands (S I U D) on it.
@@ -2882,13 +2914,12 @@ CREATE POLICY app_select ON agreement_party FOR SELECT TO app_access USING (app.
 COMMENT ON POLICY app_select ON agreement_party IS 'The parties of the agreements of a session the caller is in (design note §6; work-k5fk.10.7).';
 CREATE POLICY worker_session ON agreement_party TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
--- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD, ops_access S
+-- ai_memory: ai_access SIU, app_access SIU, mwf_definer SD (no ops_access: the monitor reads no memory, work-k5fk.9)
 ALTER TABLE ai_memory ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY app_own ON ai_memory TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
 COMMENT ON POLICY app_own ON ai_memory IS 'The caller''s own rows: their summaries and facts, session or global (design note §6; work-k5fk.10.7).';
 CREATE POLICY ai_session ON ai_memory TO ai_access
   USING (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (session_id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
-CREATE POLICY ops_read ON ai_memory FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON ai_memory TO mwf_definer USING (true) WITH CHECK (true);
 
 -- brain_activity: ai_access SIU, mwf_definer SD, ops_access S, worker_access SUD
@@ -2904,8 +2935,8 @@ CREATE POLICY ai_unattributed ON brain_activity TO ai_access
 COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
-  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL AND structured_output IS NULL);
-COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the four blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
+  WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL);
+COMMENT ON POLICY worker_purge_blobs ON brain_activity IS 'The worker''s only UPDATE is the retention purge: the three blobs NULL (data-retention.ts enforceDataRetention); it can never write one (work-k5fk.10.29 R2).';
 CREATE POLICY worker_delete ON brain_activity FOR DELETE TO worker_access USING (true);
 CREATE POLICY ops_read ON brain_activity FOR SELECT TO ops_access USING (true);
 CREATE POLICY definer_all ON brain_activity TO mwf_definer USING (true) WITH CHECK (true);
@@ -3519,7 +3550,7 @@ CREATE POLICY diag_read ON proposal_revision FOR SELECT TO diag_access USING (tr
 GRANT SELECT (result_id, session_id, author_user_id, subject_user_id, guidance_type, created_at) ON reconciler_guidance TO diag_access;
 CREATE POLICY diag_read ON reconciler_guidance FOR SELECT TO diag_access USING (true);
 -- reconciler_result
-GRANT SELECT (id, attempt_id, session_id, subject_user_id, iteration, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
+GRANT SELECT (id, attempt_id, session_id, author_user_id, subject_user_id, iteration, circuit_breaker_tripped, superseded_at, created_at, updated_at) ON reconciler_result TO diag_access;
 CREATE POLICY diag_read ON reconciler_result FOR SELECT TO diag_access USING (true);
 -- reflection
 GRANT SELECT (id, user_id, status, linked_session_id, linked_at, distilled_at, created_at, updated_at) ON reflection TO diag_access;
@@ -3528,7 +3559,7 @@ CREATE POLICY diag_read ON reflection FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO diag_access;
 CREATE POLICY diag_read ON reflection_message FOR SELECT TO diag_access USING (true);
 -- reminder
-GRANT SELECT (id, user_id, follow_up_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
+GRANT SELECT (id, user_id, follow_up_id, session_id, scope, remind_at, cadence, status, created_at, updated_at) ON reminder TO diag_access;
 CREATE POLICY diag_read ON reminder FOR SELECT TO diag_access USING (true);
 -- session
 GRANT SELECT (id, status, topic_frame_confirmed_at, previous_session_id, resolved_at, archived_at, archived_by_user_id, created_at, updated_at) ON session TO diag_access;
@@ -4032,7 +4063,13 @@ BEGIN
   SELECT string_agg(w.want, '; ') INTO bad
   FROM (VALUES ('message', 'need', '{refining_need_id}'),
                ('message', 'empathy_attempt', '{source_attempt_id}'),
-               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}')) x(rel, ref, cols),
+               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}'),
+               -- work-k5fk.9 (C1, C2, C5, C6, C3)
+               ('conversation', 'proposal', '{anchor_proposal_id}'),
+               ('empathy_attempt', 'empathy_attempt', '{supersedes_attempt_id}'),
+               ('follow_up_note', 'follow_up_checkin', '{carried_into_checkin_id}'),
+               ('reflection', 'participant', '{linked_session_id}'),
+               ('need', 'need', '{superseded_by_need_id}')) x(rel, ref, cols),
        LATERAL (SELECT x.rel || ' -> ' || x.ref || ' ON DELETE SET NULL ' || x.cols AS want) w
   WHERE NOT EXISTS (
     SELECT 1 FROM pg_constraint c

@@ -44,7 +44,8 @@ const BOB_PRIVATE = {
 /** What is private to the SUBJECT of Ada's attempt (Bob), never to its author (P3 D8a). */
 const SUBJECT_ONLY = { gap: 'PROBE_RESULT_GAP_SUMMARY', offer: 'PROBE_OFFER_SUGGESTED' };
 /** S-class rows Ada may see. */
-const SHARED = { needText: 'SHARED_BOB_NEED_TEXT', guidance: 'GUIDANCE_FOR_ADA' };
+// guidance: the phrase of the guidance_area label the row stores (work-k5fk.9, Q4)
+const SHARED = { needText: 'SHARED_BOB_NEED_TEXT', guidance: 'respect and value' };
 const ADA_PRIVATE = {
   reflection: 'PROBE_ADA_REFLECTION_TITLE',
   reflectionMessage: 'PROBE_ADA_REFLECTION_MSG',
@@ -119,7 +120,7 @@ describeTarget('participant resolution and the single context entry point (targe
       [ids.bobUser, ids.adaUser, BOB_PRIVATE.draft, ids.session],
     );
     const [refl] = await sql<{ id: string }>(
-      `INSERT INTO reflection (user_id, title, summary, linked_session_id) VALUES ($1, $2, $2, $3) RETURNING id`,
+      `INSERT INTO reflection (user_id, title, summary, linked_session_id, linked_at) VALUES ($1, $2, $2, $3, now()) RETURNING id`,
       [ids.bobUser, BOB_PRIVATE.reflection, ids.session],
     );
     await sql(`INSERT INTO reflection_message (reflection_id, role, content) VALUES ($1, 'USER', $2)`, [
@@ -156,9 +157,9 @@ describeTarget('participant resolution and the single context entry point (targe
 
     // --- The subject's (Bob's) view of Ada's attempt: result and an open offer ---------------
     const [result] = await sql<{ id: string }>(
-      `INSERT INTO reconciler_result (attempt_id, subject_user_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, session_id)
-       VALUES ($1, $2::uuid, 40, 'summary', $3, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, $4::uuid) RETURNING id`,
-      [ids.adaAttempt, ids.bobUser, SUBJECT_ONLY.gap, ids.session],
+      `INSERT INTO reconciler_result (attempt_id, author_user_id, subject_user_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, session_id)
+       VALUES ($1, $2::uuid, $3::uuid, 40, 'summary', $4, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, $5::uuid) RETURNING id`,
+      [ids.adaAttempt, ids.adaUser, ids.bobUser, SUBJECT_ONLY.gap, ids.session],
     );
     await sql(
       `INSERT INTO context_share_offer (attempt_id, result_id, subject_user_id, status, suggested_content, session_id)
@@ -168,7 +169,7 @@ describeTarget('participant resolution and the single context entry point (targe
     // ...and the abstract guidance its AUTHOR (Ada) may see.
     await sql(
       `INSERT INTO reconciler_guidance (result_id, author_user_id, subject_user_id, area_hint, session_id) VALUES ($1, $2::uuid, $3::uuid, $4, $5::uuid)`,
-      [result.id, ids.adaUser, ids.bobUser, SHARED.guidance, ids.session],
+      [result.id, ids.adaUser, ids.bobUser, 'respect_value', ids.session],
     );
 
     // --- Ada's own reflection (R1: never in Bob's prompt) — NOT linked to the session ----------

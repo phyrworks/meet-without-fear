@@ -1,69 +1,28 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BrainActivity } from '../../types';
 import { ModelBadge } from '../metrics/ModelBadge';
 import { CacheIndicator } from '../metrics/CacheIndicator';
 import { FormattedPrice } from './FormattedPrice';
-import { PromptDiffViewer } from '../prompt/PromptDiffViewer';
 import { formatDuration } from '../../utils/formatters';
-import { api } from '../../services/api';
 
 interface SessionPromptsTabProps {
   activities: BrainActivity[];
   sessionId: string;
 }
 
-interface DiffState {
-  betweenIndex: number;
-  loading: boolean;
-  oldText: string | null;
-  newText: string | null;
-  error: string | null;
-}
-
+/**
+ * The session's LLM calls: type, model, duration, cost, cache, status. No prompt diff: the monitor never receives
+ * prompt text (owner decision, work-k5fk.9: "close all").
+ */
 export function SessionPromptsTab({ activities, sessionId }: SessionPromptsTabProps) {
   const navigate = useNavigate();
-  const [diffState, setDiffState] = useState<DiffState | null>(null);
 
   const llmCalls = useMemo(() => {
     return activities
       .filter(a => a.activityType === 'LLM_CALL')
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [activities]);
-
-  const handleDiff = useCallback(async (index: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    if (diffState && diffState.betweenIndex === index) {
-      setDiffState(null);
-      return;
-    }
-
-    const oldActivity = llmCalls[index];
-    const newActivity = llmCalls[index + 1];
-
-    setDiffState({ betweenIndex: index, loading: true, oldText: null, newText: null, error: null });
-
-    try {
-      const [oldDetail, newDetail] = await Promise.all([
-        api.getPromptDetail(oldActivity.id),
-        api.getPromptDetail(newActivity.id),
-      ]);
-
-      const oldText = oldDetail.systemPrompt.blocks.map(b => b.content).join('\n\n---\n\n');
-      const newText = newDetail.systemPrompt.blocks.map(b => b.content).join('\n\n---\n\n');
-
-      setDiffState({ betweenIndex: index, loading: false, oldText, newText, error: null });
-    } catch (err) {
-      setDiffState({
-        betweenIndex: index,
-        loading: false,
-        oldText: null,
-        newText: null,
-        error: err instanceof Error ? err.message : 'Failed to load prompts',
-      });
-    }
-  }, [llmCalls, diffState]);
 
   if (llmCalls.length === 0) {
     return (
@@ -77,7 +36,6 @@ export function SessionPromptsTab({ activities, sessionId }: SessionPromptsTabPr
   llmCalls.forEach((activity, i) => {
     const cacheRead = activity.metadata?.cacheReadInputTokens || 0;
     const isCached = cacheRead > 0;
-    const showDiffBelow = diffState && diffState.betweenIndex === i;
 
     rows.push(
       <tr
@@ -108,44 +66,8 @@ export function SessionPromptsTab({ activities, sessionId }: SessionPromptsTabPr
             {activity.status === 'PENDING' && '↻'}
           </span>
         </td>
-        <td>
-          {i < llmCalls.length - 1 && (
-            <button
-              className="prompts-diff-btn"
-              onClick={(e) => handleDiff(i, e)}
-            >
-              {showDiffBelow ? 'Hide' : 'Diff'}
-            </button>
-          )}
-        </td>
       </tr>
     );
-
-    if (showDiffBelow) {
-      rows.push(
-        <tr key={`diff-${activity.id}`}>
-          <td colSpan={8} style={{ padding: '0.5rem' }}>
-            {diffState.loading && (
-              <div className="loading" style={{ padding: '1rem', textAlign: 'center', fontSize: '0.8rem' }}>
-                Loading diff...
-              </div>
-            )}
-            {diffState.error && (
-              <div style={{ padding: '0.5rem', color: 'var(--color-error)', fontSize: '0.8rem' }}>
-                {diffState.error}
-              </div>
-            )}
-            {diffState.oldText !== null && diffState.newText !== null && (
-              <PromptDiffViewer
-                oldText={diffState.oldText}
-                newText={diffState.newText}
-                onClose={() => setDiffState(null)}
-              />
-            )}
-          </td>
-        </tr>
-      );
-    }
   });
 
   return (
@@ -160,7 +82,6 @@ export function SessionPromptsTab({ activities, sessionId }: SessionPromptsTabPr
             <th>Cost</th>
             <th>Cache</th>
             <th>Status</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>

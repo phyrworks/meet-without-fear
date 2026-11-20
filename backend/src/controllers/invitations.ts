@@ -27,6 +27,7 @@ import {
   setNickname,
   sharesASession,
 } from '../services/contacts';
+import { toPersonName, trimPersonName } from '../utils/person-name';
 
 // ============================================================================
 // Types
@@ -42,7 +43,8 @@ import {
 const createSessionSchema = z
   .object({
     personId: z.string().optional(),
-    inviteName: z.string().min(1).optional(),
+    // 101: mobile sends first + space + last, each up to 50 (work-k5fk.9, D1); a known person's nickname is clamped to 100
+    inviteName: z.string().min(1).max(101).optional(),
     context: z.string().optional(),
     innerThoughtsId: z.string().optional(),
     linkedAtMessageId: z.string().optional(),
@@ -55,8 +57,9 @@ const declineInvitationSchema = z.object({
 });
 
 const updateNicknameSchema = z.object({
-  // Trimmed: a blank nickname is refused here as the user_contact CHECK would (review round 1, F8).
-  nickname: z.string().trim().min(1).max(100).nullable(),
+  // Trimmed of Unicode White_Space, as the person_name domain counts blank (review r2 R2-4): a blank nickname is
+  // refused here, a 400, never the domain's 500.
+  nickname: z.string().transform(trimPersonName).pipe(z.string().min(1).max(100)).nullable(),
 });
 
 /** A path user id must be a uuid before it reaches a uuid7 column. */
@@ -361,7 +364,8 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       });
       // A known person's invite name is the inviter's own nickname for them (written with the session, so a failed
       // create leaves no nickname behind).
-      const nickname = inviteName?.trim().slice(0, 100);
+      // person_name: trimmed, clamped by code points, NULL when blank (review r1 F9)
+      const nickname = toPersonName(inviteName);
       if (personId && nickname) await setNickname(user.id, personId, nickname, tx);
 
       await tx.participant.create({

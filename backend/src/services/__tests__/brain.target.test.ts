@@ -152,6 +152,104 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     ).toEqual([{ session_id: null, reflection_id: reflectionId, status: 'FAILED' }]);
   });
 
+  // Review r1 F1/F2 (work-k5fk.9): metadata is ops-readable, so the stored trace and error are telemetry only. The
+  // trace here is what the orchestrator wrote before the fix — a crisis classification and a model's free dispatch
+  // text — and the writer's guard keeps neither.
+  it('ops reading a safety turn sees no crisis category, no dispatch text and no error message', async () => {
+    const { brainService } = await import('../brain-service');
+    const ctx = await import('../../lib/request-context');
+    const turnId = `ts12-safety-${process.pid}`;
+    const seated = {
+      turnId,
+      requestId: 'r',
+      startTime: Date.now(),
+      userId: ids.bobUser,
+      sessionId: ids.session,
+      seated: true,
+    };
+    const main = await ctx.runWithContext(seated, () =>
+      brainService.startActivity({
+        sessionId: ids.session,
+        turnId,
+        activityType: 'LLM_CALL',
+        model: 'claude-sonnet',
+        input: {},
+        callType: 'ORCHESTRATED_RESPONSE' as never,
+      }),
+    );
+    expect(main.id).not.toBe('');
+    await ctx.runWithContext(seated, () =>
+      brainService.mergeTurnTrace(ids.session, turnId, {
+        totalDurationMs: 12,
+        modelUsed: 'claude-sonnet',
+        usedMock: false,
+        steps: [
+          {
+            name: 'Crisis Detection',
+            type: 'decision',
+            startMs: 0,
+            durationMs: 0,
+            result: 'severity=emergency, categories=suicide',
+            status: 'success',
+          },
+          {
+            name: 'Response Parsing',
+            type: 'parsing',
+            startMs: 1,
+            durationMs: 1,
+            result: 'thinking=true, draft=false, dispatch=SAFETY_CONCERN: PROBE_SHE_SAID',
+            status: 'success',
+          },
+          {
+            name: 'Dispatch: SAFETY_CONCERN: PROBE_SHE_SAID',
+            type: 'dispatch',
+            startMs: 2,
+            durationMs: 1,
+            result: '40 chars',
+            status: 'success',
+          },
+          {
+            name: 'Response Parsing',
+            type: 'parsing',
+            startMs: 3,
+            durationMs: 1,
+            result: 'thinking=true, draft=false, dispatch=SAFETY_CONCERN',
+            status: 'success',
+          },
+        ],
+      }),
+    );
+    const failed = await ctx.runWithContext(seated, () =>
+      brainService.startActivity({ sessionId: ids.session, activityType: 'LLM_CALL', model: 'm', input: {} }),
+    );
+    await ctx.runWithContext(seated, () =>
+      brainService.failActivity(failed.id, new Error('Unexpected token in JSON: PROBE_PROMPT_FRAGMENT')),
+    );
+
+    const [row] = await run.as<{ metadata: unknown }>(
+      'mwf_ops',
+      null,
+      `SELECT metadata FROM brain_activity WHERE id = $1`,
+      [main.id],
+    );
+    const seen = JSON.stringify(row.metadata);
+    expect(seen).not.toMatch(/suicide|emergency|severity|categories|PROBE_SHE_SAID/);
+    const steps = (row.metadata as { turnTrace: { steps: Array<{ name: string; result: string }> } }).turnTrace.steps;
+    expect(steps.map(s => [s.name, s.result])).toEqual([
+      ['Crisis Detection', '[redacted]'],
+      ['Response Parsing', '[redacted]'],
+      ['Unknown step', '[redacted]'],
+      ['Response Parsing', 'thinking=true, draft=false, dispatch=SAFETY_CONCERN'],
+    ]);
+    const [err] = await run.as<{ metadata: unknown }>(
+      'mwf_ops',
+      null,
+      `SELECT metadata FROM brain_activity WHERE id = $1`,
+      [failed.id],
+    );
+    expect(err.metadata).toEqual({ error: 'Error' });
+  });
+
   it('a telemetry failure never breaks the call: an unsaved record, and complete/fail are no-ops', async () => {
     const { brainService } = await import('../brain-service');
     const bad = await brainService.startActivity({
@@ -181,7 +279,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       ),
     ).toBe(true);
 
-    // keyless (no FIELD_ENCRYPTION_KEY): the title search arm applies (TS-13, ruling R45)
+    // work-k5fk.9 ("close all"): a reflection's title is user- or AI-written text — never returned, never searched
     const [{ title }] = await run.sql<{ title: string | null }>(`SELECT title FROM reflection WHERE id = $1`, [
       reflectionId,
     ]);
@@ -189,8 +287,8 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const searched = await request(app).get(
       `/api/v1/brain/sessions?type=INNER_WORK&search=${encodeURIComponent(title!)}`,
     );
-    expect(searched.body.data.titleSearch).toBe('applied');
-    expect(searched.body.data.sessions.map((s: { id: string }) => s.id)).toContain(reflectionId);
+    expect(searched.body.data.sessions.map((s: { id: string }) => s.id)).not.toContain(reflectionId);
+    expect(list.body.data.sessions.find((s: { id: string }) => s.id === reflectionId)).toMatchObject({ title: null });
 
     // work-k5fk.5: user.email is stored canonical (lowercase); the email arm canonicalizes the
     // search term, so the search stays case-insensitive. Only the email arm can match 'ADA@E2E'.
@@ -205,10 +303,34 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const activity = await request(app).get(`/api/v1/brain/activity/${ids.session}`);
     expect(activity.status).toBe(200);
     expect(activity.body.data.activities.every((a: { cost: unknown }) => typeof a.cost === 'number')).toBe(true);
+    // work-k5fk.9 ("close all"): telemetry and structure only — no call's input or output, no transcript, no memory
+    expect(activity.body.data.activities.filter((a: Record<string, unknown>) => 'input' in a || 'output' in a)).toEqual(
+      [],
+    );
+    expect(Object.keys(activity.body.data).sort()).toEqual(['activities', 'summary']);
 
     const costs = await request(app).get('/api/v1/brain/costs?period=7d');
     expect(costs.status).toBe(200);
     expect(typeof costs.body.data.summary.periodTotal).toBe('number');
+
+    // work-k5fk.9 (least privilege): mwf_ops reads exactly the columns these routes need — every route still answers
+    const llm = (
+      activity.body.data.activities as Array<{ id: string; activityType: string; turnId: string | null }>
+    ).find(a => a.activityType === 'LLM_CALL')!;
+    const routes = [
+      '/api/v1/brain/dashboard?period=7d',
+      `/api/v1/brain/activity/${llm.id}/prompt`,
+      `/api/v1/brain/activity/${reflectionId}`,
+      `/api/v1/brain/sessions/${reflectionId}`,
+      `/api/v1/brain/sessions/${reflectionId}/context`,
+      '/api/v1/brain/sessions?type=INNER_WORK',
+      '/api/v1/brain/sessions?type=PARTNER&status=ACTIVE',
+    ];
+    const statuses: Record<string, number> = {};
+    for (const r of routes) statuses[r] = (await request(app).get(r)).status;
+    expect(statuses).toEqual(Object.fromEntries(routes.map(r => [r, 200])));
+    // a turn with no trace answers 404, not a permission error
+    expect((await request(app).get('/api/v1/brain/turn/no-such-turn/trace')).status).toBe(404);
 
     // mwf_ops is read-only
     await expect(
@@ -264,6 +386,20 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const context = await request(app).get(`/api/v1/brain/sessions/${ids.session}/context`);
     expect(context.status).toBe(200);
     expect(context.body.data).toMatchObject({ sessionId: ids.session, sessionType: 'partner' });
+    // work-k5fk.9 (review r1 F3): the monitor's context is structure from ops-granted columns, one entry per human
+    // participant, read on mwf_ops (before the fix it ran the app's client, found no identity and returned none)
+    const users = context.body.data.users as Array<{ userName: string; context: Record<string, unknown> }>;
+    expect(users.map(u => u.userName).sort()).toEqual(['Ada Lovelace', 'Bob Ross']);
+    for (const u of users) {
+      expect(Object.keys(u.context).sort()).toEqual([
+        'assembledAt',
+        'intent',
+        'latestIntensity',
+        'milestones',
+        'stage',
+        'turnCount',
+      ]);
+    }
   });
 
   it('dashboard auth: a configured secret is required (header compared timing-safely)', async () => {

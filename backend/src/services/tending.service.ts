@@ -1359,6 +1359,9 @@ export async function submitTendingCheckin(args: {
           data: {
             userId: viewer.userId,
             followUpId: r.tendingEntryId ?? openEntries[0].id,
+            // (follow_up_id, session_id) and (session_id, user_id) are keys (work-k5fk.9, C8): a follow-up of the
+            // viewer's own session only
+            sessionId: viewer.sessionId,
             scope: r.scope,
             remindAt: new Date(r.remindAt),
             cadence: r.cadence == null ? null : reminderCadenceOrThrow(r.cadence),

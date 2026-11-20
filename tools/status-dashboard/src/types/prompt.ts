@@ -1,25 +1,9 @@
 import type { ContextWindow } from './costs';
 
-export interface SystemPromptBlock {
-  type: 'static' | 'dynamic';
-  content: string;
-  tokenCount: number;
-  cached: boolean;
-}
-
-export interface PromptMessage {
-  role: string;
-  content: string;
-  hasCacheControl: boolean;
-}
-
-export interface ParsedResponse {
-  text: string;
-  thinking: string | null;
-  draft: string | null;
-  dispatch: string | null;
-}
-
+/*
+ * The prompt inspector's data: tokens, cost, timing and the context window. No prompt or response, not even
+ * their structure: the monitor's role holds no grant on brain_activity input or output (work-k5fk.9).
+ */
 export interface TokenBreakdown {
   input: number;
   output: number;
@@ -38,9 +22,6 @@ export interface CostBreakdown {
 }
 
 export interface PromptDetail {
-  systemPrompt: { blocks: SystemPromptBlock[] };
-  messages: PromptMessage[];
-  response: ParsedResponse;
   tokens: TokenBreakdown;
   cost: CostBreakdown;
   timing: {

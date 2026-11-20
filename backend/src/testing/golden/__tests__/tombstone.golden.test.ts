@@ -209,7 +209,7 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       await c.query(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'people', '{}')`, [adaUser]);
       await one(
         'user_device',
-        `INSERT INTO user_device (user_id, push_token, platform) VALUES ($1, 'ExponentPushToken[ts12]', 'ios') RETURNING id`,
+        `INSERT INTO user_device (user_id, push_token, push_provider, platform) VALUES ($1, 'ExponentPushToken[ts12]', 'expo', 'ios') RETURNING id`,
         [adaUser],
       );
       await c.query(
@@ -238,9 +238,10 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
         `INSERT INTO regulation_event (type, session_id, user_id) VALUES ('BREATHING_EXERCISE', $1, $2) RETURNING id`,
         [session, adaUser],
       );
+      // work-k5fk.9 (Q9): need_disposition.note is dropped (it had no writer), so the probe text is not seeded here
       await c.query(
-        `INSERT INTO need_disposition (need_id, status, note, session_id, user_id)
-         SELECT n.id, 'OPEN', $3::text, n.session_id, n.user_id FROM need n
+        `INSERT INTO need_disposition (need_id, status, session_id, user_id)
+         SELECT n.id, 'OPEN', n.session_id, n.user_id FROM need n
          WHERE n.session_id = $1::uuid AND n.user_id = $2::uuid AND n.label <> $3::text ORDER BY n.created_at LIMIT 1`,
         [session, adaUser, SEEDED_PRIVATE],
       );
@@ -264,8 +265,8 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       );
       await one(
         'reminder',
-        `INSERT INTO reminder (user_id, follow_up_id, remind_at, note) VALUES ($1, $2, now() + interval '1 day', $3) RETURNING id`,
-        [adaUser, individual, SEEDED_PRIVATE],
+        `INSERT INTO reminder (user_id, follow_up_id, session_id, remind_at, note) VALUES ($1, $2, $4, now() + interval '1 day', $3) RETURNING id`,
+        [adaUser, individual, SEEDED_PRIVATE, session],
       );
     },
     h.fixture.database,

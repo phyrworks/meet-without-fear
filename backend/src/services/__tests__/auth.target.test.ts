@@ -121,6 +121,32 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
     expect(mockGetUser).not.toHaveBeenCalled();
   });
 
+  // review r2 R2-4 (work-k5fk.9): the person_name domain and utils/person-name.ts agree on one blank set, Unicode
+  // White_Space, so a Clerk name made only of it clamps to NULL and never fails the first sign-in (OD-4).
+  it('a Clerk name of only White_Space (NEL, NBSP, ideographic space) signs in with NULL names; both sides agree', async () => {
+    const cps = Array.from({ length: 0x3001 }, (_, i) => i).filter(cp => cp > 0 && (cp < 0xd800 || cp > 0xdfff));
+    const jsBlank = cps.filter(cp => /^\p{White_Space}$/u.test(String.fromCodePoint(cp)));
+    const [{ pg }] = await run.sql<{ pg: number[] }>(
+      `SELECT array_agg(cp ORDER BY cp) AS pg FROM unnest($1::int[]) cp WHERE chr(cp) COLLATE pg_c_utf8 ~ '^[[:space:]]$'`,
+      [cps],
+    );
+    expect(pg).toEqual(jsBlank);
+
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Blank' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({
+        primaryEmailAddressId: 'idn_b',
+        emailAddresses: [verified('idn_b', 'blank-name@example.test')],
+        firstName: '\u0085\u00a0',
+        lastName: '\u3000',
+      }),
+    );
+    expect((await me()).status).toBe(200);
+    expect(await userByEmail('blank-name@example.test')).toEqual([
+      expect.objectContaining({ first_name: null, last_name: null }),
+    ]);
+  });
+
   it.each([
     [
       'an unverified primary',

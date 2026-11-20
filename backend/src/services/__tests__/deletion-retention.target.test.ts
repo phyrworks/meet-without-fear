@@ -63,8 +63,9 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
       [ids.session, agreement.id],
     );
     await run.sql(
-      `INSERT INTO reminder (user_id, follow_up_id, remind_at) VALUES ($1, $2, now() + interval '1 day'), ($3, $2, now() + interval '1 day')`,
-      [ada.id, followUp.id, bob.id],
+      `INSERT INTO reminder (user_id, follow_up_id, session_id, remind_at)
+       VALUES ($1, $2, $4, now() + interval '1 day'), ($3, $2, $4, now() + interval '1 day')`,
+      [ada.id, followUp.id, bob.id, ids.session],
     );
     // Fix round 1 (M5): Ada's choices UNSHARED (no choices_shared): the walk deletes them (spec §4 step 3);
     // Bob's shared choice stays.
@@ -153,7 +154,10 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
 
   it('account deletion: the walk as the job — a tombstone, private rows gone, keys shredded, survivors kept', async () => {
     // Bob's U-class rows and a key, so the walk has every class to sort
-    await run.sql(`INSERT INTO user_device (user_id, push_token) VALUES ($1, 'ExponentPushToken[ts12-bob]')`, [bob.id]);
+    await run.sql(
+      `INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[ts12-bob]', 'expo')`,
+      [bob.id],
+    );
     await run.sql(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'gratitude', '{"entries": []}')`, [
       bob.id,
     ]);
@@ -216,7 +220,7 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
     const res = await http(bob, 'delete', '/auth/me');
     expect(res.status).toBe(200);
     // The cross-participant row is gone with Bob's leave (R17: the session's unattributed rows);
-    // no row of the session carries Bob's line in output or structured_output any more except the
+    // no row of the session carries Bob's line in output any more except the
     // one attributed to Ada's own turn (a fixture probe, not his content in production).
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-reconciler'`)).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-own-turn'`)).toBe(1);

@@ -219,7 +219,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
     it.each([
       [
         'user_device',
-        `INSERT INTO user_device (user_id, push_token) VALUES ($1, 'ExponentPushToken[ada]')`,
+        `INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[ada]', 'expo')`,
         `UPDATE user_device SET push_token = 'ExponentPushToken[evil]' WHERE user_id = $1 RETURNING id`,
       ],
       [
@@ -283,7 +283,10 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
     });
 
     it('the worker clears a push token but never sets one, and never writes a telemetry blob (work-k5fk.10.29 R1, R2)', async () => {
-      await run.sql(`INSERT INTO user_device (user_id, push_token) VALUES ($1, 'ExponentPushToken[w]')`, [bob]);
+      await run.sql(
+        `INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[w]', 'expo')`,
+        [bob],
+      );
       expect(
         await code(
           'mwf_worker',
@@ -293,9 +296,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         ),
       ).toBe('rls');
       expect(
-        await as('mwf_worker', null, `UPDATE user_device SET push_token = NULL WHERE user_id = $1 RETURNING user_id`, [
-          bob,
-        ]),
+        await as(
+          'mwf_worker',
+          null,
+          `UPDATE user_device SET push_token = NULL, push_provider = NULL WHERE user_id = $1 RETURNING user_id`,
+          [bob],
+        ),
       ).toHaveLength(1);
       const [{ id }] = await run.sql<{ id: string }>(
         `INSERT INTO brain_activity (session_id, activity_type, model) VALUES ($1, 'LLM_CALL', 'm') RETURNING id::text`,
@@ -312,7 +318,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         await code(
           'mwf_worker',
           null,
-          `UPDATE brain_activity SET input = NULL, output = NULL, metadata = NULL, structured_output = NULL WHERE session_id = $1`,
+          `UPDATE brain_activity SET input = NULL, output = NULL, metadata = NULL WHERE session_id = $1`,
           [session],
         ),
       ).toBe('ok');
@@ -486,10 +492,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('rls');
       // …nor links his reflection to a session he is not in
       expect(
-        await code('mwf_app', carol, `INSERT INTO reflection (user_id, linked_session_id) VALUES ($1, $2)`, [
+        await code(
+          'mwf_app',
           carol,
-          session,
-        ]),
+          `INSERT INTO reflection (user_id, linked_session_id, linked_at) VALUES ($1, $2, now())`,
+          [carol, session],
+        ),
       ).toBe('rls');
     });
 
@@ -526,10 +534,10 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [session, bob, ada],
       );
       [{ id: result }] = await run.sql<{ id: string }>(
-        `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
-                                        gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
-         VALUES ($1, $2, $3, 1, 50, 's', 'PROBE_GAP', 'MINOR', 'PROCEED', 'r', true) RETURNING id::text`,
-        [bobAttempt, session, ada],
+        `INSERT INTO reconciler_result (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score,
+                                        alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
+         VALUES ($1, $2, $3, $4, 1, 50, 's', 'PROBE_GAP', 'MINOR', 'PROCEED', 'r', true) RETURNING id::text`,
+        [bobAttempt, session, bob, ada],
       );
       await run.sql(
         `INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id, guidance_type)
@@ -1220,10 +1228,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
 
     it('F14: Bob’s reminder may point only at a follow-up of a session he is in', async () => {
       expect(
-        await code('mwf_app', bob, `INSERT INTO reminder (user_id, remind_at, follow_up_id) VALUES ($1, now(), $2)`, [
+        await code(
+          'mwf_app',
           bob,
-          otherFollowUp,
-        ]),
+          `INSERT INTO reminder (user_id, remind_at, follow_up_id, session_id) VALUES ($1, now(), $2, $3)`,
+          [bob, otherFollowUp, other],
+        ),
       ).toBe('rls');
       const [{ id: ours }] = await run.sql<{ id: string }>(
         `INSERT INTO follow_up (session_id, type, scope, status) VALUES ($1, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED', 'OPEN')
@@ -1231,10 +1241,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [session],
       );
       expect(
-        await code('mwf_app', bob, `INSERT INTO reminder (user_id, remind_at, follow_up_id) VALUES ($1, now(), $2)`, [
+        await code(
+          'mwf_app',
           bob,
-          ours,
-        ]),
+          `INSERT INTO reminder (user_id, remind_at, follow_up_id, session_id) VALUES ($1, now(), $2, $3)`,
+          [bob, ours, session],
+        ),
       ).toBe('ok');
     });
   });
@@ -1286,7 +1298,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [gh, hal, gil],
       );
       [{ id: halReflection }] = await run.sql<{ id: string }>(
-        `INSERT INTO reflection (user_id, title, linked_session_id) VALUES ($1, 'PROBE_R2_REFLECTION', $2) RETURNING id::text`,
+        `INSERT INTO reflection (user_id, title, linked_session_id, linked_at) VALUES ($1, 'PROBE_R2_REFLECTION', $2, now()) RETURNING id::text`,
         [hal, gh],
       );
       await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [gh, hal]);
@@ -1321,10 +1333,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         await code('mwf_app', hal, `UPDATE reflection SET linked_session_id = $2 WHERE id = $1`, [halReflection, gh]),
       ).toBe('42501');
       expect(
-        await code('mwf_app', hal, `INSERT INTO reflection (user_id, title, linked_session_id) VALUES ($1, 'x', $2)`, [
+        await code(
+          'mwf_app',
           hal,
-          gh,
-        ]),
+          `INSERT INTO reflection (user_id, title, linked_session_id, linked_at) VALUES ($1, 'x', $2, now())`,
+          [hal, gh],
+        ),
       ).toBe('rls');
     });
 

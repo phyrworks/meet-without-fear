@@ -85,7 +85,6 @@ const SPEC_ENCRYPTED: Record<string, string> = {
   'need.label': 'participant',
   'need.evidence': 'participant',
   'need_share.shared_text': 'session',
-  'need_disposition.note': 'participant',
   'proposal.description': 'session',
   'proposal_choice.note': 'session',
   'agreement.description': 'session',
@@ -102,6 +101,9 @@ const SPEC_ENCRYPTED: Record<string, string> = {
   'takeaway.content': 'user',
   'user_memory.content': 'user',
   'feature_state.doc': 'user',
+  // owner decision OD-1 and its follow-up (work-k5fk.9): a call's input and the model's output, sealed like content
+  'brain_activity.input': 'per-row',
+  'brain_activity.output': 'per-row',
 };
 
 /**
@@ -117,8 +119,6 @@ const R46_AMENDED: Record<string, string> = {
   'reconciler_result.suggested_share_focus': 'participant',
   'reconciler_result.suggested_share_content': 'participant',
   'reconciler_result.suggested_share_reason': 'participant',
-  'reconciler_guidance.area_hint': 'participant',
-  'reconciler_guidance.prompt_seed': 'participant',
   'proposal.duration': 'session',
   'proposal.measure_of_success': 'session',
   'proposal.removal_reason': 'session',
@@ -198,6 +198,8 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
       'feature_state.doc': 'jsonb-envelope',
       'proposal_revision.before': 'jsonb-envelope',
       'proposal_revision.after': 'jsonb-envelope',
+      'brain_activity.input': 'jsonb-envelope',
+      'brain_activity.output': 'jsonb-envelope',
     });
   });
 });
@@ -336,16 +338,16 @@ describe('applyFieldEncryption — model operations', () => {
   it('create / update / upsert / createMany / updateMany seal the mapped fields', async () => {
     await run('Draft', 'create', { data: { content: 'd', version: 1 } });
     await run('Need', 'update', { where: { id: 'n' }, data: { label: 'Safety', evidence: ['quote'] } });
-    await run('NeedDisposition', 'upsert', { where: {}, create: { note: 'c' }, update: { note: 'u' } });
+    await run('ProposalChoice', 'upsert', { where: {}, create: { note: 'c' }, update: { note: 'u' } });
     await run('FollowUpNote', 'createMany', { data: [{ content: 'a' }, { content: 'b' }] });
     await run('ContextShareOffer', 'updateMany', { where: {}, data: { sharedContent: 's' } });
-    const [draft, need, disp, notes, offer] = captured;
+    const [draft, need, choice, notes, offer] = captured;
     expect(isEncrypted((draft.data as { content: string }).content)).toBe(true);
     expect((draft.data as { version: number }).version).toBe(1);
     expect(isEncrypted((need.data as { label: string }).label)).toBe(true);
     expect((need.data as { evidence: string[] }).evidence.every(isEncrypted)).toBe(true);
-    expect(isEncrypted((disp.create as { note: string }).note)).toBe(true);
-    expect(isEncrypted((disp.update as { note: string }).note)).toBe(true);
+    expect(isEncrypted((choice.create as { note: string }).note)).toBe(true);
+    expect(isEncrypted((choice.update as { note: string }).note)).toBe(true);
     expect((notes.data as Array<{ content: string }>).every(n => isEncrypted(n.content))).toBe(true);
     expect(isEncrypted((offer.data as { sharedContent: string }).sharedContent)).toBe(true);
   });

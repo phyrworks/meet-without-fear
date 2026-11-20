@@ -68,7 +68,9 @@ export function useSessionActivity(sessionId: string | undefined): UseSessionAct
       const index = prev.findIndex(p => p.id === activity.id);
       if (index >= 0) {
         const newArr = [...prev];
-        newArr[index] = activity;
+        // The live event carries telemetry only (no input / output / metadata: work-k5fk.9), so keep what the
+        // REST fetch already loaded and lay the new telemetry over it.
+        newArr[index] = { ...prev[index], ...activity };
         return newArr;
       }
       return [...prev, activity];

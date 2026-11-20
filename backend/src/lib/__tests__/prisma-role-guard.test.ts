@@ -255,11 +255,8 @@ describe('who may exempt from the guard', () => {
     ]);
   });
 
-  it('a client exemption is named only by lib/prisma (the E2E tooling client) and two DB tests', () => {
-    expect(namers('roleGuardExemption')).toEqual([
-      'src/lib/prisma.ts',
-      'src/middleware/__tests__/errors.pg.test.ts',
-      'src/services/__tests__/encryption-at-rest-repair.target.test.ts',
-    ]);
+  // work-k5fk.9: encryption-at-rest-repair's exemption went with need_disposition.note (Q9), the column no app path wrote
+  it('a client exemption is named only by lib/prisma (the E2E tooling client) and one DB test', () => {
+    expect(namers('roleGuardExemption')).toEqual(['src/lib/prisma.ts', 'src/middleware/__tests__/errors.pg.test.ts']);
   });
 });

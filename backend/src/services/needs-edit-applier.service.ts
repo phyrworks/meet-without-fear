@@ -59,7 +59,9 @@ async function ownNeeds(seat: Seat, db: Db = prisma, where: Prisma.NeedWhereInpu
   return rows.map(toNeedRecord);
 }
 
-async function updateNeed(db: Db, id: string, data: Prisma.NeedUpdateInput): Promise<NeedRow> {
+// Unchecked: the supersession key is (superseded_by_need_id, session_id, user_id) (work-k5fk.9, C3), so the link
+// is written as its scalar, never a nested connect.
+async function updateNeed(db: Db, id: string, data: Prisma.NeedUncheckedUpdateInput): Promise<NeedRow> {
   return toNeedRecord((await db.need.update({ where: { id }, data, select: NEED_SELECT })) as NeedRecord);
 }
 
@@ -242,7 +244,7 @@ export async function applyNeedAction(
           select: NEED_SELECT,
         })) as NeedRecord,
       );
-      const oldNeed = await updateNeed(tx, current.id, { supersededByNeed: { connect: { id: newNeed.id } } });
+      const oldNeed = await updateNeed(tx, current.id, { supersededByNeedId: newNeed.id });
       return { oldNeed, newNeed };
     }
 

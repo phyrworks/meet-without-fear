@@ -135,21 +135,22 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
          FROM pg_attribute WHERE attrelid = 'message'::regclass AND attnum > 0 AND NOT attisdropped`,
       );
       expect(cols.map(c => c.attname)).not.toContain('id');
+      // work-k5fk.9 (D2): the ordinal_no domain (integer, >= 1)
       expect(cols.find(c => c.attname === 'seq')).toEqual({
         attname: 'seq',
-        typ: 'integer',
+        typ: 'ordinal_no',
         notnull: true,
         hasdef: false,
       });
     });
 
-    it('conversation.next_seq is an integer NOT NULL DEFAULT 1, CHECK >= 1', async () => {
+    it('conversation.next_seq is an ordinal_no (integer >= 1) NOT NULL DEFAULT 1', async () => {
       const [c] = await run.sql<{ typ: string; notnull: boolean; def: string }>(
         `SELECT format_type(a.atttypid, a.atttypmod) AS typ, a.attnotnull AS notnull, pg_get_expr(d.adbin, d.adrelid) AS def
          FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
          WHERE a.attrelid = 'conversation'::regclass AND a.attname = 'next_seq'`,
       );
-      expect(c).toEqual({ typ: 'integer', notnull: true, def: '1' });
+      expect(c).toEqual({ typ: 'ordinal_no', notnull: true, def: '1' });
       expect((await failure(run.sql(`UPDATE conversation SET next_seq = 0 WHERE id = $1`, [ids.adaConv]))).code).toBe(
         '23514',
       );

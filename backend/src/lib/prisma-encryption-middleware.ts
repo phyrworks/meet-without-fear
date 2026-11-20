@@ -46,7 +46,6 @@
  * | need.label                                    | text           | participant |
  * | need.evidence                                 | text[]         | participant |
  * | need_share.shared_text                        | text           | session     |
- * | need_disposition.note                         | text           | participant |
  * | proposal.description                          | text           | session     |
  * | proposal_choice.note                          | text           | session     |
  * | agreement.description                         | text           | session     |
@@ -61,6 +60,7 @@
  * | takeaway.content                              | text           | user        |
  * | user_memory.content                           | text           | user        |
  * | feature_state.doc                             | jsonb (envelope) | user      |
+ * | brain_activity.input, output                  | jsonb (envelope) | per-row: participant_user_id set → participant; session only → session; reflection_id → user (owner decision OD-1, work-k5fk.9) |
  *
  * ## Amendments (ruling R46, TS-13 fix round 1; provisional pending the owner)
  *
@@ -72,7 +72,6 @@
  * |-----------------------------------------------|----------------|-------------|
  * | invitation.decline_reason                     | text           | session     |
  * | reconciler_result.most_important_gap, rationale, suggested_share_focus, suggested_share_content, suggested_share_reason | text | participant (subject) |
- * | reconciler_guidance.area_hint, prompt_seed    | text           | participant (author) |
  * | proposal.duration, measure_of_success, removal_reason | text   | session     |
  * | proposal.unresolved_need_labels               | text[]         | session     |
  * | proposal_revision.before, after               | jsonb (envelope) | session   |
@@ -83,13 +82,17 @@
  * Left plain, with why: proposal_revision.reason — by ruling R47 it holds only
  * the closed set of app markers in services/proposal-revision-reasons.ts
  * (filtered by value in controllers/stage4.ts); every user- or model-derived
- * text of a revision is written into its encrypted `after`/`before`; reconciler_guidance.guidance_type, reminder.cadence (categories);
+ * text of a revision is written into its encrypted `after`/`before`; reconciler_guidance.guidance_type and
+ * area_hint (enums: code constants, never user content — work-k5fk.9 Q4; prompt_seed is derived, not stored),
+ * reminder.cadence (categories);
  * reflection.theme, takeaway.theme (taxonomy labels SQL groups on —
- * v_reflection_theme); participant.display_name, relationship_member.nickname,
+ * v_reflection_theme); participant.display_name, user_contact.nickname,
  * user.* (identity, read by views and the dashboard search); user_device.push_token
  * (a secret, keyed by ON CONFLICT); user_preferences.doc (settings, read by SQL
- * jsonb operators); brain_activity.* (T class — prompts and outputs, flagged
- * for the owner, see the TS-13 report).
+ * jsonb operators); brain_activity.metadata (T class telemetry: call options,
+ * cache and tool counts, the turn trace — input and output, which can carry the
+ * turn's text, are sealed: owner decisions OD-1 and its follow-up, work-k5fk.9;
+ * timings, tokens, cost, status and call type are plain columns).
  *
  * ## Value shapes (rulings R43, R44)
  *
@@ -166,6 +169,8 @@ const MESSAGE_KEY_RULE =
   "role = 'USER' AND kind = 'CHAT' (the owner's turn) or role IN ('AI','SYSTEM') replying to the owner → participant; " +
   'every delivered kind (written by app.deliver_message) → session';
 const AI_MEMORY_KEY_RULE = 'session_id IS NOT NULL → participant; session_id IS NULL (GLOBAL_FACTS) → user';
+const BRAIN_ACTIVITY_KEY_RULE =
+  'participant_user_id set → participant; session_id only (a call over both parties) → session; reflection_id → user';
 const EMPATHY_ATTEMPT_KEY_RULE =
   "revealed_at IS NULL → participant (author); re-encrypted under session at the reveal (lib/share-moments.ts 'empathy-reveal')";
 
@@ -213,14 +218,6 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
       suggestedShareReason: text('suggested_share_reason', 'participant', undefined, true),
     },
   },
-  ReconcilerGuidance: {
-    table: 'reconciler_guidance',
-    // R46: the LLM's free-text hints about the subject's material (guidance_type is a category, left plain)
-    fields: {
-      areaHint: text('area_hint', 'participant', undefined, true),
-      promptSeed: text('prompt_seed', 'participant', undefined, true),
-    },
-  },
   ContextShareOffer: {
     table: 'context_share_offer',
     fields: {
@@ -235,7 +232,6 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
     fields: { label: text('label', 'participant'), evidence: textArray('evidence', 'participant') },
   },
   NeedShare: { table: 'need_share', fields: { sharedText: text('shared_text', 'session') } },
-  NeedDisposition: { table: 'need_disposition', fields: { note: text('note', 'participant') } },
   Proposal: {
     table: 'proposal',
     fields: {
@@ -294,6 +290,16 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   },
   Reminder: { table: 'reminder', fields: { note: text('note', 'user', undefined, true) } },
   FeatureState: { table: 'feature_state', fields: { doc: { column: 'doc', kind: 'jsonb-envelope', key: 'user' } } },
+  // Owner decision OD-1 and its follow-up (work-k5fk.9): a call's input (a retrieval's search queries) and output
+  // (the model's text) are content, sealed like any other. The ops path never reads them (mwf_ops holds no grant on
+  // either); the telemetry stays in plain columns.
+  BrainActivity: {
+    table: 'brain_activity',
+    fields: {
+      input: { column: 'input', kind: 'jsonb-envelope', key: 'per-row', rule: BRAIN_ACTIVITY_KEY_RULE },
+      output: { column: 'output', kind: 'jsonb-envelope', key: 'per-row', rule: BRAIN_ACTIVITY_KEY_RULE },
+    },
+  },
 };
 
 // ============================================================================

@@ -89,7 +89,9 @@ const CHILD_TABLES = [
   'reconciler_guidance',
   'reconciler_result',
   'regulation_event',
+  'reminder',
   'session_closure',
+  'user_memory',
 ];
 
 describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
@@ -160,7 +162,18 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
     });
 
     it('every participant reference of a child table is (session_id, x_user_id) → participant (session_id, user_id)', async () => {
-      const toParticipant = fks.filter(f => f.refTable === 'participant' && f.table !== 'participant');
+      // work-k5fk.9 (C6): the one exception is out of reflection, which is user-scoped: its optional linked session
+      // is one its owner sits in, (linked_session_id, user_id) — reflection has no session_id.
+      const linked = fks.filter(f => f.table === 'reflection' && f.refTable === 'participant');
+      expect(linked.map(f => [f.columns, f.refColumns])).toEqual([
+        [
+          ['linked_session_id', 'user_id'],
+          ['session_id', 'user_id'],
+        ],
+      ]);
+      const toParticipant = fks.filter(
+        f => f.refTable === 'participant' && f.table !== 'participant' && f.table !== 'reflection',
+      );
       expect(toParticipant.filter(f => f.columns.length !== 2 || f.columns[0] !== 'session_id')).toEqual([]);
       expect(toParticipant.filter(f => f.refColumns.join(',') !== 'session_id,user_id')).toEqual([]);
       const tables = [...new Set(toParticipant.map(f => f.table))].filter(t => t !== 'live_session_pair').sort();
@@ -177,7 +190,6 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         ['reconciler_result', 'empathy_attempt'],
         ['reconciler_guidance', 'reconciler_result'],
         ['context_share_offer', 'empathy_attempt'],
-        ['context_share_offer', 'reconciler_result'],
         ['need_share', 'need'],
         ['consent', 'need'],
         ['consent', 'empathy_attempt'],
@@ -206,11 +218,12 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
           ['attempt_id', 'session_id', 'reviewer_user_id'],
           ['id', 'session_id', 'subject_user_id'],
         ],
+        // work-k5fk.9 (C9): the result pins the attempt's author too, so its guidance names that author only
         [
           'reconciler_result',
           'empathy_attempt',
-          ['attempt_id', 'session_id', 'subject_user_id'],
-          ['id', 'session_id', 'subject_user_id'],
+          ['attempt_id', 'session_id', 'author_user_id', 'subject_user_id'],
+          ['id', 'session_id', 'author_user_id', 'subject_user_id'],
         ],
         [
           'context_share_offer',
@@ -221,9 +234,11 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         [
           'reconciler_guidance',
           'reconciler_result',
-          ['result_id', 'session_id', 'subject_user_id'],
-          ['id', 'session_id', 'subject_user_id'],
+          ['result_id', 'session_id', 'author_user_id', 'subject_user_id'],
+          ['id', 'session_id', 'author_user_id', 'subject_user_id'],
         ],
+        // work-k5fk.9 (C10): an offer cites a result of its own attempt (so of its session)
+        ['context_share_offer', 'reconciler_result', ['result_id', 'attempt_id'], ['id', 'attempt_id']],
         ['need_share', 'need', ['need_id', 'session_id', 'user_id'], ['id', 'session_id', 'user_id']],
       ];
       const missing = pinsUser.filter(
@@ -321,10 +336,54 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
          VALUES ($1, 'USER_INITIATED_REENTRY', 'INDIVIDUAL', $2, 'OPEN') RETURNING id`,
         seat,
       );
-      await run.sql(`INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id) VALUES ($3, $1, $2)`, [
-        ...seat,
-        followUp,
-      ]);
+      const checkin = await one(
+        `INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id) VALUES ($3, $1, $2) RETURNING id`,
+        [...seat, followUp],
+      );
+      // work-k5fk.9: a row for each key the sweep added (C1–C5, C7) — carried note, follow-ups on the agreement and
+      // on a commitment, a superseded need and round, a sub-chat on a proposal, a session-scoped memory.
+      await run.sql(
+        `INSERT INTO follow_up_note (session_id, user_id, content, carried_into_checkin_id) VALUES ($1, $2, 'carried', $3)`,
+        [...seat, checkin],
+      );
+      const agreement = await one(`SELECT id FROM agreement WHERE session_id = $1 LIMIT 1`, [s]);
+      await run.sql(
+        `INSERT INTO follow_up (session_id, agreement_id, type, scope) VALUES ($1, $2, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED')`,
+        [s, agreement],
+      );
+      await run.sql(
+        `INSERT INTO follow_up (session_id, proposal_id, type, scope, owner_user_id)
+         VALUES ($1, $3, 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'INDIVIDUAL', $2)`,
+        [...seat, proposalA],
+      );
+      const newerNeed = await one(
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1, $2, 'newer', 'SAFETY', 0.5) RETURNING id`,
+        seat,
+      );
+      await run.sql(
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence, superseded_by_need_id)
+         VALUES ($1, $2, 'older', 'SAFETY', 0.5, $3)`,
+        [...seat, newerNeed],
+      );
+      await run.sql(
+        `INSERT INTO empathy_attempt (session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status)
+         SELECT session_id, author_user_id, subject_user_id, 77, id, 'superseding', 'SUPERSEDED' FROM empathy_attempt
+         WHERE id = $1`,
+        [attB],
+      );
+      await run.sql(
+        `INSERT INTO conversation (session_id, user_id, kind, anchor_kind, anchor_proposal_id)
+         VALUES ($1, $2, 'SUBCHAT', 'PROPOSAL_REFINEMENT', $3)`,
+        [...seat, proposalA],
+      );
+      await run.sql(
+        `INSERT INTO user_memory (user_id, session_id, content, category) VALUES ($2, $1, 'scoped', 'PREFERENCE')`,
+        seat,
+      );
+      await run.sql(
+        `INSERT INTO reminder (user_id, follow_up_id, session_id, remind_at) VALUES ($2, $3, $1, now() + interval '1 day')`,
+        [...seat, followUp],
+      );
       await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [
         proposalA,
         shared,
@@ -469,7 +528,11 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
           f.columns.includes('session_id') &&
           f.columns.some(c => c.endsWith('user_id')),
       );
-      for (const k of childKeys) {
+      // work-k5fk.9 (C2): a round superseding another names the whole direction, author and subject both; in a
+      // two-party session swapping either one makes author = subject, which the row's CHECK refuses before any key.
+      // The two loops above still prove the key refuses another session and a stranger.
+      const SAME_DIRECTION = 'empathy_attempt_supersedes_attempt_id_session_id_author_us_fkey';
+      for (const k of childKeys.filter(c => c.name !== SAME_DIRECTION)) {
         const col = k.columns.find(c => c.endsWith('user_id'))!;
         const notNull = k.columns.map(c => `${c} IS NOT NULL`).join(' AND ');
         outcomes[k.name] = await inRolledBackTx(async c => {
@@ -512,8 +575,14 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         SELECT c.relname AS t FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attname = 'session_id' AND NOT a.attnotnull`);
+      // work-k5fk.9 (C7, C8): not user_memory or reminder, whose user_id is the owner whether or not the row is of a
+      // session (reminder's CHECK ties its session_id to follow_up_id instead).
       const keys = fks.filter(
-        f => f.refTable === 'participant' && f.table !== 'participant' && nullable.some(n => n.t === f.table),
+        f =>
+          f.refTable === 'participant' &&
+          f.table !== 'participant' &&
+          !['user_memory', 'reminder'].includes(f.table) &&
+          nullable.some(n => n.t === f.table),
       );
       expect([...new Set(keys.map(k => k.table))].sort()).toEqual(['ai_memory', 'brain_activity']);
       const outcomes: Record<string, string | undefined> = {};
@@ -607,10 +676,10 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         run.as(
           'mwf_ai',
           ids.adaUser, // the AI acts for a participant of its scope (work-k5fk.10.7)
-          `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
-                                          gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
-           VALUES ($1, $2, $3, 99, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false)`,
-          [att.id, ids.session, subjectUser],
+          `INSERT INTO reconciler_result (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score,
+                                          alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
+           VALUES ($1, $2, $3, $4, 99, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false)`,
+          [att.id, ids.session, ids.adaUser, subjectUser],
           ids.session,
         );
       // The author as the subject: the attempt's subject is Bob.
@@ -619,6 +688,54 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       const f = await failure(insertResult(ids.bobUser));
       expect({ code: f.code, live: /live attempt/.test(f.message ?? '') }).toEqual({ code: '23514', live: true });
       await run.sql(`UPDATE empathy_attempt SET status = $2::empathy_status WHERE id = $1`, [att.id, att.status]);
+    });
+
+    // work-k5fk.9 (C9): reconciler_guidance's RLS lets its author_user_id read the hints, so in an N-party session a
+    // guidance row naming anyone but the analysed attempt's author would hand them to a third party. The key binds
+    // every writer (here the superuser, under no policy).
+    it('guidance names only the analysed attempt’s author: a third participant as its author is a key violation', async () => {
+      const [att] = await run.sql<{ id: string }>(
+        `SELECT id FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2 ORDER BY round DESC LIMIT 1`,
+        [ids.session, ids.adaUser],
+      );
+      const carol = randomUuidV7();
+      const outcome = await inRolledBackTx(async c => {
+        await c.query(`INSERT INTO "user" (id, kind, email, first_name) VALUES ($1, 'human', $2, 'Carol')`, [
+          carol,
+          `carol-${carol}@e2e.test`,
+        ]);
+        await c.query(`INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3)`, [
+          ids.session,
+          carol,
+          ids.adaUser,
+        ]);
+        const [{ id: result }] = (
+          await c.query<{ id: string }>(
+            `INSERT INTO reconciler_result (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score,
+                                            alignment_summary, gap_summary, gap_severity, recommended_action, rationale,
+                                            sharing_would_help)
+             VALUES ($1, $2, $3, $4, 98, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false) RETURNING id`,
+            [att.id, ids.session, ids.adaUser, ids.bobUser],
+          )
+        ).rows;
+        const guidance = async (author: string) => {
+          await c.query('SAVEPOINT g');
+          try {
+            await c.query(
+              `INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id, guidance_type)
+               VALUES ($1, $2, $3, $4, 'explore_breadth')`,
+              [result, ids.session, author, ids.bobUser],
+            );
+            return 'ok';
+          } catch (e) {
+            return (e as { code?: string }).code;
+          } finally {
+            await c.query('ROLLBACK TO SAVEPOINT g');
+          }
+        };
+        return { carol: await guidance(carol), ada: await guidance(ids.adaUser) };
+      });
+      expect(outcome).toEqual({ carol: '23503', ada: 'ok' });
     });
 
     it('a seat’s kind is its user’s (t_participant_kind): the AI and a persona never sit as human, a human never as either', async () => {

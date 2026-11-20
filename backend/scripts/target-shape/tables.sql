@@ -116,11 +116,11 @@
 --              writes, mwf_ops reads"; R35 — the job is the principal for work
 --              that crosses users, the anonymise walk and retention). Every job
 --              statement is raw and names exactly these columns.
---  * mwf_ops' grants: SELECT on exactly the tables the Neural Monitor
---    dashboard (routes/brain.ts) reads, directly or through the stage shim,
---    re-based from the old BrainActivity, Session/Relationship/
---    RelationshipMember/User, StageProgress, Message, UserVessel.notableFacts,
---    EmotionalReading and InnerWorkSession/Message reads.
+--  * mwf_ops' grants: SELECT on exactly the columns the Neural Monitor
+--    dashboard (routes/brain.ts) reads, directly or through the stage shim —
+--    column lists everywhere, and never a ciphertext or jsonb-envelope column
+--    (work-k5fk.9: the owner's least privilege, and "close all": the monitor
+--    gets telemetry and structure, never text a user or the AI wrote).
 --  * The [Pnn] tags on the CHECKs name the TS-7 data-move prechecks that
 --    guarded each rule; kept as cross-references.
 -- ============================================================================
@@ -128,10 +128,12 @@
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, an email column as String,
--- and `migrate diff` reports nothing (TS-6 probe for intensity, 2026-10-19;
--- work-a39h.11.40 probe for uuid7, 2026-11-02; work-gevt for ts_ms,
--- 2026-11-10; work-k5fk.5 for email, 2026-11-13; PG 18.6 / Prisma 7.10).
+-- intensity or ordinal_no column as Int, an email, kek_id or person_name
+-- column as String, and `migrate diff` reports nothing (TS-6 probe for
+-- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
+-- work-gevt for ts_ms, 2026-11-10; work-k5fk.5 for email, 2026-11-13;
+-- work-k5fk.9 for ordinal_no, kek_id and person_name, 2026-11-19 — the drift
+-- gate passes with them; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
 -- Every uuid column (the uuidv7() primary keys and the columns that reference
@@ -176,10 +178,10 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- A strict variant (every value an envelope) is planned for when
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
 -- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
--- CHECK (app.all_ciphertext(col)) instead. Of the six jsonb columns in the map,
--- the five jsonb-envelope ones carry the t_jsonb_envelope trigger and
--- ai_memory.doc (jsonb-leaves) the structural t_doc_schema trigger (work-k5fk.8,
--- trailer.sql T5); all six have a COMMENT starting 'encrypted'.
+-- CHECK (app.all_ciphertext(col)) instead. Of the eight jsonb columns in the map,
+-- the seven jsonb-envelope ones carry the t_jsonb_envelope trigger (brain_activity.input
+-- and output since work-k5fk.9, OD-1) and ai_memory.doc (jsonb-leaves) the structural
+-- t_doc_schema trigger (work-k5fk.8, trailer.sql T5); all eight have a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
          OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
@@ -210,6 +212,30 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
+
+-- work-k5fk.9 (D2): a 1-based ordinal — a message's seq and its conversation's next_seq, the last seen seq,
+-- an attempt's round, a result's or an offer's iteration, a draft's version. Not milestone.ordinal (0 = paused).
+-- Prisma reads it as Int, like intensity.
+CREATE DOMAIN ordinal_no AS integer CHECK (VALUE >= 1);
+COMMENT ON DOMAIN ordinal_no IS 'A 1-based ordinal: 1, 2, 3 … (message.seq, conversation.next_seq, conversation_read_state.last_seen_seq, empathy_attempt.round, reconciler_result.iteration, context_share_offer.iteration, draft.version).';
+
+-- work-k5fk.9 (D3): the id of the KMS key (the KEK) that wrapped a DEK (session_key, participant_key, user_key).
+-- No format is fixed yet (nothing writes these tables before W13), so only its bounds: 1..2048 characters (an
+-- AWS KMS key ARN or alias fits) with no whitespace or control character. There is deliberately no domain for
+-- wrapped_key: its format is W13's.
+CREATE DOMAIN kek_id AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 2048 AND VALUE COLLATE "C" !~ '[[:space:][:cntrl:]]');
+COMMENT ON DOMAIN kek_id IS 'The id of the KMS key (the KEK) that wrapped a data key: 1-2048 characters, no whitespace or control character. No format is fixed before W13.';
+
+-- work-k5fk.9 (D1): a person's name as a person typed it, or a sign-in provider sent it: "user".first_name and
+-- last_name, user_contact.nickname. At most 100 characters and never blank; NULL, not '', is "no name" (the app
+-- trims, and clamps a longer Clerk name to 100: utils/person-name.ts). participant.display_name snapshots
+-- "user".name — two of these joined — so it carries its own bound of 201 instead.
+-- "Not blank" is one set on both sides (review r1 F9, r2 R2-4): Unicode White_Space — pg_c_utf8's [[:space:]] here,
+-- \p{White_Space} in utils/person-name.ts (not JavaScript's trim(), which differs on U+0085 and U+FEFF).
+CREATE DOMAIN person_name AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 100 AND VALUE COLLATE pg_c_utf8 !~ '^[[:space:]]*$');
+COMMENT ON DOMAIN person_name IS 'A person''s name or a nickname: 1-100 characters, not blank. NULL, never '''', means none (the app trims and clamps: utils/person-name.ts).';
 
 -- work-k5fk.6: a milestone key (milestone.key, participant_milestone.milestone_key):
 -- a lower-case identifier such as feel_heard. A domain, not an enum: the keys
@@ -280,7 +306,7 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- jsonb documents (work-k5fk.8). The shapes, their writers and why each column
 -- is validated the way it is: docs/backend/data-model/jsonb-shapes-2026-11.md.
 --  * Every jsonb column keeps its jsonb_typeof CHECK (step 20).
---  * The five jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
+--  * The seven jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
 --    t_jsonb_envelope BEFORE trigger (trailer.sql T5): a sealed document is
 --    exactly {"$enc": <a v1 ciphertext>}. A trigger, not a CHECK: a CHECK
 --    refusal's DETAIL ("Failing row contains …") would echo the row — the
@@ -291,8 +317,10 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 --    of ai_memory.doc (its string leaves are encrypted; its keys, numbers and
 --    arrays are not) — are validated by a BEFORE trigger (trailer.sql T5)
 --    against app.json_schema, by the row's doc_schema_version.
---  * brain_activity.* stays at jsonb_typeof: telemetry, written by the job
---    only, read by the ops dashboard; its shape is each call site's.
+--  * brain_activity.metadata stays at jsonb_typeof: telemetry, written by the
+--    AI only, read by the ops dashboard; its shape is each call site's.
+--    brain_activity.input and output are jsonb envelopes (owner decision OD-1
+--    and its follow-up, work-k5fk.9).
 -- ----------------------------------------------------------------------------
 
 -- A JSON-schema version: 1, 2, … per schema name.
@@ -565,6 +593,9 @@ CREATE TYPE recommender_action AS ENUM ('PROCEED', 'OFFER_OPTIONAL', 'OFFER_SHAR
 COMMENT ON TYPE recommender_action IS 'The reconciler''s recommendation: proceed to the reveal, or offer the subject the option or a nudge to share context.';
 CREATE TYPE guidance_type AS ENUM ('challenge_assumptions', 'explore_breadth', 'explore_deeper_feelings');
 COMMENT ON TYPE guidance_type IS 'The refinement guidance the reconciler picked for the author, from the gap''s shape (generateAbstractGuidance in services/reconciler/analysis.ts).';
+-- work-k5fk.9 (Q4): the area the author is pointed at; the app maps each label to its phrase (reconciler/guidance-phrases.ts)
+CREATE TYPE guidance_area AS ENUM ('work_effort', 'connection_closeness', 'safety_security', 'heard_understood', 'respect_value', 'deeper_emotions');
+COMMENT ON TYPE guidance_area IS 'The coarse area the reconciler points the author at, from the feelings their attempt missed (generateAbstractGuidance); a code constant, never user content, so not encrypted (work-k5fk.9, Q4). The phrase shown is the app''s (GUIDANCE_AREA_PHRASES).';
 CREATE TYPE consent_target AS ENUM ('NEED', 'EMPATHY_ATTEMPT', 'PROPOSAL', 'SHARE_OFFER', 'REVIEW');
 COMMENT ON TYPE consent_target IS 'The kind of thing a consent row decides on; consent.target_kind is generated from which arc column is set.';
 CREATE TYPE consent_decision AS ENUM ('GRANTED', 'DENIED', 'REVOKED');
@@ -625,6 +656,9 @@ CREATE TYPE memory_source AS ENUM ('USER_APPROVED', 'USER_CREATED', 'USER_EDITED
 COMMENT ON TYPE memory_source IS 'How a user memory came to be: an AI suggestion the user approved, created by the user, or edited by the user.';
 CREATE TYPE device_platform AS ENUM ('ios', 'android', 'web');
 COMMENT ON TYPE device_platform IS 'The platform a user device registered from.';
+-- work-k5fk.9 (V1): who delivers to a push token; a new provider is a new label, not a token-format guess
+CREATE TYPE push_provider AS ENUM ('expo');
+COMMENT ON TYPE push_provider IS 'The push service a device''s token belongs to: expo (Expo push, today the only one). The token''s format is the provider''s; the app checks it (push.ts, Expo.isExpoPushToken), the database only bounds it (work-k5fk.9, V1).';
 CREATE TYPE wellbeing_feature AS ENUM ('meditation', 'gratitude', 'needs_assessment', 'people');
 COMMENT ON TYPE wellbeing_feature IS 'The wellbeing features that keep a feature_state document (shared/src/dto/feature-state.ts FEATURES).';
 CREATE TYPE activity_type AS ENUM ('LLM_CALL', 'EMBEDDING', 'RETRIEVAL', 'TOOL_USE');
@@ -650,8 +684,8 @@ CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     kind user_kind NOT NULL DEFAULT 'human',
     email email UNIQUE,
-    first_name text,
-    last_name text,
+    first_name person_name,
+    last_name person_name,
     deleted_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -700,8 +734,10 @@ GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
 -- Prisma's relation join key, participant (user_id, kind) -> user (id, kind) — measured: denied without kind)
 GRANT SELECT (id, kind, first_name, name) ON "user" TO ai_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON "user" TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the participant labels and the sessions search (name, email; kind and id:
+-- Prisma's relation join key from participant), tombstones (deleted_at).
+GRANT SELECT (id, kind, email, name, deleted_at) ON "user" TO ops_access;
 
 -- The AI principal (work-k5fk.3): exactly one row of kind ai (sql_user_one_ai,
 -- sql-only.sql), at a fixed version-7 id so code and fixtures name it without
@@ -781,7 +817,7 @@ GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_definer;
 CREATE TABLE user_contact (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     contact_user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    nickname text CHECK (char_length(nickname) <= 100 AND btrim(nickname) <> ''),
+    nickname person_name,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -793,7 +829,6 @@ COMMENT ON TABLE user_contact IS 'What one user calls another, like a phone''s c
 COMMENT ON COLUMN user_contact.user_id IS 'The owner of the entry: the user who chose the nickname, and the only one who reads it.';
 COMMENT ON COLUMN user_contact.contact_user_id IS 'The person the entry names.';
 COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (at most 100 characters, not blank; the invite name for a known person or PATCH /contacts/:userId/nickname); NULL clears it, and a cleared entry is authoritative (the app shows the display name, never an old invite name). Plain text, set by the owner.';
-COMMENT ON CONSTRAINT user_contact_nickname_check ON user_contact IS 'A nickname is at most 100 characters and never blank (whitespace only).';
 COMMENT ON CONSTRAINT user_contact_check ON user_contact IS 'Nobody is their own contact.';
 COMMENT ON INDEX user_contact_contact_user_id_idx IS 'The FK index of contact_user_id (the RESTRICT check on a user row).';
 -- mwf_app: the caller's own entries only — createSession records the invite name for a known person, PATCH
@@ -862,15 +897,17 @@ GRANT SELECT (id, status, updated_at) ON session TO worker_access;
 -- mwf_worker: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
 -- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
 GRANT DELETE ON session TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON session TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the session list, detail and filters.
+GRANT SELECT (id, status, created_at, updated_at) ON session TO ops_access;
 
 CREATE TABLE participant (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     user_id uuid7 NOT NULL,
     kind user_kind NOT NULL DEFAULT 'human',
     added_by_user_id uuid7,
-    display_name text,
+    -- work-k5fk.9 (D1): a snapshot of "user".name, which joins two person_name values: at most 100 + 1 + 100
+    display_name text CHECK (char_length(display_name) <= 201),
     joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     left_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -901,6 +938,7 @@ COMMENT ON CONSTRAINT participant_check ON participant IS 'Only a human can be t
 COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
 COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
 COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to the user''s first name, else user.name (v_participant, app.session_parties; review F7).';
+COMMENT ON CONSTRAINT participant_display_name_check ON participant IS 'At most 201 characters: a snapshot of "user".name, two person_name values (each at most 100) joined by a space (work-k5fk.9, D1).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
 -- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
@@ -923,8 +961,9 @@ GRANT SELECT (session_id, user_id, kind, left_at, joined_at, display_name) ON pa
 -- mwf_worker: stage4-closure closureInputsAsJob / stage4.ts agreeIfEveryoneWilling: the present humans the closure
 -- decides for
 GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON participant TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — labels, stages (v_current_stage) and the context route.
+GRANT SELECT (session_id, user_id, kind, display_name, joined_at) ON participant TO ops_access;
 
 CREATE TABLE live_session_pair (
     user_a uuid7 NOT NULL,
@@ -1016,10 +1055,10 @@ CREATE TABLE conversation (
     user_id uuid7 NOT NULL,
     kind conversation_kind NOT NULL DEFAULT 'MAIN',
     anchor_kind subchat_anchor,
-    anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
+    anchor_proposal_id uuid7,
     status conversation_status NOT NULL DEFAULT 'ACTIVE',
     resolved_at ts_ms,
-    next_seq integer NOT NULL DEFAULT 1 CHECK (next_seq >= 1),
+    next_seq ordinal_no NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1028,7 +1067,10 @@ CREATE TABLE conversation (
     CHECK (kind = 'SUBCHAT' OR anchor_proposal_id IS NULL),
     -- work-k5fk.3: the target of message's (conversation_id, session_id)
     UNIQUE (id, session_id),
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C1): a sub-chat refines a proposal of its own session; deleting the proposal nulls the anchor
+    -- alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (anchor_proposal_id, session_id) REFERENCES proposal (id, session_id) ON DELETE SET NULL (anchor_proposal_id)
 );
 CREATE INDEX ON conversation (session_id, user_id, kind, status);
 CREATE INDEX ON conversation (anchor_proposal_id);
@@ -1056,16 +1098,17 @@ GRANT SELECT (next_seq) ON conversation TO mwf_definer;
 GRANT UPDATE (next_seq) ON conversation TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
 GRANT DELETE ON conversation TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON conversation TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the user-turn count joins MAIN conversations.
+GRANT SELECT (id, session_id, user_id, kind) ON conversation TO ops_access;
 
 CREATE TABLE empathy_attempt (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL,
     author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    round integer NOT NULL DEFAULT 1,
-    supersedes_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
+    round ordinal_no NOT NULL DEFAULT 1,
+    supersedes_attempt_id uuid7,
     content ciphertext NOT NULL,
     status empathy_status NOT NULL DEFAULT 'HELD',
     status_version integer NOT NULL DEFAULT 0,
@@ -1085,13 +1128,28 @@ CREATE TABLE empathy_attempt (
     -- t_same_session); the UNIQUEs are what reviews, results, offers, drafts, consents and messages pin to
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, subject_user_id),
+    -- work-k5fk.9 (C2, C9): the whole direction — what a superseding round and a reconciler result pin to
+    UNIQUE (id, session_id, author_user_id, subject_user_id),
     FOREIGN KEY (session_id, author_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
-    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C2): a round supersedes a round of the same direction (same session, author and subject);
+    -- deleting it nulls the link alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (supersedes_attempt_id, session_id, author_user_id, subject_user_id)
+      REFERENCES empathy_attempt (id, session_id, author_user_id, subject_user_id) ON DELETE SET NULL (supersedes_attempt_id),
+    -- work-k5fk.9 (D4): the delivery group (delivery_status, delivered_at, seen_at) agrees with itself; the same three
+    -- CHECKs as context_share_offer's. Seen implies delivered: PENDING → SEEN directly stamps delivered_at too
+    -- (app.empathy_mark_delivery).
+    CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
+    CHECK (delivery_status = 'PENDING' OR delivered_at IS NOT NULL),
+    CHECK (delivery_status <> 'PENDING' OR (delivered_at IS NULL AND seen_at IS NULL))
 );
 CREATE INDEX ON empathy_attempt (session_id, subject_user_id, revealed_at);
 CREATE INDEX ON empathy_attempt (supersedes_attempt_id);
 -- + sql_attempt_one_live_per_direction (sql-only.sql)
 COMMENT ON TABLE empathy_attempt IS 'Stage 2: one participant''s statement of how they imagine the other feels, per direction and round; revealed to the subject once both are READY.';
+COMMENT ON CONSTRAINT empathy_attempt_check2 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): seen_at is set exactly when the item is SEEN.';
+COMMENT ON CONSTRAINT empathy_attempt_check3 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a DELIVERED or SEEN item has its delivered_at — seen implies delivered (PENDING straight to SEEN stamps both).';
+COMMENT ON CONSTRAINT empathy_attempt_check4 ON empathy_attempt IS 'Delivery group (work-k5fk.9, D4): a PENDING item has neither delivery stamp.';
 COMMENT ON COLUMN empathy_attempt.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN empathy_attempt.author_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, author_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN empathy_attempt.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
@@ -1131,7 +1189,7 @@ CREATE TABLE need (
     ai_confidence real NOT NULL,
     confirmed_at ts_ms,
     locked_at ts_ms,
-    superseded_by_need_id uuid7 REFERENCES need ON DELETE SET NULL,
+    superseded_by_need_id uuid7,
     deleted_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1143,7 +1201,11 @@ CREATE TABLE need (
     -- work-k5fk.3: what consent and need_share pin to (a share is its owner's, by key)
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, user_id),
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C3): a need is superseded only by its owner's own need of the same session; deleting the newer one
+    -- nulls the link alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (superseded_by_need_id, session_id, user_id) REFERENCES need (id, session_id, user_id)
+      ON DELETE SET NULL (superseded_by_need_id)
 );
 CREATE INDEX ON need (session_id, user_id);
 CREATE INDEX ON need (superseded_by_need_id);
@@ -1171,7 +1233,7 @@ GRANT DELETE ON need TO mwf_definer;
 
 CREATE TABLE message (
     conversation_id uuid7 NOT NULL,
-    seq integer NOT NULL CHECK (seq >= 1),
+    seq ordinal_no NOT NULL,
     session_id uuid7 NOT NULL,
     sender_user_id uuid7,
     role message_role NOT NULL,
@@ -1246,15 +1308,18 @@ GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, cont
   ON message TO ai_access;
 -- mwf_worker: session-retention: the latest message of a stale candidate (max(created_at) by session_id). Never content.
 GRANT SELECT (session_id, created_at) ON message TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON message TO ops_access;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it — never content
+-- (owner decision OD-1, work-k5fk.9: the transcript panel is gone; the dashboard counts turns and reads their keys).
+-- work-k5fk.9 (least privilege): exactly the columns its turn counts read (seq with conversation_id: the key a Prisma
+-- count selects).
+GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind) ON message TO ops_access;
 
 CREATE TABLE conversation_read_state (
     session_id uuid7 NOT NULL,
     user_id uuid7 NOT NULL,
     last_viewed_at ts_ms,
     last_seen_conversation_id uuid7,
-    last_seen_seq integer,
+    last_seen_seq ordinal_no,
     last_viewed_share_tab_at ts_ms,
     last_active_at ts_ms,
     archived_at ts_ms,
@@ -1298,8 +1363,9 @@ CREATE TABLE reconciler_result (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
     session_id uuid7 NOT NULL,
+    author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    iteration integer NOT NULL DEFAULT 1,
+    iteration ordinal_no NOT NULL DEFAULT 1,
     alignment_score integer NOT NULL,
     alignment_summary ciphertext NOT NULL,
     gap_summary ciphertext NOT NULL,
@@ -1326,16 +1392,21 @@ CREATE TABLE reconciler_result (
     CHECK (app.all_ciphertext(correctly_identified)),
     CHECK (app.all_ciphertext(missed_feelings)),
     CHECK (app.all_ciphertext(misattributions)),
-    -- work-k5fk.3: the result's subject is its attempt's subject, by key (the subject half of t_result_live_attempt)
+    -- work-k5fk.3: the result's subject is its attempt's subject, by key (the subject half of t_result_live_attempt);
+    -- work-k5fk.9 (C9): and its author the attempt's author, so the guidance cut from it names the right author
     UNIQUE (id, session_id),
-    UNIQUE (id, session_id, subject_user_id),
-    FOREIGN KEY (attempt_id, session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
+    UNIQUE (id, session_id, author_user_id, subject_user_id),
+    -- work-k5fk.9 (C10): what an offer's result key pins to (the offer cites a result of its own attempt)
+    UNIQUE (id, attempt_id),
+    FOREIGN KEY (attempt_id, session_id, author_user_id, subject_user_id)
+      REFERENCES empathy_attempt (id, session_id, author_user_id, subject_user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON reconciler_result (session_id, subject_user_id);
 -- + sql_result_one_current (sql-only.sql)
 COMMENT ON TABLE reconciler_result IS 'The reconciler''s gap analysis of one empathy attempt against its subject''s account; immutable, one current per attempt (superseded_at). Visible to the subject only.';
 COMMENT ON COLUMN reconciler_result.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
+COMMENT ON COLUMN reconciler_result.author_user_id IS 'The analysed attempt''s author (work-k5fk.9, C9): (attempt_id, session_id, author_user_id, subject_user_id) references empathy_attempt, so the guidance keyed to this result can only name that author. Never read by the subject''s policy.';
 COMMENT ON COLUMN reconciler_result.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN reconciler_result.iteration IS '1 for the first analysis of the attempt; +1 per re-analysis.';
 COMMENT ON COLUMN reconciler_result.alignment_score IS 'How well the attempt matches the subject''s account, 0 to 100.';
@@ -1360,7 +1431,7 @@ GRANT SELECT (id, attempt_id, subject_user_id, iteration, superseded_at) ON reco
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL).
 GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO ai_access;
 -- mwf_ai: persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
-GRANT INSERT (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary,
+GRANT INSERT (attempt_id, session_id, author_user_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary,
               gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
               recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
               suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO ai_access;
@@ -1379,7 +1450,7 @@ CREATE TABLE context_share_offer (
     result_id uuid7 NOT NULL REFERENCES reconciler_result ON DELETE CASCADE,
     session_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    iteration integer NOT NULL DEFAULT 1,
+    iteration ordinal_no NOT NULL DEFAULT 1,
     status share_offer_status NOT NULL DEFAULT 'PENDING',
     offer_message ciphertext,
     suggested_content ciphertext,
@@ -1400,15 +1471,25 @@ CREATE TABLE context_share_offer (
     -- §1.2 context_share_offer [P18a]
     CHECK ((status = 'ACCEPTED') = (shared_at IS NOT NULL)),
     CHECK ((status = 'DECLINED') = (declined_at IS NOT NULL)),
-    -- work-k5fk.3: the offer goes to its attempt's subject, about a result of the same session
+    -- work-k5fk.3: the offer goes to its attempt's subject; work-k5fk.9 (C10): about a result of that same attempt
+    -- (not another attempt's, nor another round's), so of the same session too
     UNIQUE (id, session_id),
+    -- work-k5fk.9 (C11): what a SHARE_CONTEXT draft pins to (its owner is the offer's subject)
+    UNIQUE (id, session_id, subject_user_id),
     FOREIGN KEY (attempt_id, session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
-    FOREIGN KEY (result_id, session_id) REFERENCES reconciler_result (id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (result_id, attempt_id) REFERENCES reconciler_result (id, attempt_id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (D4): the delivery group agrees with itself (the same three CHECKs as empathy_attempt's)
+    CHECK ((delivery_status = 'SEEN') = (seen_at IS NOT NULL)),
+    CHECK (delivery_status = 'PENDING' OR delivered_at IS NOT NULL),
+    CHECK (delivery_status <> 'PENDING' OR (delivered_at IS NULL AND seen_at IS NULL))
 );
 CREATE INDEX ON context_share_offer (session_id, subject_user_id, status);
 CREATE INDEX ON context_share_offer (result_id);
 COMMENT ON TABLE context_share_offer IS 'The suggestion to the subject of an attempt to share context with its author, and what happened to it; the shared text is delivered to the author as a message.';
+COMMENT ON CONSTRAINT context_share_offer_check2 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): seen_at is set exactly when the item is SEEN.';
+COMMENT ON CONSTRAINT context_share_offer_check3 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a DELIVERED or SEEN item has its delivered_at — seen implies delivered (PENDING straight to SEEN stamps both).';
+COMMENT ON CONSTRAINT context_share_offer_check4 ON context_share_offer IS 'Delivery group (work-k5fk.9, D4): a PENDING item has neither delivery stamp.';
 COMMENT ON COLUMN context_share_offer.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN context_share_offer.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN context_share_offer.delivery_notified_at IS 'When the subject who shared was shown that the shared context was delivered (GET notifications, Sent-tab updates).';
@@ -1460,8 +1541,9 @@ COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record
 GRANT SELECT ON milestone TO app_access;
 -- mwf_definer: reach_milestone refuses a self-assertable key (the participant's own, through mwf_app's INSERT).
 GRANT SELECT (key, self_assertable) ON milestone TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON milestone TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — stages (v_current_stage, stage-shim loadCurrentStages).
+GRANT SELECT (key, ordinal, stage_label) ON milestone TO ops_access;
 
 -- The seed (work-k5fk.6; was generated from gen/maps.ts MILESTONES). Keys are
 -- shared/src/dto/milestones.ts MILESTONE_KEYS in ordinal order, and the
@@ -1515,8 +1597,9 @@ GRANT DELETE ON participant_milestone TO mwf_definer;
 GRANT SELECT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO ai_access;
 -- mwf_worker: stage4-closure closureInputsAsJob: who has shared their choices (choices_shared)
 GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON participant_milestone TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — stages (v_current_stage, stage-shim loadMilestones).
+GRANT SELECT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO ops_access;
 
 CREATE TABLE ai_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1559,8 +1642,8 @@ GRANT UPDATE (doc) ON ai_memory TO ai_access;
 -- mwf_ai: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (id because a Prisma model read always
 -- selects the primary key — measured: denied without it)
 GRANT SELECT (id, session_id, user_id, kind, doc) ON ai_memory TO ai_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON ai_memory TO ops_access;
+-- mwf_ops: nothing (owner decision, work-k5fk.9 follow-up): the Neural Monitor no longer shows a participant's notable
+-- facts or summary — its memory is theirs, not the operator's.
 
 CREATE TABLE mood_reading (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1586,8 +1669,9 @@ GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
 -- mwf_definer: participant_presence (v_participant: the caller's own latest mood — never a co-participant's, review F2)
 GRANT SELECT (id, intensity, recorded_at) ON mood_reading TO mwf_definer;
 GRANT DELETE ON mood_reading TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON mood_reading TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the context route's latest intensity (memory intent).
+GRANT SELECT (id, session_id, user_id, intensity, recorded_at) ON mood_reading TO ops_access;
 
 CREATE TABLE regulation_event (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1633,6 +1717,8 @@ CREATE TABLE invitation (
       status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND accepted_by_user_id IS NOT NULL)),
     -- work-k5fk.3: the inviter is a participant of the invitation's session; drafts pin to (id, session_id)
     UNIQUE (id, session_id),
+    -- work-k5fk.9 (C11): what an EMPATHY draft written before the partner joins pins to (its owner is the inviter)
+    UNIQUE (id, session_id, invited_by_user_id),
     FOREIGN KEY (session_id, invited_by_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON invitation (session_id);
@@ -1671,7 +1757,7 @@ CREATE TABLE draft (
     invitation_id uuid7 REFERENCES invitation ON DELETE CASCADE,
     content ciphertext NOT NULL,
     ready_to_share boolean NOT NULL DEFAULT false,
-    version integer NOT NULL DEFAULT 1,
+    version ordinal_no NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     reopened_at ts_ms,
@@ -1689,12 +1775,17 @@ CREATE TABLE draft (
     -- first" after the partner joined, until the next draft write (the AI's
     -- proposal or the author's save) clears it.
     CHECK (reopened_at IS NULL OR kind = 'EMPATHY'),
-    -- work-k5fk.3: owner, about, attempt, share offer and invitation are all of the draft's one session
+    -- work-k5fk.3: owner, about, attempt, share offer and invitation are all of the draft's one session.
+    -- work-k5fk.9 (C11): and the owner is the arc's party: the subject of the attempt their feedback answers, the
+    -- subject of the offer they share on, the inviter of the invitation they write about; never about themselves.
+    CHECK (about_user_id <> user_id),
     FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, about_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
-    FOREIGN KEY (attempt_id, session_id) REFERENCES empathy_attempt (id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (share_offer_id, session_id) REFERENCES context_share_offer (id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (invitation_id, session_id) REFERENCES invitation (id, session_id) ON DELETE CASCADE
+    FOREIGN KEY (attempt_id, session_id, user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id) ON DELETE CASCADE,
+    FOREIGN KEY (share_offer_id, session_id, user_id) REFERENCES context_share_offer (id, session_id, subject_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (invitation_id, session_id, user_id) REFERENCES invitation (id, session_id, invited_by_user_id)
+      ON DELETE CASCADE
 );
 CREATE INDEX ON draft (session_id, about_user_id);
 CREATE INDEX ON draft (attempt_id);
@@ -1702,6 +1793,7 @@ CREATE INDEX ON draft (share_offer_id);
 CREATE INDEX ON draft (invitation_id);
 -- + sql_draft_one_per_point (sql-only.sql)
 COMMENT ON TABLE draft IS 'A participant''s working text for one sharing point (empathy statement, validation feedback, shared context) before any consent.';
+COMMENT ON CONSTRAINT draft_check3 ON draft IS 'Nobody writes an EMPATHY draft about themselves (work-k5fk.9, C11).';
 COMMENT ON COLUMN draft.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN draft.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN draft.about_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, about_user_id) references participant (session_id, user_id).';
@@ -1730,7 +1822,7 @@ GRANT INSERT (id, session_id, user_id, kind, about_user_id, content, ready_to_sh
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
-    key_id text NOT NULL,
+    key_id kek_id NOT NULL,
     wrapped_dek bytea NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
@@ -1748,7 +1840,7 @@ CREATE TABLE participant_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL,
     user_id uuid7 NOT NULL,
-    key_id text NOT NULL,
+    key_id kek_id NOT NULL,
     wrapped_dek bytea NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
@@ -1810,15 +1902,17 @@ CREATE TABLE reconciler_guidance (
     session_id uuid7 NOT NULL,
     author_user_id uuid7 NOT NULL,
     subject_user_id uuid7 NOT NULL,
-    area_hint ciphertext,
+    area_hint guidance_area,
     guidance_type guidance_type,
-    prompt_seed ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    -- work-k5fk.3: the subject is the result's (so the attempt's) subject; the author a participant of that session
+    -- work-k5fk.3: the subject is the result's (so the attempt's) subject; work-k5fk.9 (C9): and the author is the
+    -- result's (so the attempt's) author — the author's RLS (app_select) reads the row, so a guidance naming anyone
+    -- else would leak the hint to a third party in an N-party session.
     -- Prisma models an FK whose columns hold a unique column as 1:1 and then needs those exact columns UNIQUE (P1012)
-    UNIQUE (result_id, session_id, subject_user_id),
-    FOREIGN KEY (result_id, session_id, subject_user_id) REFERENCES reconciler_result (id, session_id, subject_user_id) ON DELETE CASCADE,
+    UNIQUE (result_id, session_id, author_user_id, subject_user_id),
+    FOREIGN KEY (result_id, session_id, author_user_id, subject_user_id)
+      REFERENCES reconciler_result (id, session_id, author_user_id, subject_user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, author_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, subject_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
@@ -1826,17 +1920,16 @@ CREATE INDEX ON reconciler_guidance (session_id, author_user_id);
 CREATE INDEX ON reconciler_guidance (session_id, subject_user_id);
 COMMENT ON TABLE reconciler_guidance IS 'The abstract hints from a reconciler result that the author may see (P3 D8a split from reconciler_result, which only the subject sees).';
 COMMENT ON COLUMN reconciler_guidance.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
-COMMENT ON COLUMN reconciler_guidance.author_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, author_user_id) references participant (session_id, user_id).';
+COMMENT ON COLUMN reconciler_guidance.author_user_id IS 'The result''s attempt''s author (work-k5fk.9, C9): (result_id, session_id, author_user_id, subject_user_id) references reconciler_result; the author''s policy reads the row.';
 COMMENT ON COLUMN reconciler_guidance.subject_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, subject_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a coarse area for the author to explore (one of six code phrases in generateAbstractGuidance).';
-COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
+COMMENT ON COLUMN reconciler_guidance.area_hint IS 'A coarse area for the author to explore (guidance_area; work-k5fk.9, Q4). The refinement prompt''s seed phrase is not stored: it is a function of guidance_type (reconciler/guidance-phrases.ts).';
 -- mwf_app: read only (the author's abstract hints); written by the job.
 GRANT SELECT ON reconciler_guidance TO app_access;
 -- mwf_ai: persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
-GRANT INSERT (result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed)
+GRANT INSERT (result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type)
   ON reconciler_guidance TO ai_access;
 -- mwf_ai: analysis.ts guidanceFor: the guidance of a cached result
-GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO ai_access;
+GRANT SELECT (result_id, area_hint, guidance_type) ON reconciler_guidance TO ai_access;
 
 CREATE TABLE consent (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1942,7 +2035,6 @@ CREATE TABLE need_disposition (
     user_id uuid7 NOT NULL,
     status need_disposition_status NOT NULL DEFAULT 'OPEN',
     is_current boolean NOT NULL DEFAULT false,
-    note ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1957,7 +2049,6 @@ COMMENT ON TABLE need_disposition IS 'How a participant dispositions a shared ne
 COMMENT ON COLUMN need_disposition.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN need_disposition.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
-COMMENT ON COLUMN need_disposition.note IS 'encrypted (participant): a note on the disposition; no writer sets it today.';
 -- mwf_app: the caller's Stage 4 walkthrough dispositions (stage4-walkthrough.ts), including un-declining (DELETE).
 GRANT SELECT ON need_disposition TO app_access;
 GRANT INSERT (session_id, user_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO app_access;
@@ -2147,8 +2238,8 @@ GRANT INSERT (session_id, kind, reason, summary, closed_by_user_id, check_in_at,
 CREATE TABLE follow_up (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
-    agreement_id uuid7 REFERENCES agreement ON DELETE CASCADE,
-    proposal_id uuid7 REFERENCES proposal ON DELETE CASCADE,
+    agreement_id uuid7,
+    proposal_id uuid7,
     type follow_up_type NOT NULL,
     scope follow_up_scope NOT NULL DEFAULT 'SHARED',
     owner_user_id uuid7,
@@ -2167,7 +2258,10 @@ CREATE TABLE follow_up (
     CHECK (num_nonnulls(agreement_id, proposal_id) <= 1),
     -- work-k5fk.3: the owner is a participant of the follow-up's session; check-ins pin to (id, session_id)
     UNIQUE (id, session_id),
-    FOREIGN KEY (session_id, owner_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, owner_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C4): the agreement or commitment checked on is of the follow-up's own session
+    FOREIGN KEY (agreement_id, session_id) REFERENCES agreement (id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (proposal_id, session_id) REFERENCES proposal (id, session_id) ON DELETE CASCADE
 );
 CREATE INDEX ON follow_up (session_id, status);
 CREATE INDEX ON follow_up (agreement_id);
@@ -2210,6 +2304,8 @@ CREATE TABLE follow_up_checkin (
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (follow_up_id, session_id, user_id),
+    -- work-k5fk.9 (C5): what follow_up_note's carried-into key pins to (a note goes into its owner's own check-in)
+    UNIQUE (id, session_id, user_id),
     -- §1.5 follow_up_checkin
     CHECK (jsonb_typeof(payload) = 'object'),
     -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
@@ -2238,11 +2334,15 @@ CREATE TABLE follow_up_note (
     user_id uuid7 NOT NULL,
     content ciphertext NOT NULL,
     carry_forward boolean NOT NULL DEFAULT false,
-    carried_into_checkin_id uuid7 REFERENCES follow_up_checkin ON DELETE SET NULL,
+    carried_into_checkin_id uuid7,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.9 (C5): a note is carried only into its owner's own check-in of the same session; deleting the
+    -- check-in nulls the link alone (PG15 SET NULL (col); step 20 pins the column list)
+    FOREIGN KEY (carried_into_checkin_id, session_id, user_id) REFERENCES follow_up_checkin (id, session_id, user_id)
+      ON DELETE SET NULL (carried_into_checkin_id)
 );
 CREATE INDEX ON follow_up_note (session_id, user_id, created_at);
 CREATE INDEX ON follow_up_note (carried_into_checkin_id);
@@ -2262,26 +2362,39 @@ GRANT DELETE ON follow_up_note TO mwf_definer;
 CREATE TABLE reminder (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    follow_up_id uuid7 REFERENCES follow_up ON DELETE CASCADE,
+    follow_up_id uuid7,
+    session_id uuid7,
     scope reminder_scope NOT NULL DEFAULT 'PRIVATE',
     remind_at ts_ms NOT NULL,
     cadence reminder_cadence,
     note ciphertext,
     status reminder_status NOT NULL DEFAULT 'SCHEDULED',
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- work-k5fk.9 (C8; review F14): a reminder on a follow-up is its owner's, in that follow-up's session, for every
+    -- role (the app_access RLS already says so for mwf_app). session_id is set exactly with follow_up_id: MATCH
+    -- SIMPLE skips a key with a NULL in it, so the CHECK is what makes both keys hold.
+    CHECK ((follow_up_id IS NULL) = (session_id IS NULL)),
+    FOREIGN KEY (follow_up_id, session_id) REFERENCES follow_up (id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON reminder (user_id, remind_at);
+CREATE INDEX ON reminder (session_id, user_id);
 CREATE INDEX ON reminder (follow_up_id);
 -- + sql_reminder_due (sql-only.sql)
 COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to a follow-up; the job delivers due ones.';
 COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
+COMMENT ON COLUMN reminder.session_id IS 'The session of the follow-up the reminder is on, NULL with follow_up_id (work-k5fk.9, C8): (follow_up_id, session_id) references follow_up and (session_id, user_id) participant, so the owner sits in that session.';
+COMMENT ON CONSTRAINT reminder_check ON reminder IS 'session_id is set exactly when follow_up_id is (work-k5fk.9, C8).';
+COMMENT ON INDEX reminder_session_id_user_id_idx IS 'The FK index of (session_id, user_id) (the participant cascade).';
 COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 1000); the app sends a fixed label today.';
 -- mwf_app: the caller's own reminder at check-in; delivery and the next instant are the worker's. DELETE:
 -- session-deletion.ts deleteSessionForUser — the leaver's own reminders on the session's follow-ups go with the leave
 -- (the caller's rows: the request moved off mwf_job in work-k5fk.10.5; RLS, §7 rows 9d–9g, binds user_id).
 GRANT SELECT ON reminder TO app_access;
-GRANT INSERT (user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at) ON reminder TO app_access;
+GRANT INSERT (user_id, follow_up_id, session_id, scope, remind_at, cadence, note, status, created_at, updated_at)
+  ON reminder TO app_access;
 GRANT DELETE ON reminder TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON reminder TO mwf_definer;
@@ -2299,7 +2412,7 @@ CREATE TABLE reflection (
     status reflection_status NOT NULL DEFAULT 'ACTIVE',
     summary ciphertext,
     summary_doc jsonb,
-    linked_session_id uuid7 REFERENCES session ON DELETE SET NULL,
+    linked_session_id uuid7,
     linked_at ts_ms,
     context_snapshot ciphertext,
     distilled_at ts_ms,
@@ -2307,14 +2420,22 @@ CREATE TABLE reflection (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.6 reflection, takeaway_link [P31]
-    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
+    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object'),
     -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
+    -- work-k5fk.9 (C6): the linked session is one the owner is a participant of, for every role (the app_access RLS
+    -- WITH CHECK says so for mwf_app only); deleting the participant (the session cascade) nulls the link alone
+    -- (PG15 SET NULL (col); step 20 pins the column list). An FK out of reflection, never into it.
+    FOREIGN KEY (linked_session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE SET NULL (linked_session_id),
+    -- review r1 F8: linked_at is the link's instant, so it is set exactly with linked_session_id; the writers set both,
+    -- and t_reflection_unlink (trailer.sql) clears it when the FK's SET NULL (col) clears the link
+    CHECK ((linked_session_id IS NULL) = (linked_at IS NULL))
 );
 CREATE INDEX ON reflection (user_id, updated_at);
 CREATE INDEX ON reflection (linked_session_id);
 CREATE INDEX ON reflection (user_id, theme);
 COMMENT ON TABLE reflection IS 'A private Inner Work reflection thread, outside any session (user-scoped); optionally linked to a session.';
-COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way.';
+COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way. One its owner is a participant of: (linked_session_id, user_id) references participant (session_id, user_id).';
+COMMENT ON CONSTRAINT reflection_check ON reflection IS 'linked_at is set exactly when linked_session_id is: the instant of the link (review r1 F8).';
 COMMENT ON COLUMN reflection.distilled_at IS 'When takeaways were last distilled from the thread.';
 COMMENT ON COLUMN reflection.theme IS 'Free LLM text ("a single word or short phrase", e.g. anxiety), not a taxonomy; v_reflection_theme groups by the exact string.';
 COMMENT ON COLUMN reflection.title IS 'encrypted (user): the reflection''s title, typed (max 200) or AI-generated (3-6 words).';
@@ -2330,8 +2451,9 @@ GRANT UPDATE (title, summary, theme, status, linked_session_id, linked_at, conte
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (id, user_id) ON reflection TO mwf_definer;
 GRANT DELETE ON reflection TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON reflection TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the inner-work list, detail and filters (never the title).
+GRANT SELECT (id, user_id, status, created_at, updated_at) ON reflection TO ops_access;
 
 CREATE TABLE reflection_message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2346,8 +2468,9 @@ COMMENT ON COLUMN reflection_message.content IS 'encrypted (user): the line''s t
 -- mwf_app: the turns of the caller's reflection (both the user's and the AI reply, written on the request path). Append-only.
 GRANT SELECT ON reflection_message TO app_access;
 GRANT INSERT (reflection_id, role, content, created_at) ON reflection_message TO app_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON reflection_message TO ops_access;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts) counts a reflection's turns — never content (owner decision
+-- OD-1, work-k5fk.9).
+GRANT SELECT (id, reflection_id, role) ON reflection_message TO ops_access;
 
 CREATE TABLE takeaway (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2393,32 +2516,42 @@ GRANT DELETE ON takeaway_link TO app_access;
 CREATE TABLE user_device (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    push_token text,
+    push_token text CHECK (char_length(push_token) BETWEEN 1 AND 512),
+    push_provider push_provider,
     platform device_platform,
     biometric_enabled boolean NOT NULL DEFAULT false,
     biometric_enrolled_at ts_ms,
     last_seen_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- work-k5fk.9 (V1): a token always names its provider, and a cleared token clears it
+    CHECK ((push_token IS NULL) = (push_provider IS NULL))
 );
 CREATE INDEX ON user_device (user_id);
 -- + sql_user_device_token (sql-only.sql)
 COMMENT ON TABLE user_device IS 'A device a user registered: its push token and biometric enrolment.';
-COMMENT ON COLUMN user_device.push_token IS 'The Expo push token of this install; NULL until registered.';
+COMMENT ON COLUMN user_device.push_token IS 'The push token of this install, in its provider''s format (push_provider); NULL until registered or once cleared. At most 512 characters; no format CHECK (the app validates it for its provider).';
+COMMENT ON COLUMN user_device.push_provider IS 'The push service push_token belongs to (work-k5fk.9, V1); set exactly when push_token is.';
+COMMENT ON CONSTRAINT user_device_push_token_check ON user_device IS 'A push token is 1-512 characters (work-k5fk.9, V1).';
+COMMENT ON CONSTRAINT user_device_check ON user_device IS 'A push token and its provider are set and cleared together (work-k5fk.9, V1).';
 -- mwf_app: the caller's push token registration / clearing and biometric setting (user-settings.ts); other users' tokens are
 -- read by the job (push.ts).
 GRANT SELECT ON user_device TO app_access;
-GRANT INSERT (user_id, push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, created_at, updated_at)
+GRANT INSERT (user_id, push_token, push_provider, platform, last_seen_at, biometric_enabled, biometric_enrolled_at,
+              created_at, updated_at)
   ON user_device TO app_access;
-GRANT UPDATE (push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at) ON user_device TO app_access;
+GRANT UPDATE (push_token, push_provider, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at)
+  ON user_device TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (user_id) ON user_device TO mwf_definer;
 GRANT DELETE ON user_device TO mwf_definer;
 -- mwf_worker: push.ts sendPushNotification (notification delivery): the recipient's devices — another user than the
--- caller, so the worker reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
-GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO worker_access;
--- mwf_worker: push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
-GRANT UPDATE (push_token) ON user_device TO worker_access;
+-- caller, so the worker reads them (user_device RLS is user_id = me); newest device first (last_seen_at); Expo's only
+-- (push_provider)
+GRANT SELECT (user_id, push_token, push_provider, last_seen_at) ON user_device TO worker_access;
+-- mwf_worker: push.ts: a token Expo reports as unregistered is cleared with its provider (WHERE user_id = … AND push_token = …)
+GRANT UPDATE (push_token, push_provider) ON user_device TO worker_access;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
@@ -2449,19 +2582,22 @@ GRANT DELETE ON user_preferences TO mwf_definer;
 CREATE TABLE user_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    session_id uuid7 REFERENCES session ON DELETE CASCADE,
+    session_id uuid7,
     content ciphertext NOT NULL,
     category memory_category NOT NULL,
     status memory_status NOT NULL DEFAULT 'ACTIVE',
     source memory_source NOT NULL DEFAULT 'USER_APPROVED',
     suggested_text ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- work-k5fk.9 (C7): a memory scoped to a session is scoped to one its owner is a participant of
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
 );
 CREATE INDEX ON user_memory (user_id, status);
 CREATE INDEX ON user_memory (session_id);
 COMMENT ON TABLE user_memory IS '"Things to always remember": standing instructions the user approved or wrote, optionally scoped to a session.';
-COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies everywhere; set for one scoped to a session.';
+COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies everywhere; set for one scoped to a session its owner is a participant of ((session_id, user_id) references participant).';
 COMMENT ON COLUMN user_memory.content IS 'encrypted (user): the standing instruction (2 to 500 characters).';
 COMMENT ON COLUMN user_memory.suggested_text IS 'encrypted (user): the AI''s original text when the user edited it before approving, or the pre-edit text.';
 -- mwf_app: the caller's memories (controllers/memories.ts, memory-service.ts), including deleting one.
@@ -2501,7 +2637,7 @@ GRANT DELETE ON feature_state TO mwf_definer;
 CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    key_id text NOT NULL,
+    key_id kek_id NOT NULL,
     wrapped_dek bytea NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
@@ -2530,7 +2666,6 @@ CREATE TABLE brain_activity (
     input jsonb,
     output jsonb,
     metadata jsonb,
-    structured_output jsonb,
     token_count_input integer NOT NULL DEFAULT 0,
     token_count_output integer NOT NULL DEFAULT 0,
     duration_ms integer NOT NULL DEFAULT 0,
@@ -2541,10 +2676,10 @@ CREATE TABLE brain_activity (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.8 brain_activity [P28c]
-    CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
-    CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
+    -- input / output are jsonb envelopes, always objects (the t_jsonb_envelope trigger refuses anything else; review r1 F6)
+    CHECK (input IS NULL OR jsonb_typeof(input) = 'object'),
+    CHECK (output IS NULL OR jsonb_typeof(output) = 'object'),
     CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
-    CHECK (structured_output IS NULL OR jsonb_typeof(structured_output) IN ('object', 'array')),
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
     FOREIGN KEY (session_id, participant_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
@@ -2559,6 +2694,8 @@ COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retri
 COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, participant_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn.';
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
+COMMENT ON COLUMN brain_activity.input IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: what the call was given — sizes and options, a retrieval''s search queries and detected references; the same key as output (owner decision, work-k5fk.9 follow-up). Timings, tokens, cost, status and call type are plain columns.';
+COMMENT ON COLUMN brain_activity.output IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: the call''s outcome — the model''s text and stop reason, a retrieval''s matches; the participant key when attributed, the session key for a call over both parties, the user key for a reflection''s (owner decision OD-1, work-k5fk.9). Nothing on the ops path reads it: mwf_ops holds no grant on it, and the key never enters the database.';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
@@ -2575,12 +2712,15 @@ GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_
 -- pipeline trace into its metadata (metadata holds cache/tool/trace telemetry, never a prompt). Never input / output.
 GRANT SELECT (id, session_id, turn_id, call_type, metadata, created_at) ON brain_activity TO ai_access;
 -- mwf_ai: completeActivity / failActivity: the outcome of the call
-GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
+GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, metadata)
   ON brain_activity TO ai_access;
 -- mwf_worker: data-retention: the purge and delete windows (WHERE created_at < …, session_id IS NULL); the short-retention
--- purge sets the four blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
+-- purge sets the three blobs NULL (spec §1.8); records past the delete window go. Never a blob read.
 GRANT SELECT (session_id, created_at) ON brain_activity TO worker_access;
-GRANT UPDATE (input, output, metadata, structured_output) ON brain_activity TO worker_access;
+GRANT UPDATE (input, output, metadata) ON brain_activity TO worker_access;
 GRANT DELETE ON brain_activity TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON brain_activity TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the telemetry and its metadata; never input or output.
+GRANT SELECT (id, session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, metadata,
+              token_count_input, token_count_output, duration_ms, cost, status, created_at, completed_at, updated_at)
+  ON brain_activity TO ops_access;

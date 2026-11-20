@@ -60,7 +60,27 @@ describe production.
   FINDING, work-k5fk.10.33) unattributed ones.
 - `worker_access` — `worker_session` (scoped) on the Stage 4 closure's tables and on the follow-ups it
   schedules; `worker_all` elsewhere (retention, due follow-ups / reminders, push tokens cross sessions).
-- `ops_access` — `ops_read`: SELECT on every row of its tables. `mwf_definer` — `definer_all`.
+- `ops_access` — `ops_read`: SELECT on every row of its tables, but only on column lists: exactly the columns the
+  Neural Monitor's routes read, and never a ciphertext or jsonb-envelope column (work-k5fk.9, least privilege;
+  `app-grants.target.test.ts` pins the lists). So never a conversation line: its grants on
+  `message` and `reflection_message` leave out `content` (owner decision OD-1, work-k5fk.9), so the Neural
+  Monitor counts turns and shows telemetry, with no transcript panel. `brain_activity.input` and `.output` (a
+  call's input, such as a retrieval's search queries, and the model's text) are jsonb envelopes sealed by the AI's
+  writer, and `ops_access` holds no grant on either; the telemetry (timings, tokens, cost, status, call type) and
+  the metadata stay readable in plain columns. So `metadata` holds telemetry only (review r1, work-k5fk.9): the
+  turn trace is sanitized at its writer (`types/turn-trace.ts` `sanitizeTurnTrace`: known step names, template
+  results, a dispatch tag's kind, no crisis classification), and an error is stored as its class or code, never its
+  message. The `/brain/*` responses carry
+  telemetry and structure only, never text a user or the AI wrote ("close all", work-k5fk.9): an activity has no
+  input or output, the prompt inspector gives tokens, cost, timing and the context window, a
+  reflection's title is neither returned nor searched, and the context endpoint (`/brain/sessions/:id/context`)
+  returns a `MonitorContext` per participant — stage, milestones, turn count, latest mood intensity and the memory
+  intent — read on `mwf_ops` from its granted columns; it never runs the app's decrypting client or the context
+  assembler (review r1 F3; `routes/__tests__/brain-auth.test.ts` pins the imports). No memory at all: `ops_access`
+  has no grant or policy on `ai_memory` (the owner's follow-up, work-k5fk.9). The live audit stream
+  (Ably, `ENABLE_AUDIT_STREAM`) is outside the database and carries telemetry only: `brainService.broadcastUpdate`
+  drops input, output and metadata, and `broadcastMessage` drops the message text. `mwf_definer` —
+  `definer_all`.
 - The database's ACL: PUBLIC has no CONNECT / TEMPORARY; the active capabilities have CONNECT.
 - Tests: `retire-mwf-job.target.test.ts` ("row-level security (9c)") and `job-path.target.test.ts`
   pin the scoped reads, the owner reading nothing and the dashboard's reach;

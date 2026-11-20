@@ -28,6 +28,7 @@ import { identityBindingEnabled } from '../lib/prisma-identity';
 import { updateContext } from '../lib/request-context';
 import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import { toPersonName } from '../utils/person-name';
 
 // ============================================================================
 // Types
@@ -362,10 +363,12 @@ async function handleClerkAuth(req: Request, res: Response, next: NextFunction, 
         // `name` is GENERATED from first/last (spec §1.7): never written. Profile
         // data is copied from Clerk once, at first login; there are no Clerk
         // webhooks, so later Clerk-side changes are not synced.
+        // OD-4 (work-k5fk.9): a Clerk name is trimmed and clamped to the person_name bound (100), or NULL —
+        // a long or blank name never refuses the sign-in.
         userId = await createFirstLoginUser(clerkUserId, {
           email,
-          firstName: clerkUser?.firstName || null,
-          lastName: clerkUser?.lastName || null,
+          firstName: toPersonName(clerkUser?.firstName),
+          lastName: toPersonName(clerkUser?.lastName),
         });
       }
     }

@@ -37,7 +37,8 @@ import {
   updatePrivacyPreferencesRequestSchema,
 } from '@meet-without-fear/shared';
 import { deleteAccountWithNotifications } from '../services/account-deletion';
-import { sendTestPushNotification } from '../services/push';
+import { isValidPushToken, sendTestPushNotification } from '../services/push';
+import { toPersonName } from '../utils/person-name';
 import {
   clearPushTokens,
   deviceSummary,
@@ -122,13 +123,15 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response): P
   // Build update data - only include fields that were provided. `name` is
   // generated from the first and last names (spec §1.7); a `name` alone is
   // stored as the first name with no last name (it then reads back whole).
+  // Each name is stored as the person_name domain holds it (work-k5fk.9, D1): trimmed, and NULL rather than
+  // blank — the contract lets lastName be "", which clears it.
   const updateData: { firstName?: string | null; lastName?: string | null } = {};
   if (name !== undefined && firstName === undefined && lastName === undefined) {
-    updateData.firstName = name;
+    updateData.firstName = toPersonName(name);
     updateData.lastName = null;
   }
-  if (firstName !== undefined) updateData.firstName = firstName;
-  if (lastName !== undefined) updateData.lastName = lastName;
+  if (firstName !== undefined) updateData.firstName = toPersonName(firstName);
+  if (lastName !== undefined) updateData.lastName = toPersonName(lastName);
 
   // Update user profile
   const updatedUser = await prisma.user.update({
@@ -162,6 +165,11 @@ export const updatePushToken = asyncHandler(async (req: Request, res: Response):
   }
 
   const { pushToken, platform } = parseResult.data;
+  // Every token the app registers is an Expo push token (user_device.push_provider = 'expo'): refuse anything else
+  // here, as a 400, rather than store it (review r1 F7, work-k5fk.9).
+  if (!isValidPushToken(pushToken)) {
+    throw new ValidationError('Invalid push token data', { errors: { pushToken: ['Not an Expo push token'] } });
+  }
 
   // Register this device's token (user_device; one row per device)
   await registerPushToken(user.id, pushToken, platform);

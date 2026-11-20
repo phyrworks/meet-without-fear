@@ -114,8 +114,9 @@ export async function registerPushToken(
   pushToken: string,
   platform?: 'ios' | 'android' | 'web',
 ): Promise<void> {
-  await prisma.$executeRaw`INSERT INTO user_device (user_id, push_token, platform, last_seen_at)
-    VALUES (${userId}::uuid, ${pushToken}, ${platform ?? null}::device_platform, now())
+  // Every token the app registers is an Expo push token (push_provider, work-k5fk.9 V1).
+  await prisma.$executeRaw`INSERT INTO user_device (user_id, push_token, push_provider, platform, last_seen_at)
+    VALUES (${userId}::uuid, ${pushToken}, 'expo'::push_provider, ${platform ?? null}::device_platform, now())
     ON CONFLICT (user_id, push_token) WHERE push_token IS NOT NULL
     DO UPDATE SET platform = coalesce(EXCLUDED.platform, user_device.platform), last_seen_at = now()`;
 }
@@ -124,7 +125,7 @@ export async function registerPushToken(
 export async function clearPushTokens(userId: string, pushToken?: string): Promise<void> {
   await prisma.userDevice.updateMany({
     where: { userId, pushToken: pushToken ?? { not: null } },
-    data: { pushToken: null },
+    data: { pushToken: null, pushProvider: null },
   });
 }
 
@@ -151,14 +152,15 @@ export async function setBiometric(userId: string, enabled: boolean): Promise<De
  */
 export async function pushTokensAsWorker(userId: string): Promise<string[]> {
   const rows = await getWorkerPrisma().$queryRaw<Array<{ push_token: string }>>`SELECT push_token FROM user_device
-    WHERE user_id = ${userId}::uuid AND push_token IS NOT NULL ORDER BY last_seen_at DESC NULLS LAST, push_token`;
+    WHERE user_id = ${userId}::uuid AND push_token IS NOT NULL AND push_provider = 'expo'
+    ORDER BY last_seen_at DESC NULLS LAST, push_token`;
   return rows.map(r => r.push_token);
 }
 
 /** THE WORKER clears a token Expo reports as unregistered. */
 export async function clearPushTokenAsWorker(userId: string, pushToken: string): Promise<void> {
-  await getWorkerPrisma()
-    .$executeRaw`UPDATE user_device SET push_token = NULL WHERE user_id = ${userId}::uuid AND push_token = ${pushToken}`;
+  await getWorkerPrisma().$executeRaw`UPDATE user_device SET push_token = NULL, push_provider = NULL
+      WHERE user_id = ${userId}::uuid AND push_token = ${pushToken}`;
 }
 
 // ============================================================================

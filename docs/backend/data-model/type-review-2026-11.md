@@ -1,7 +1,7 @@
 ---
 title: Type review, November 2026
 description: Decision log for the owner's 2026-11-10 DDL review (work-gevt). Covers every text, text[], *_type, *_kind and *_label column of the target shape, the domains, and what is left open.
-updated: "2026-11-10"
+updated: "2026-11-19"
 ---
 # Type review, November 2026 (work-gevt)
 
@@ -188,9 +188,30 @@ Audited and clean: `coalesce(<ts_ms col>, ${date})` (`empathy-store.ts:383,386`)
 | Q2 | Doc-only references to a constraint name: is updating the prose (as done) enough, or should a doc mention keep a name? | Prose updated; names dropped |
 | Q3 | `ciphertext` refuses plaintext starting with `enc:` that is not an envelope. In keyless dev/test only, a user who types `enc:v1:a:b:c` gets a domain error, where the app with a key would encrypt it | Accept: dev/test only |
 | Q4 | `reconciler_guidance.area_hint` / `prompt_seed` are code constants (6 / 3 phrases) but encrypted by R46. Un-encrypt them and make them enums? | Enum them. They carry no user content by construction |
+| D1 | `person_name` domain (1–100 characters, not blank: no value made only of Unicode White_Space) on `user.first_name`, `last_name` and `user_contact.nickname` (replacing its CHECK); `participant.display_name` at most 201 (a snapshot of two names). The app trims names and stores NULL for a blank one (PATCH /auth/me `lastName: ""`); a Clerk name at first sign-in is clamped to 100 (OD-4: never refuse the sign-in; `utils/person-name.ts`); the backend `inviteName` is bounded at 101 (mobile's 50 + space + 50) | Q6 |
+| V1 | `user_device.push_provider` (enum `push_provider`, `'expo'`), set exactly when `push_token` is; `push_token` at most 512 characters, with no format CHECK (the app checks Expo's format). The worker reads Expo's tokens only | — |
+| C8 | `reminder.session_id` (uuid7, set exactly with `follow_up_id`): `(follow_up_id, session_id)` → `follow_up` and `(session_id, user_id)` → `participant`, both CASCADE — a reminder points only at a follow-up of a session its owner is in, for every role (review F14). `UUID7_COLUMNS` 157 | — |
+| OD-1 | `ops_access` loses `message.content` and `reflection_message.content` (column grants; the Neural Monitor's transcript panel is gone). `brain_activity.output` and, by the owner's follow-up, `.input` are jsonb envelopes in `SENSITIVE_FIELD_MAP` (`JSONB_ENVELOPES` 7), sealed by the AI's writer and opened in the app. The follow-up also takes `ai_memory` from `ops_access` and makes the Ably audit stream telemetry only | TS-13 flag |
+| OD-2 | Kept `t_consent_owner`: a BEFORE trigger fires before the RI check, so keys beside it would buy nothing, and its refusal carries no ids (N-4) | — |
+| OD-3 | Kept `follow_up_checkin.payload` as the one documented jsonb exception (`jsonb-shapes-2026-11.md` §6); normalising it is work-k5fk.27 | — |
 | Q5 | `participant.display_name`: a snapshot that goes stale on a profile rename. Two creators leave it NULL, and `v_co_participant` does not fall back to `user.name` the way `v_participant` does | Decide whether a rename should propagate; fix the NULL writers |
 | Q6 | Name lengths: the backend `inviteName` schema has no max (the shared contract says 100; mobile sends up to 101). firstName is 50 in zod but 100 through the lone-`name` path, and unbounded from Clerk | Align the backend zod with the shared contracts, then add `≤ 100` CHECKs on `first_name`, `last_name`, `nickname`, `display_name` |
 | Q7 | `reflection.theme` is free text but grouped by exact string. A taxonomy (enum or lookup table) would need the prompt to emit one | Leave as is until the product wants themes |
 | Q8 | `context_share_offer.subject_participant_id`, `reconciler_guidance.*_participant_id` and `agreement.session_id` are copies with no trigger | Add composite FKs or triggers like `t_result_live_attempt`, or drop the copies where RLS allows |
 | Q9 | `need_disposition.note` has no writer | Drop it, or wire it |
 | Q10 | The spec says "3-5 word" `topic_frame`; the prompt says ≤ 20 words | Spec text is stale; fixing it is a doc change |
+
+## 9. Resolved by the step-10 sweep (work-k5fk.9, 2026-11-19)
+
+Branch `phoenix/sweep-10`, bead work-k5fk.9 (owner and orchestrator decisions of 2026-11-18).
+
+| Item | What changed | Resolves |
+|---|---|---|
+| D2 | `ordinal_no` domain (`integer`, `>= 1`) on `message.seq`, `conversation.next_seq`, `conversation_read_state.last_seen_seq`, `empathy_attempt.round`, `reconciler_result.iteration`, `context_share_offer.iteration`, `draft.version` | — |
+| D3 | `kek_id` domain (1–2048 characters, no whitespace or control) on the three `key_id` columns. Still no `wrapped_dek` domain: W13 fixes its format | §4 |
+| D4 | The same three delivery-group CHECKs on `empathy_attempt` and `context_share_offer`: `seen_at` exactly when SEEN, `delivered_at` when DELIVERED or SEEN (seen implies delivered; `app.empathy_mark_delivery` stamps both when a round goes straight from PENDING to SEEN), neither when PENDING | — |
+| C1, C2, C4–C7, C10, C11 | Composite FKs: a sub-chat's proposal, a superseded round, a follow-up's agreement or proposal, a carried note's check-in, a reflection's linked session (with `linked_at` set exactly with the link: a CHECK, and `t_reflection_unlink` clears it when the key nulls the link), a session-scoped memory, an offer's result, and each draft arm are of the same session and, where the rule says so, the same person | Q8 (the copies were already pinned by key in work-k5fk.3) |
+| C3, C9 | `need.superseded_by_need_id` pins the owner's own need (the edit applier writes the scalar, no nested connect). `reconciler_result.author_user_id` (new, NOT NULL) pins the attempt's author, and `reconciler_guidance` pins `(result_id, session_id, author_user_id, subject_user_id)`: the guidance, which its author's RLS reads, can name no third party | Q8 |
+| Q9, J1 | Dropped the two columns with no writer: `need_disposition.note` (the concept view keeps `NULL::text AS note`; `CIPHERTEXT_COLUMNS` 43) and `brain_activity.structured_output` (the concept view keeps `NULL::jsonb`) | Q9 |
+| Q4 | `reconciler_guidance.area_hint` is the enum `guidance_area` (six lower-case labels); `prompt_seed` is dropped, because it is a pure function of `guidance_type`. Both leave `SENSITIVE_FIELD_MAP` (`CIPHERTEXT_COLUMNS` 41). The app maps labels to the same phrases as before (`services/reconciler/guidance-phrases.ts`), so `refinementHint` on the wire is unchanged | Q4 |
+
