@@ -3,8 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { getOpsPrisma } from '../lib/prisma';
 import type { BrainActivity, Prisma, ReflectionStatus, SessionStatus } from '../generated/prisma/client';
 import { errorResponse, successResponse } from '../utils/response';
-import { assembleContextBundle, type ContextBundle } from '../services/context-assembler';
-import { determineMemoryIntent } from '../services/memory-intent';
+import { determineMemoryIntent, type MemoryIntentResult } from '../services/memory-intent';
 import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../utils/stage-resolver';
 import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
@@ -301,80 +300,20 @@ async function activityStats(
 // ============================================================================
 
 /**
- * What the monitor sees of an assembled context bundle: its structure — counts, roles, instants, stages, the
- * intent and the emotional numbers — and never a word a user or the AI wrote (owner decision, work-k5fk.9:
- * "close all"). Built field by field from the bundle (a whitelist), so a new bundle field stays out until it is
- * added here. Memory (facts, summaries, things to remember) is not represented at all.
+ * What the monitor sees of a participant's context (review r1 F3, work-k5fk.9): structure read on the ops
+ * connection from ops-granted columns only — the stage and the milestones reached, the turn count, the latest mood
+ * intensity, and the memory intent the AI would use (decided by code from those). It is NOT the AI's context bundle:
+ * that is assembled by the app's decrypting client (mwf_app, context-assembler), which an ops route must never use,
+ * and no field comes from a private or encrypted column (no partner nickname, no text).
  */
 interface MonitorContext {
-  conversationContext: {
-    recentTurns: Array<{ role: 'user' | 'assistant'; timestamp: string; chars: number }>;
-    turnCount: number;
-    sessionDurationMinutes: number;
-    timeSinceLastUserTurnMs?: number | null;
-  };
-  emotionalThread: {
-    initialIntensity: number | null;
-    currentIntensity: number | null;
-    trend: ContextBundle['emotionalThread']['trend'];
-    notableShifts: Array<{ turn: number; from: number; to: number }>;
-  };
-  priorThemes?: { themeCount: number; lastSessionDate: string | null; sessionCount: number };
-  innerThoughtsContext?: {
-    hasLinkedSession: boolean;
-    relevantReflections: Array<{ similarity: number; isFromLinkedSession: boolean }>;
-  };
-  stageContext: ContextBundle['stageContext'];
-  hasTopicFrame: boolean;
-  userName: string;
-  partnerName?: string;
-  intent: ContextBundle['intent'];
+  stage: number;
+  /** Milestone key → reachedAt ISO. */
+  milestones: Record<string, string>;
+  turnCount: number;
+  latestIntensity: number | null;
+  intent: MemoryIntentResult;
   assembledAt: string;
-}
-
-/** The monitor's view of a bundle (MonitorContext): structure only, no text. */
-function monitorContext(b: ContextBundle): MonitorContext {
-  const c = b.conversationContext;
-  return {
-    conversationContext: {
-      recentTurns: c.recentTurns.map(t => ({ role: t.role, timestamp: t.timestamp, chars: t.content.length })),
-      turnCount: c.turnCount,
-      sessionDurationMinutes: c.sessionDurationMinutes,
-      timeSinceLastUserTurnMs: c.timeSinceLastUserTurnMs,
-    },
-    emotionalThread: {
-      initialIntensity: b.emotionalThread.initialIntensity,
-      currentIntensity: b.emotionalThread.currentIntensity,
-      trend: b.emotionalThread.trend,
-      notableShifts: b.emotionalThread.notableShifts.map(s => ({ turn: s.turn, from: s.from, to: s.to })),
-    },
-    ...(b.priorThemes
-      ? {
-          priorThemes: {
-            themeCount: b.priorThemes.themes.length,
-            lastSessionDate: b.priorThemes.lastSessionDate,
-            sessionCount: b.priorThemes.sessionCount,
-          },
-        }
-      : {}),
-    ...(b.innerThoughtsContext
-      ? {
-          innerThoughtsContext: {
-            hasLinkedSession: b.innerThoughtsContext.hasLinkedSession,
-            relevantReflections: b.innerThoughtsContext.relevantReflections.map(r => ({
-              similarity: r.similarity,
-              isFromLinkedSession: r.isFromLinkedSession,
-            })),
-          },
-        }
-      : {}),
-    stageContext: b.stageContext,
-    hasTopicFrame: !!b.topicFrame,
-    userName: b.userName,
-    ...(b.partnerName !== undefined ? { partnerName: b.partnerName } : {}),
-    intent: b.intent,
-    assembledAt: b.assembledAt,
-  };
 }
 
 interface ContextUserData {
@@ -1039,14 +978,14 @@ router.get('/activity/:sessionId', async (req, res) => {
   }
 });
 
-// Get assembled context bundle for a session
-// This endpoint assembles the full context bundle for each user in the session,
-// allowing the Neural Monitor dashboard to display exactly what context the AI receives.
+// A session's per-participant context structure (MonitorContext), on mwf_ops only. This route must never gain an
+// identity or reach the app's decrypting client (review r1 F3, work-k5fk.9).
 router.get('/sessions/:sessionId/context', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const now = new Date().toISOString();
 
-    // First try as partner session: its human participants
+    // A partner session: its human participants
     const participants = await db().participant.findMany({
       where: { sessionId, kind: 'human' },
       orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
@@ -1054,102 +993,64 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
     });
 
     if (participants.length > 0) {
-      // Partner session - assemble context for every participant
-      const now = new Date().toISOString();
       const states = await loadStageStates(participants, db());
-
-      const contextResults = await Promise.all(
-        participants.map(
-          async (member): Promise<{ userId: string; userName: string; context: MonitorContext | null }> => {
-            const userId = member.userId;
-            const userName = member.displayName || member.user?.name || 'Unknown';
-            const stage = states.get(member)?.current.stage || 1;
-
-            try {
-              // Emotional intensity: the participant's latest mood reading
-              const latestReading = await db().moodReading.findFirst({
-                where: { sessionId, userId },
-                orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
-                select: { intensity: true },
-              });
-              const emotionalIntensity = latestReading?.intensity ?? 5; // Default moderate intensity
-
-              // Turn count: the participant's own chat turns
-              const turnCount = await db().message.count({
-                where: { sessionId, senderUserId: userId, role: 'USER', kind: 'CHAT' },
-              });
-
-              // Determine memory intent (required for context assembly)
-              const intent = determineMemoryIntent({
-                stage,
-                emotionalIntensity,
-                userMessage: '', // Empty - we're just assembling current context
-                turnCount,
-                isFirstTurnInSession: turnCount === 0,
-              });
-
-              // Assemble the context bundle — the app's single context builder, per
-              // participant (TODO(TS-16): under RLS it reads as that participant's
-              // identity; the dashboard has none, so it needs a definer path).
-              const context = monitorContext(await assembleContextBundle(sessionId, userId, stage, intent));
-
-              return { userId, userName, context };
-            } catch (error) {
-              logger.error(`[BrainRoutes] Failed to assemble context for user ${userId}:`, error);
-              // Return placeholder for failed user
-              return { userId, userName, context: null };
-            }
-          },
-        ),
+      const users = await Promise.all(
+        participants.map(async (member): Promise<ContextUserData> => {
+          const userId = member.userId;
+          const state = states.get(member);
+          const stage = state?.current.stage || 1;
+          const latestReading = await db().moodReading.findFirst({
+            where: { sessionId, userId },
+            orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
+            select: { intensity: true },
+          });
+          const turnCount = await db().message.count({
+            where: { sessionId, senderUserId: userId, role: 'USER', kind: 'CHAT' },
+          });
+          const intent = determineMemoryIntent({
+            stage,
+            emotionalIntensity: latestReading?.intensity ?? 5, // default: moderate
+            userMessage: '', // no message: the context at rest
+            turnCount,
+            isFirstTurnInSession: turnCount === 0,
+          });
+          return {
+            userId,
+            userName: member.displayName || member.user?.name || 'Unknown',
+            context: {
+              stage,
+              milestones: Object.fromEntries((state?.milestones ?? []).map(m => [m.key, m.reachedAt.toISOString()])),
+              turnCount,
+              latestIntensity: latestReading?.intensity ?? null,
+              intent,
+              assembledAt: now,
+            },
+          };
+        }),
       );
-
-      const response: ContextResponse = {
-        sessionId,
-        sessionType: 'partner',
-        assembledAt: now,
-        users: contextResults.filter((r): r is ContextUserData => r.context !== null),
-      };
-
+      const response: ContextResponse = { sessionId, sessionType: 'partner', assembledAt: now, users };
       return successResponse(res, response);
     }
 
-    // Try as a reflection (inner work)
+    // A reflection (inner work): its owner, with no session structure
     const innerWorkSession = await db().reflection.findUnique({
       where: { id: sessionId },
       select: { userId: true, user: { select: { name: true } } },
     });
-
     if (innerWorkSession) {
-      // Inner work sessions don't use assembleContextBundle (different flow)
-      // Return a simplified response indicating this is an inner thoughts session
       const response: ContextResponse = {
         sessionId,
         sessionType: 'inner_thoughts',
-        assembledAt: new Date().toISOString(),
+        assembledAt: now,
         users: [
           {
             userId: innerWorkSession.userId,
             userName: innerWorkSession.user.name || 'Unknown',
-            // For inner work sessions, create a minimal context bundle
-            // This could be enhanced later if needed
             context: {
-              conversationContext: {
-                recentTurns: [],
-                turnCount: 0,
-                sessionDurationMinutes: 0,
-              },
-              emotionalThread: {
-                initialIntensity: null,
-                currentIntensity: null,
-                trend: 'unknown',
-                notableShifts: [],
-              },
-              stageContext: {
-                stage: 0,
-                milestones: {},
-              },
-              hasTopicFrame: false,
-              userName: innerWorkSession.user.name || 'Unknown',
+              stage: 0,
+              milestones: {},
+              turnCount: 0,
+              latestIntensity: null,
               intent: {
                 intent: 'avoid_recall',
                 depth: 'none',
@@ -1159,16 +1060,14 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
                 threshold: 0.5,
                 maxCrossSession: 0,
               },
-              assembledAt: new Date().toISOString(),
+              assembledAt: now,
             },
           },
         ],
       };
-
       return successResponse(res, response);
     }
 
-    // Session not found
     return errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch session context:', error);

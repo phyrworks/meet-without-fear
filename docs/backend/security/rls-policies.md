@@ -73,10 +73,11 @@ describe production.
   message. The `/brain/*` responses carry
   telemetry and structure only, never text a user or the AI wrote ("close all", work-k5fk.9): an activity has no
   input or output, the prompt inspector gives tokens, cost, timing and the context window, a
-  reflection's title is neither returned nor searched, and the context endpoint returns a whitelisted
-  `MonitorContext` (turn roles, instants and lengths; emotional numbers; stage; intent) built in `routes/brain.ts`. No memory at all: `ops_access` has no grant or policy on `ai_memory` (the owner's
-  follow-up, work-k5fk.9), and the context endpoint (`/brain/sessions/:id/context`) cuts the notable facts,
-  session summary, global facts and "things to remember" out of the bundle it returns. The live audit stream
+  reflection's title is neither returned nor searched, and the context endpoint (`/brain/sessions/:id/context`)
+  returns a `MonitorContext` per participant — stage, milestones, turn count, latest mood intensity and the memory
+  intent — read on `mwf_ops` from its granted columns; it never runs the app's decrypting client or the context
+  assembler (review r1 F3; `routes/__tests__/brain-auth.test.ts` pins the imports). No memory at all: `ops_access`
+  has no grant or policy on `ai_memory` (the owner's follow-up, work-k5fk.9). The live audit stream
   (Ably, `ENABLE_AUDIT_STREAM`) is outside the database and carries telemetry only: `brainService.broadcastUpdate`
   drops input, output and metadata, and `broadcastMessage` drops the message text. `mwf_definer` —
   `definer_all`.

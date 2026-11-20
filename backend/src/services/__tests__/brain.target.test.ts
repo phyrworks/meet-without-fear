@@ -386,11 +386,19 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const context = await request(app).get(`/api/v1/brain/sessions/${ids.session}/context`);
     expect(context.status).toBe(200);
     expect(context.body.data).toMatchObject({ sessionId: ids.session, sessionType: 'partner' });
-    // work-k5fk.9 ("close all"): the monitor's context is structure — no turn's text, no memory
-    for (const u of context.body.data.users as Array<{ context: Record<string, unknown> }>) {
-      const turns = (u.context.conversationContext as { recentTurns: Array<Record<string, unknown>> }).recentTurns;
-      expect(turns.filter(t => 'content' in t)).toEqual([]);
-      expect(Object.keys(u.context).filter(k => /facts|summary|memories|topicFrame/i.test(k))).toEqual([]);
+    // work-k5fk.9 (review r1 F3): the monitor's context is structure from ops-granted columns, one entry per human
+    // participant, read on mwf_ops (before the fix it ran the app's client, found no identity and returned none)
+    const users = context.body.data.users as Array<{ userName: string; context: Record<string, unknown> }>;
+    expect(users.map(u => u.userName).sort()).toEqual(['Ada Lovelace', 'Bob Ross']);
+    for (const u of users) {
+      expect(Object.keys(u.context).sort()).toEqual([
+        'assembledAt',
+        'intent',
+        'latestIntensity',
+        'milestones',
+        'stage',
+        'turnCount',
+      ]);
     }
   });
 

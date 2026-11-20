@@ -86,3 +86,18 @@ describe('brain dashboard auth', () => {
     expect(verifyTokenMock).not.toHaveBeenCalled();
   });
 });
+
+// Review r1 F3 (work-k5fk.9): the monitor reads on mwf_ops only. It must not import the app's decrypting client, the
+// AI's or the worker's, or the context assembler that reads with the app's.
+describe('the monitor routes use the ops connection only', () => {
+  it('routes/brain.ts takes only getOpsPrisma from lib/prisma and never imports the context assembler', () => {
+    const fs = jest.requireActual<typeof import('fs')>('fs');
+    const path = jest.requireActual<typeof import('path')>('path');
+    const src: string = fs.readFileSync(path.join(__dirname, '..', 'brain.ts'), 'utf8');
+    const imports: string[] = src.match(/^import [^;]*;/gm) ?? [];
+    expect(imports.filter(i => i.includes("'../lib/prisma'"))).toEqual([
+      "import { getOpsPrisma } from '../lib/prisma';",
+    ]);
+    expect(imports.filter(i => /context-assembler/.test(i))).toEqual([]);
+  });
+});
