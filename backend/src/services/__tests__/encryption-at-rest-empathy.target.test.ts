@@ -19,7 +19,7 @@
 
 import { COVERAGE, expectSealed } from './encryption-at-rest';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, opsUrlFor, type TargetRun } from './target-roles';
+import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 import crypto from 'crypto';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
@@ -443,9 +443,9 @@ describeTarget(
       proven.add('session.topic_frame');
     });
 
-    // Owner decision OD-1 (work-k5fk.9): the ops dashboard keeps its telemetry but reads no content in the database —
-    // no message or reflection line, and the model's output only sealed, opened by the app's key.
-    it('OD-1: brain_activity.output is sealed and the ops dashboard opens it in the app; mwf_ops cannot read a line', async () => {
+    // Owner decision OD-1 and its follow-ups (work-k5fk.9): the model's output is sealed, and the ops dashboard reads
+    // no content at all — no message or reflection line, no call output (column grants: least privilege).
+    it('OD-1: brain_activity.output is sealed; mwf_ops cannot read it, nor a line', async () => {
       const { brainService } = await import('../brain-service');
       const activity = await asAi(() =>
         brainService.startActivity({
@@ -463,30 +463,29 @@ describeTarget(
       expect(JSON.stringify(sealed)).not.toContain('PROBE_OD1_OUTPUT');
       proven.add('brain_activity.output');
 
-      process.env.OPS_DATABASE_URL = opsUrlFor(run.fx.target, run.fx.database);
-      const { getOpsPrisma } = await import('../../lib/prisma');
-      const read = await getOpsPrisma().brainActivity.findUnique({
-        where: { id: activity.id },
-        select: { output: true },
-      });
-      expect(read?.output).toEqual({ text: 'PROBE_OD1_OUTPUT', stopReason: 'end' });
-
       const opsCode = async (sql: string) =>
         run.as('mwf_ops', null, sql).then(
           () => 'ok',
           (e: { code?: string }) => e.code,
         );
       expect({
-        messageKeys: await opsCode(`SELECT conversation_id, seq, role FROM message LIMIT 1`),
+        messageKeys: await opsCode(`SELECT conversation_id, role FROM message LIMIT 1`),
+        output: await opsCode(`SELECT output FROM brain_activity LIMIT 1`),
         messageContent: await opsCode(`SELECT content FROM message LIMIT 1`),
         reflectionTurns: await opsCode(`SELECT count(*) FROM reflection_message`),
         reflectionContent: await opsCode(`SELECT content FROM reflection_message LIMIT 1`),
-      }).toEqual({ messageKeys: 'ok', messageContent: '42501', reflectionTurns: 'ok', reflectionContent: '42501' });
+      }).toEqual({
+        messageKeys: 'ok',
+        output: '42501',
+        messageContent: '42501',
+        reflectionTurns: 'ok',
+        reflectionContent: '42501',
+      });
     });
 
-    // The owner's follow-up (work-k5fk.9): no memory, and a call's input text only sealed — in the database mwf_ops
-    // reads ciphertext; the telemetry columns stay plain.
-    it('ops cannot read memory or a call’s input text: ai_memory is refused, brain_activity.input is ciphertext', async () => {
+    // The owner's follow-ups (work-k5fk.9): no memory, and a call's input sealed and not granted to mwf_ops at all;
+    // the telemetry columns stay readable.
+    it('ops cannot read memory or a call’s input text: ai_memory and brain_activity.input are refused', async () => {
       const { brainService } = await import('../brain-service');
       const activity = await asAi(() =>
         brainService.startActivity({
@@ -499,14 +498,16 @@ describeTarget(
       expect(activity.id).not.toBe('');
       await expectSealed(run, 'brain_activity', 'input', `id = $1`, [activity.id]);
       proven.add('brain_activity.input');
-      const [row] = await run.as<{ input: unknown; activity_type: string; status: string }>(
+      const [row] = await run.as<{ activity_type: string; status: string }>(
         'mwf_ops',
         null,
-        `SELECT input, activity_type::text, status::text FROM brain_activity WHERE id = $1`,
+        `SELECT activity_type::text, status::text FROM brain_activity WHERE id = $1`,
         [activity.id],
       );
-      expect(JSON.stringify(row.input)).not.toContain('PROBE_FOLLOWUP_QUERY');
       expect({ type: row.activity_type, status: row.status }).toEqual({ type: 'RETRIEVAL', status: 'PENDING' });
+      await expect(run.as('mwf_ops', null, `SELECT input FROM brain_activity LIMIT 1`)).rejects.toMatchObject({
+        code: '42501',
+      });
       await expect(run.as('mwf_ops', null, `SELECT doc FROM ai_memory LIMIT 1`)).rejects.toMatchObject({
         code: '42501',
       });

@@ -2660,8 +2660,10 @@ LEFT JOIN LATERAL (
   ORDER BY n.ordinal LIMIT 1
 ) nxt ON true;
 GRANT SELECT ON v_current_stage TO app_access;
--- mwf_ops: the Neural Monitor dashboard's stage column (routes/brain.ts, stage-shim.ts).
-GRANT SELECT ON v_current_stage TO ops_access;
+-- mwf_ops: the Neural Monitor dashboard's stage column (routes/brain.ts, stage-shim.ts loadCurrentStages): exactly the
+-- columns it reads (work-k5fk.9, least privilege).
+GRANT SELECT (session_id, user_id, milestone_key, ordinal, stage_label, next_milestone_key, active_stage) ON v_current_stage
+  TO ops_access;
 
 -- Per direction: the current attempt (the live row, else the latest round)
 -- with its current reconciler result, open share offer and review.

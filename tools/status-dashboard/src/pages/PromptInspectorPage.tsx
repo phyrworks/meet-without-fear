@@ -1,15 +1,13 @@
 import { useParams, Link } from 'react-router-dom';
 import { usePromptDetail } from '../hooks/usePromptDetail';
 import { ModelBadge } from '../components/metrics/ModelBadge';
-import { RequestPanel } from '../components/prompt/RequestPanel';
-import { ResponsePanel } from '../components/prompt/ResponsePanel';
 import { MetadataPanel } from '../components/prompt/MetadataPanel';
 import { FormattedPrice } from '../components/session/FormattedPrice';
 
 /**
- * One LLM call: its request and response structure (sizes, roles, cache flags, tags) and its cost and timing.
- * No prompt diff or parsing view: the monitor never receives the text a user or the AI wrote (owner decision,
- * work-k5fk.9: "close all").
+ * One LLM call: its tokens, cost, timing and context window. No request or response panel, diff or parsing view:
+ * the monitor never receives what a user or the AI wrote (owner decision, work-k5fk.9: "close all"; its role
+ * holds no grant on brain_activity input or output).
  */
 export function PromptInspectorPage() {
   const { sessionId, activityId } = useParams<{ sessionId: string; activityId: string }>();
@@ -59,8 +57,6 @@ export function PromptInspectorPage() {
 
       {/* Inspector Panels */}
       <div className="prompt-inspector-panels">
-        <RequestPanel systemPrompt={data.systemPrompt.blocks} messages={data.messages} tokens={data.tokens} />
-        <ResponsePanel response={data.response} />
         <MetadataPanel
           model={data.timing.model}
           callType={data.timing.callType}

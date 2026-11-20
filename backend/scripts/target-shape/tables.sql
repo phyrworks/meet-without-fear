@@ -116,11 +116,11 @@
 --              writes, mwf_ops reads"; R35 — the job is the principal for work
 --              that crosses users, the anonymise walk and retention). Every job
 --              statement is raw and names exactly these columns.
---  * mwf_ops' grants: SELECT on exactly the tables the Neural Monitor
---    dashboard (routes/brain.ts) reads, directly or through the stage shim,
---    re-based from the old BrainActivity, Session/Relationship/
---    RelationshipMember/User, StageProgress, Message, UserVessel.notableFacts,
---    EmotionalReading and InnerWorkSession/Message reads.
+--  * mwf_ops' grants: SELECT on exactly the columns the Neural Monitor
+--    dashboard (routes/brain.ts) reads, directly or through the stage shim —
+--    column lists everywhere, and never a ciphertext or jsonb-envelope column
+--    (work-k5fk.9: the owner's least privilege, and "close all": the monitor
+--    gets telemetry and structure, never text a user or the AI wrote).
 --  * The [Pnn] tags on the CHECKs name the TS-7 data-move prechecks that
 --    guarded each rule; kept as cross-references.
 -- ============================================================================
@@ -731,8 +731,10 @@ GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer
 -- mwf_ai: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts; id and kind:
 -- Prisma's relation join key, participant (user_id, kind) -> user (id, kind) — measured: denied without kind)
 GRANT SELECT (id, kind, first_name, name) ON "user" TO ai_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON "user" TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the participant labels and the sessions search (name, email; kind and id:
+-- Prisma's relation join key from participant), tombstones (deleted_at).
+GRANT SELECT (id, kind, email, name, deleted_at) ON "user" TO ops_access;
 
 -- The AI principal (work-k5fk.3): exactly one row of kind ai (sql_user_one_ai,
 -- sql-only.sql), at a fixed version-7 id so code and fixtures name it without
@@ -892,8 +894,9 @@ GRANT SELECT (id, status, updated_at) ON session TO worker_access;
 -- mwf_worker: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
 -- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
 GRANT DELETE ON session TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON session TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the session list, detail and filters.
+GRANT SELECT (id, status, created_at, updated_at) ON session TO ops_access;
 
 CREATE TABLE participant (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
@@ -955,8 +958,9 @@ GRANT SELECT (session_id, user_id, kind, left_at, joined_at, display_name) ON pa
 -- mwf_worker: stage4-closure closureInputsAsJob / stage4.ts agreeIfEveryoneWilling: the present humans the closure
 -- decides for
 GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON participant TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — labels, stages (v_current_stage) and the context route.
+GRANT SELECT (session_id, user_id, kind, display_name, joined_at) ON participant TO ops_access;
 
 CREATE TABLE live_session_pair (
     user_a uuid7 NOT NULL,
@@ -1091,8 +1095,9 @@ GRANT SELECT (next_seq) ON conversation TO mwf_definer;
 GRANT UPDATE (next_seq) ON conversation TO mwf_definer;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
 GRANT DELETE ON conversation TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON conversation TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the user-turn count joins MAIN conversations.
+GRANT SELECT (id, session_id, user_id, kind) ON conversation TO ops_access;
 
 CREATE TABLE empathy_attempt (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1302,9 +1307,9 @@ GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, cont
 GRANT SELECT (session_id, created_at) ON message TO worker_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it — never content
 -- (owner decision OD-1, work-k5fk.9: the transcript panel is gone; the dashboard counts turns and reads their keys).
-GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, refining_need_id,
-              source_attempt_id, created_at)
-  ON message TO ops_access;
+-- work-k5fk.9 (least privilege): exactly the columns its turn counts read (seq with conversation_id: the key a Prisma
+-- count selects).
+GRANT SELECT (conversation_id, seq, session_id, sender_user_id, role, kind) ON message TO ops_access;
 
 CREATE TABLE conversation_read_state (
     session_id uuid7 NOT NULL,
@@ -1533,8 +1538,9 @@ COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record
 GRANT SELECT ON milestone TO app_access;
 -- mwf_definer: reach_milestone refuses a self-assertable key (the participant's own, through mwf_app's INSERT).
 GRANT SELECT (key, self_assertable) ON milestone TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON milestone TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — stages (v_current_stage, stage-shim loadCurrentStages).
+GRANT SELECT (key, ordinal, stage_label) ON milestone TO ops_access;
 
 -- The seed (work-k5fk.6; was generated from gen/maps.ts MILESTONES). Keys are
 -- shared/src/dto/milestones.ts MILESTONE_KEYS in ordinal order, and the
@@ -1588,8 +1594,9 @@ GRANT DELETE ON participant_milestone TO mwf_definer;
 GRANT SELECT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO ai_access;
 -- mwf_worker: stage4-closure closureInputsAsJob: who has shared their choices (choices_shared)
 GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON participant_milestone TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — stages (v_current_stage, stage-shim loadMilestones).
+GRANT SELECT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO ops_access;
 
 CREATE TABLE ai_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1659,8 +1666,9 @@ GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
 -- mwf_definer: participant_presence (v_participant: the caller's own latest mood — never a co-participant's, review F2)
 GRANT SELECT (id, intensity, recorded_at) ON mood_reading TO mwf_definer;
 GRANT DELETE ON mood_reading TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON mood_reading TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the context route's latest intensity (memory intent).
+GRANT SELECT (id, session_id, user_id, intensity, recorded_at) ON mood_reading TO ops_access;
 
 CREATE TABLE regulation_event (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2436,8 +2444,9 @@ GRANT UPDATE (title, summary, theme, status, linked_session_id, linked_at, conte
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (id, user_id) ON reflection TO mwf_definer;
 GRANT DELETE ON reflection TO mwf_definer;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON reflection TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the inner-work list, detail and filters (never the title).
+GRANT SELECT (id, user_id, status, created_at, updated_at) ON reflection TO ops_access;
 
 CREATE TABLE reflection_message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2454,7 +2463,7 @@ GRANT SELECT ON reflection_message TO app_access;
 GRANT INSERT (reflection_id, role, content, created_at) ON reflection_message TO app_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts) counts a reflection's turns — never content (owner decision
 -- OD-1, work-k5fk.9).
-GRANT SELECT (id, reflection_id, role, created_at) ON reflection_message TO ops_access;
+GRANT SELECT (id, reflection_id, role) ON reflection_message TO ops_access;
 
 CREATE TABLE takeaway (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2702,5 +2711,8 @@ GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, 
 GRANT SELECT (session_id, created_at) ON brain_activity TO worker_access;
 GRANT UPDATE (input, output, metadata) ON brain_activity TO worker_access;
 GRANT DELETE ON brain_activity TO worker_access;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON brain_activity TO ops_access;
+-- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
+-- shim), never a ciphertext or envelope column — the telemetry and its metadata; never input or output.
+GRANT SELECT (id, session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, metadata,
+              token_count_input, token_count_output, duration_ms, cost, status, created_at, completed_at, updated_at)
+  ON brain_activity TO ops_access;

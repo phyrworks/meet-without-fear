@@ -60,14 +60,16 @@ describe production.
   FINDING, work-k5fk.10.33) unattributed ones.
 - `worker_access` — `worker_session` (scoped) on the Stage 4 closure's tables and on the follow-ups it
   schedules; `worker_all` elsewhere (retention, due follow-ups / reminders, push tokens cross sessions).
-- `ops_access` — `ops_read`: SELECT on every row of its tables, but never a conversation line: its grants on
+- `ops_access` — `ops_read`: SELECT on every row of its tables, but only on column lists: exactly the columns the
+  Neural Monitor's routes read, and never a ciphertext or jsonb-envelope column (work-k5fk.9, least privilege;
+  `app-grants.target.test.ts` pins the lists). So never a conversation line: its grants on
   `message` and `reflection_message` leave out `content` (owner decision OD-1, work-k5fk.9), so the Neural
   Monitor counts turns and shows telemetry, with no transcript panel. `brain_activity.input` and `.output` (a
   call's input, such as a retrieval's search queries, and the model's text) are jsonb envelopes sealed by the AI's
-  writer; the dashboard opens them in the app with the field key, which never enters the database, and the
-  telemetry (timings, tokens, cost, status, call type) stays in plain columns. The `/brain/*` responses carry
+  writer, and `ops_access` holds no grant on either; the telemetry (timings, tokens, cost, status, call type) and
+  the metadata stay readable in plain columns. The `/brain/*` responses carry
   telemetry and structure only, never text a user or the AI wrote ("close all", work-k5fk.9): an activity has no
-  input or output, the prompt inspector gives sizes, roles, cache flags and which tags a response carried, a
+  input or output, the prompt inspector gives tokens, cost, timing and the context window, a
   reflection's title is neither returned nor searched, and the context endpoint returns a whitelisted
   `MonitorContext` (turn roles, instants and lengths; emotional numbers; stage; intent) built in `routes/brain.ts`. No memory at all: `ops_access` has no grant or policy on `ai_memory` (the owner's
   follow-up, work-k5fk.9), and the context endpoint (`/brain/sessions/:id/context`) cuts the notable facts,

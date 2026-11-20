@@ -215,6 +215,25 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     expect(costs.status).toBe(200);
     expect(typeof costs.body.data.summary.periodTotal).toBe('number');
 
+    // work-k5fk.9 (least privilege): mwf_ops reads exactly the columns these routes need — every route still answers
+    const llm = (
+      activity.body.data.activities as Array<{ id: string; activityType: string; turnId: string | null }>
+    ).find(a => a.activityType === 'LLM_CALL')!;
+    const routes = [
+      '/api/v1/brain/dashboard?period=7d',
+      `/api/v1/brain/activity/${llm.id}/prompt`,
+      `/api/v1/brain/activity/${reflectionId}`,
+      `/api/v1/brain/sessions/${reflectionId}`,
+      `/api/v1/brain/sessions/${reflectionId}/context`,
+      '/api/v1/brain/sessions?type=INNER_WORK',
+      '/api/v1/brain/sessions?type=PARTNER&status=ACTIVE',
+    ];
+    const statuses: Record<string, number> = {};
+    for (const r of routes) statuses[r] = (await request(app).get(r)).status;
+    expect(statuses).toEqual(Object.fromEntries(routes.map(r => [r, 200])));
+    // a turn with no trace answers 404, not a permission error
+    expect((await request(app).get('/api/v1/brain/turn/no-such-turn/trace')).status).toBe(404);
+
     // mwf_ops is read-only
     await expect(
       (async () => {

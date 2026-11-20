@@ -1,31 +1,9 @@
 import type { ContextWindow } from './costs';
 
 /*
- * The prompt inspector's data is structure only: sizes, roles, cache flags and which tags a response carried —
- * never the text a user or the AI wrote (owner decision, work-k5fk.9: "close all").
+ * The prompt inspector's data: tokens, cost, timing and the context window. No prompt or response, not even
+ * their structure: the monitor's role holds no grant on brain_activity input or output (work-k5fk.9).
  */
-export interface SystemPromptBlock {
-  type: 'static' | 'dynamic';
-  chars: number;
-  tokenCount: number;
-  cached: boolean;
-}
-
-export interface PromptMessage {
-  role: string;
-  chars: number;
-  hasCacheControl: boolean;
-}
-
-export interface ParsedResponse {
-  chars: number;
-  stopReason: string | null;
-  streaming: boolean;
-  hasThinking: boolean;
-  hasDraft: boolean;
-  hasDispatch: boolean;
-}
-
 export interface TokenBreakdown {
   input: number;
   output: number;
@@ -44,9 +22,6 @@ export interface CostBreakdown {
 }
 
 export interface PromptDetail {
-  systemPrompt: { blocks: SystemPromptBlock[] };
-  messages: PromptMessage[];
-  response: ParsedResponse;
   tokens: TokenBreakdown;
   cost: CostBreakdown;
   timing: {

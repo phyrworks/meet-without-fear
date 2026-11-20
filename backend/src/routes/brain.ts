@@ -9,7 +9,6 @@ import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../u
 import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
-import { telemetryOf } from '../services/brain-service';
 import { foldEmail } from '@meet-without-fear/shared';
 
 /**
@@ -183,10 +182,31 @@ const activityKey = (a: { sessionId: string | null; reflectionId?: string | null
 /**
  * An activity as the monitor sees it: its telemetry (ids, kind, model, status, tokens, cost, timing) and its
  * metadata (call options, cache counts, the turn trace) — never input or output, which carry what a user or the AI
- * wrote (owner decision, work-k5fk.9: "close all"). The prompt route below gives their structure.
+ * wrote (owner decision, work-k5fk.9: "close all"); mwf_ops has no grant on them.
  */
-function activityDTO(a: BrainActivity) {
-  return { ...telemetryOf(a), metadata: a.metadata, cost: num(a.cost) };
+/** The brain_activity columns mwf_ops may read (tables.sql: everything but input and output). */
+const OPS_ACTIVITY_SELECT = {
+  id: true,
+  sessionId: true,
+  reflectionId: true,
+  participantUserId: true,
+  turnId: true,
+  activityType: true,
+  callType: true,
+  model: true,
+  metadata: true,
+  tokenCountInput: true,
+  tokenCountOutput: true,
+  durationMs: true,
+  cost: true,
+  status: true,
+  createdAt: true,
+  completedAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.BrainActivitySelect;
+
+function activityDTO(a: Omit<BrainActivity, 'input' | 'output'>) {
+  return { ...a, cost: num(a.cost) };
 }
 
 /** "A & B" per session from its participants' display names (falling back to the user's name). */
@@ -896,51 +916,26 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
   try {
     const { activityId } = req.params;
 
+    // Telemetry and metadata only: mwf_ops holds no grant on input or output (work-k5fk.9, least privilege — they
+    // are envelopes of what a user or the AI wrote), so the inspector shows tokens, cost, timing and the context window.
     const activity = await db().brainActivity.findUnique({
       where: { id: activityId },
+      select: {
+        tokenCountInput: true,
+        tokenCountOutput: true,
+        durationMs: true,
+        model: true,
+        callType: true,
+        status: true,
+        metadata: true,
+      },
     });
 
     if (!activity) {
       return errorResponse(res, 'NOT_FOUND', 'Activity not found', 404);
     }
 
-    const input = activity.input as ActivityBlob;
-    const output = activity.output as ActivityBlob;
     const metadata = activity.metadata as ActivityBlob;
-
-    // Structure only (owner decision, work-k5fk.9: "close all" — the monitor never gets a word a user or the AI
-    // wrote): each system-prompt block's kind, size and cache flag, each message's role and size, and which tags the
-    // response carried — never their text. bedrock.ts writes sizes into input today; the shapes below also cover a
-    // call site that would write the prompt itself.
-    const systemPromptBlocks: Array<{ type: string; chars: number; tokenCount: number; cached: boolean }> = [];
-    const block = (type: string, text: string, cached: boolean) =>
-      systemPromptBlocks.push({ type, chars: text.length, tokenCount: Math.ceil(text.length / 4), cached });
-    if (input?.systemPrompt) {
-      const sysPrompt = input.systemPrompt;
-      if (typeof sysPrompt === 'string') block('static', sysPrompt, true);
-      else {
-        if (typeof sysPrompt.staticBlock === 'string') block('static', sysPrompt.staticBlock, true);
-        if (typeof sysPrompt.dynamicBlock === 'string') block('dynamic', sysPrompt.dynamicBlock, false);
-      }
-    }
-
-    const messages = Array.isArray(input?.messages)
-      ? input.messages.map((m: ActivityBlob) => ({
-          role: typeof m.role === 'string' ? m.role : 'unknown',
-          chars: (typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')).length,
-          hasCacheControl: !!m.cache_control,
-        }))
-      : [];
-
-    const responseText = typeof output?.text === 'string' ? output.text : '';
-    const response = {
-      chars: responseText.length,
-      stopReason: typeof output?.stopReason === 'string' ? output.stopReason : null,
-      streaming: !!output?.streaming,
-      hasThinking: /<thinking>[\s\S]*?<\/thinking>/.test(responseText),
-      hasDraft: /<draft>[\s\S]*?<\/draft>/.test(responseText),
-      hasDispatch: /<dispatch>[\s\S]*?<\/dispatch>/.test(responseText),
-    };
 
     // Token breakdown
     const { cacheRead, cacheWrite } = extractCacheTokens(metadata);
@@ -956,9 +951,6 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
     const savings = cacheRead * (modelPrices.input - modelPrices.cacheRead);
 
     return successResponse(res, {
-      systemPrompt: { blocks: systemPromptBlocks },
-      messages,
-      response,
       tokens: {
         input: activity.tokenCountInput,
         output: activity.tokenCountOutput,
@@ -1022,6 +1014,7 @@ router.get('/activity/:sessionId', async (req, res) => {
       await db().brainActivity.findMany({
         where: { OR: [{ sessionId }, { reflectionId: sessionId }] },
         orderBy: { createdAt: 'asc' },
+        select: OPS_ACTIVITY_SELECT,
       })
     ).map(activityDTO);
 
