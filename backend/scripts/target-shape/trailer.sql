@@ -177,47 +177,6 @@ COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'Tr
 REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO app_access;
 
--- The envelope rule for the seven jsonb-envelope columns (t_jsonb_envelope, T5; brain_activity.input and output since
--- work-k5fk.9).
--- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
--- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
--- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
--- writes '{}'; so an object WITHOUT a "$enc" key passes. One WITH it is an
--- envelope and must be well formed: "$enc" its only key, a string, starting
--- enc: (plaintext in the envelope is refused — the domain alone would let it
--- through) and castable to ciphertext (a malformed ciphertext is refused).
--- A non-object is refused here too, before the column's jsonb_typeof CHECK
--- could echo it. The strict variant (every document an envelope) lands with
--- the strict ciphertext domain (work-k5fk.11). Returns the reason, never the
--- value; NULL when the document passes.
-CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
-  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
-  SET search_path = pg_catalog, pg_temp
-  AS $$
-  BEGIN
-    IF doc IS NULL THEN RETURN NULL; END IF;
-    IF jsonb_typeof(doc) <> 'object' THEN RETURN 'not an object, got ' || jsonb_typeof(doc); END IF;
-    IF NOT doc ? '$enc' THEN RETURN NULL; END IF;
-    IF doc - '$enc' <> '{}'::jsonb THEN RETURN 'a sealed document has "$enc" as its only key'; END IF;
-    IF jsonb_typeof(doc -> '$enc') <> 'string' THEN RETURN '"$enc" is not a string, got ' || jsonb_typeof(doc -> '$enc'); END IF;
-    IF doc ->> '$enc' NOT LIKE 'enc:%' THEN RETURN '"$enc" is not a ciphertext (plaintext in an envelope)'; END IF;
-    BEGIN
-      PERFORM (doc ->> '$enc')::public.ciphertext;
-    EXCEPTION WHEN check_violation THEN
-      RETURN '"$enc" is a malformed ciphertext';
-    END;
-    RETURN NULL;
-  END
-  $$;
-COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
--- app_access, worker_access (mwf_app's and mwf_worker's: proposal_revision.before / after, and the app's enveloped
--- columns), ai_access (mwf_ai's: brain_activity.input / output, brain-service start/completeActivity; owner decision OD-1,
--- work-k5fk.9): the t_jsonb_envelope trigger calls it with the writer's rights.
-REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
-GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO worker_access;
-GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO ai_access;
-
 -- The TS-1 helpers over participant. (work-k5fk.3: app.is_co_participant and
 -- app.my_participant went with participant.id: every session-scoped row carries
 -- session_id, so app.is_member(session_id) is the co-participant test, and the
@@ -2348,54 +2307,6 @@ CREATE TRIGGER t_doc_schema BEFORE INSERT OR UPDATE OF kind, doc, doc_schema_ver
   FOR EACH ROW EXECUTE FUNCTION app.t_doc_schema();
 COMMENT ON TRIGGER t_doc_schema ON public.ai_memory IS 'doc''s structure matches app.json_schema ai_memory.<kind> at doc_schema_version (work-k5fk.8); its string leaves are ciphertext, so only keys, types and shape are checked.';
 
--- T-jsonb-envelope (work-k5fk.8 review): each jsonb-envelope column named in
--- TG_ARGV is a well-formed envelope or keyless plaintext
--- (app.jsonb_envelope_violation). A trigger rather than a CHECK because a
--- CHECK refusal's DETAIL ("Failing row contains …") echoes the whole row —
--- the very plaintext this rule catches — to the client error and the server
--- log; this refusal names the column and the reason, with no DETAIL. It runs
--- before the columns' jsonb_typeof CHECKs, and refuses a non-object itself,
--- so those never see (and echo) a refused document either.
-CREATE FUNCTION app.t_jsonb_envelope() RETURNS trigger
-  LANGUAGE plpgsql
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-  DECLARE
-    v_row CONSTANT jsonb := to_jsonb(NEW);
-    v_col text;
-    v_err text;
-  BEGIN
-    FOREACH v_col IN ARRAY TG_ARGV LOOP
-      -- to_jsonb renders an SQL NULL column as JSON null; both are "no document" here (a stored
-      -- JSON null is left to the column's jsonb_typeof CHECK, whose echo of `null` carries nothing).
-      v_err := app.jsonb_envelope_violation(nullif(v_row -> v_col, 'null'::jsonb));
-      IF v_err IS NOT NULL THEN
-        RAISE EXCEPTION '%.% is not a well-formed envelope: %', TG_TABLE_NAME, v_col, v_err
-          USING ERRCODE = 'check_violation';
-      END IF;
-    END LOOP;
-    RETURN NEW;
-  END
-  $$;
-COMMENT ON FUNCTION app.t_jsonb_envelope() IS 'Trigger function of t_jsonb_envelope: refuses (check_violation) a jsonb-envelope column (named in the trigger arguments) that app.jsonb_envelope_violation refuses, with the column and the reason only, never the value.';
--- No caller needs EXECUTE on a trigger function.
-REVOKE EXECUTE ON FUNCTION app.t_jsonb_envelope() FROM PUBLIC;
-CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF before, after ON public.proposal_revision
-  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('before', 'after');
-COMMENT ON TRIGGER t_jsonb_envelope ON public.proposal_revision IS 'before and after are well-formed envelopes (or keyless plaintext); work-k5fk.8.';
-CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF payload ON public.follow_up_checkin
-  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('payload');
-COMMENT ON TRIGGER t_jsonb_envelope ON public.follow_up_checkin IS 'payload is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
-CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF summary_doc ON public.reflection
-  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('summary_doc');
-COMMENT ON TRIGGER t_jsonb_envelope ON public.reflection IS 'summary_doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
-CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF doc ON public.feature_state
-  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('doc');
-COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
-CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF input, output ON public.brain_activity
-  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('input', 'output');
-COMMENT ON TRIGGER t_jsonb_envelope ON public.brain_activity IS 'input and output are well-formed envelopes (or keyless plaintext); owner decision OD-1 and its follow-up, work-k5fk.9.';
-
 -- ---------------------------------------------------------------------------
 -- work-k5fk.2: who is in a session, without relationship. Four trigger
 -- functions are SECURITY DEFINER (owned by mwf_definer, handed over below), the
@@ -3618,41 +3529,61 @@ BEGIN
     AND NOT (conrelid = 'public.brain_activity'::regclass AND confrelid = 'public.reflection'::regclass);
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: FK(s) into reflection*: %', bad; END IF;
 
-  -- Every jsonb column has a jsonb_typeof CHECK (inline in its CREATE TABLE in
-  -- tables.sql; the catalog, not the source, is what this reads).
-  SELECT string_agg(c.table_name || '.' || c.column_name, ', ' ORDER BY c.table_name, c.column_name) INTO bad
-  FROM information_schema.columns c
-  WHERE c.table_schema = 'public' AND c.data_type = 'jsonb'
-    AND NOT EXISTS (SELECT 1 FROM pg_constraint k
-                    WHERE k.contype = 'c' AND k.conrelid = format('public.%I', c.table_name)::regclass
-                      AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
+  -- Typed domains (owner, 2026-11-23): no table column is plain jsonb — each is typed by a domain named for its
+  -- contract (tables.sql, jsonb documents), directly over jsonb (Prisma reads a domain over a domain as
+  -- Unsupported), and every such domain's CHECK refuses a non-object.
+  SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
+  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND (a.atttypid = 'pg_catalog.jsonb'::regtype
+         OR (t.typtype = 'd' AND t.typbasetype <> 'pg_catalog.jsonb'::regtype
+             AND EXISTS (SELECT 1 FROM pg_catalog.pg_type b WHERE b.oid = t.typbasetype AND b.typtype = 'd'
+                           AND b.typbasetype = 'pg_catalog.jsonb'::regtype))
+         OR (t.typtype = 'd' AND t.typbasetype = 'pg_catalog.jsonb'::regtype
+             AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.contypid = t.oid AND k.contype = 'c'
+                               AND pg_get_constraintdef(k.oid) ~ '(jsonb_typeof\(VALUE\) = ''object''|app\.(jsonb_envelope|activity_metadata)_violation\(VALUE\))')));
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'step 20: jsonb column(s) not typed by a jsonb domain that refuses a non-object: %', bad;
+  END IF;
 
-  -- work-k5fk.8: every jsonb-envelope column (its COMMENT says 'jsonb envelope') is guarded
-  -- by a t_jsonb_envelope trigger that both fires on it (UPDATE OF) and checks it (an
-  -- argument); no other column is; there are @@JSONB_ENVELOPES@@ (gen-target-migration.ts
-  -- JSONB_ENVELOPES; the jest test encryption-at-rest-schema ties the set to SENSITIVE_FIELD_MAP).
+  -- work-k5fk.8 / typed domains: every jsonb-envelope column (its COMMENT says 'jsonb envelope') is typed by a
+  -- domain whose CHECK is the envelope rule (app.jsonb_envelope_violation), and no other column is; there are
+  -- @@JSONB_ENVELOPES@@ (gen-target-migration.ts JSONB_ENVELOPES; the jest test encryption-at-rest-schema ties the
+  -- set to SENSITIVE_FIELD_MAP).
   SELECT string_agg(coalesce(e.col, g.col), ', ' ORDER BY coalesce(e.col, g.col)) INTO bad
   FROM (SELECT c.relname || '.' || a.attname AS col
         FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
         JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace
         JOIN pg_catalog.pg_description d ON d.objoid = c.oid AND d.classoid = 'pg_catalog.pg_class'::regclass AND d.objsubid = a.attnum
         WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
-          AND a.atttypid = 'pg_catalog.jsonb'::regtype AND d.description ~ '^encrypted \([a-z-]+\): jsonb envelope') e
+          AND d.description ~ '^encrypted \([a-z-]+\): jsonb envelope') e
   FULL JOIN (SELECT c.relname || '.' || a.attname AS col
-             FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
-             JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (t.tgattr::int2[])
-             WHERE t.tgname = 't_jsonb_envelope' AND NOT t.tgisinternal
-               AND t.tgtype & (4 | 16) = (4 | 16)  -- INSERT and UPDATE
-               AND a.attname = ANY (regexp_split_to_array(encode(t.tgargs, 'escape'), '\\000'))) g ON g.col = e.col
+             FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+             JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace
+             WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+               AND EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k JOIN pg_catalog.pg_depend dp
+                             ON dp.classid = 'pg_catalog.pg_constraint'::regclass AND dp.objid = k.oid
+                            AND dp.refclassid = 'pg_catalog.pg_proc'::regclass
+                            AND dp.refobjid = 'app.jsonb_envelope_violation(jsonb)'::regprocedure
+                           WHERE k.contypid = a.atttypid AND k.contype = 'c')) g ON g.col = e.col
   WHERE e.col IS NULL OR g.col IS NULL;
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb envelope column(s) and t_jsonb_envelope triggers differ: %', bad; END IF;
-  SELECT sum(t.tgnargs) INTO n FROM pg_catalog.pg_trigger t WHERE t.tgname = 't_jsonb_envelope';
-  IF n IS DISTINCT FROM @@JSONB_ENVELOPES@@ THEN RAISE EXCEPTION 'step 20: t_jsonb_envelope guards % columns, expected @@JSONB_ENVELOPES@@', n; END IF;
-  -- and no CHECK echoes a refused envelope's row: the rule is the trigger's alone.
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb envelope column(s) and envelope-domain columns differ: %', bad; END IF;
+  SELECT count(*) INTO n
+  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.contypid = a.atttypid AND k.conname = 'jsonb_envelope');
+  IF n IS DISTINCT FROM @@JSONB_ENVELOPES@@ THEN RAISE EXCEPTION 'step 20: % envelope-domain columns, expected @@JSONB_ENVELOPES@@', n; END IF;
+  -- and no table CHECK echoes a refused document's row: the rules are the domains' alone (a domain CHECK refusal
+  -- names the domain and the constraint, with no DETAIL).
   SELECT string_agg(conrelid::regclass::text || '.' || conname, ', ') INTO bad FROM pg_catalog.pg_constraint
-  WHERE contype = 'c' AND pg_get_constraintdef(oid) ~ 'jsonb_envelope';
-  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: envelope CHECK(s) (their DETAIL echoes the row): %', bad; END IF;
+  WHERE contype = 'c' AND conrelid <> 0 AND pg_get_constraintdef(oid) ~ '(jsonb_envelope|activity_metadata)';
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: envelope / metadata table CHECK(s) (their DETAIL echoes the row): %', bad; END IF;
+  -- the trigger the domains replaced is gone
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_trigger WHERE tgname = 't_jsonb_envelope')
+     OR to_regprocedure('app.t_jsonb_envelope()') IS NOT NULL THEN
+    RAISE EXCEPTION 'step 20: t_jsonb_envelope is back (the envelope domains replaced it)';
+  END IF;
 
   -- work-k5fk.8: t_doc_schema validates exactly user_preferences and ai_memory, each with a
   -- doc_schema_version (the version-1 schema of every name the trigger can derive: T7a, read before FORCE).
@@ -3943,22 +3874,39 @@ BEGIN
   WHERE pg_get_userbyid(x.grantee) IN ('clinician_access');
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: role(s) that hold nothing yet hold a privilege: %', bad; END IF;
 
-  -- work-k5fk.10.4.1: t_doc_schema and t_jsonb_envelope run with the writer's rights, so every role that may fire
-  -- one (INSERT on the table, or UPDATE of a column the trigger names) can run the validator it calls — or its first
-  -- write fails inside the trigger. The table's owner, superusers and the predefined pg_* roles (pg_write_all_data
-  -- writes everything and is granted to no one: the role guard refuses any membership but the capability) are exempt.
+  -- work-k5fk.10.4.1: t_doc_schema runs with the writer's rights, so every role that may fire it (INSERT on the
+  -- table, or UPDATE of a column the trigger names) can run the validator it calls — or its first write fails inside
+  -- the trigger. The table's owner, superusers and the predefined pg_* roles (pg_write_all_data writes everything and
+  -- is granted to no one: the role guard refuses any membership but the capability) are exempt.
   SELECT string_agg(DISTINCT r.rolname || ' on ' || c.relname, ', ') INTO bad
   FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid CROSS JOIN pg_roles r
-  WHERE tg.tgname IN ('t_doc_schema', 't_jsonb_envelope') AND NOT r.rolsuper AND NOT pg_has_role(r.oid, c.relowner, 'USAGE')
+  WHERE tg.tgname = 't_doc_schema' AND NOT r.rolsuper AND NOT pg_has_role(r.oid, c.relowner, 'USAGE')
     AND r.rolname !~ '^pg_'
     AND (has_any_column_privilege(r.oid, c.oid, 'INSERT')
          OR EXISTS (SELECT 1 FROM unnest(tg.tgattr::int2[]) a(attnum) WHERE has_column_privilege(r.oid, c.oid, a.attnum, 'UPDATE')))
-    AND NOT (has_schema_privilege(r.oid, 'app', 'USAGE') AND CASE tg.tgname
-               WHEN 't_doc_schema' THEN has_table_privilege(r.oid, 'app.json_schema', 'SELECT')
-                 AND has_function_privilege(r.oid, 'app.jsonb_violation(jsonb, text, public.schema_version)', 'EXECUTE')
-               ELSE has_function_privilege(r.oid, 'app.jsonb_envelope_violation(jsonb)', 'EXECUTE') END);
+    AND NOT (has_schema_privilege(r.oid, 'app', 'USAGE') AND has_table_privilege(r.oid, 'app.json_schema', 'SELECT')
+             AND has_function_privilege(r.oid, 'app.jsonb_violation(jsonb, text, public.schema_version)', 'EXECUTE'));
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION 'step 20: role(s) that may write a validated column but cannot run its validator: %', bad;
+  END IF;
+  -- Typed domains (owner, 2026-11-23): a domain CHECK also runs with the writer's rights, and an INSERT that leaves a
+  -- domain column to its default (or NULL) runs it too. So every role that may INSERT into a table with a column of
+  -- such a domain, or UPDATE that column, may EXECUTE each function the domain's CHECKs call (pg_depend: the
+  -- envelope domains' app.jsonb_envelope_violation, activity_metadata's app.activity_metadata_violation,
+  -- ciphertext_list's app.all_ciphertext). Same exemptions.
+  SELECT string_agg(DISTINCT r.rolname || ' on ' || c.relname || '.' || a.attname || ' (' || dp.refobjid::regprocedure::text || ')', ', ') INTO bad
+  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace
+  JOIN pg_catalog.pg_constraint k ON k.contypid = a.atttypid AND k.contype = 'c'
+  JOIN pg_catalog.pg_depend dp ON dp.classid = 'pg_catalog.pg_constraint'::regclass AND dp.objid = k.oid
+                              AND dp.refclassid = 'pg_catalog.pg_proc'::regclass
+  CROSS JOIN pg_roles r
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND NOT r.rolsuper AND NOT pg_has_role(r.oid, c.relowner, 'USAGE') AND r.rolname !~ '^pg_'
+    AND (has_any_column_privilege(r.oid, c.oid, 'INSERT') OR has_column_privilege(r.oid, c.oid, a.attnum, 'UPDATE'))
+    AND NOT has_function_privilege(r.oid, dp.refobjid, 'EXECUTE');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'step 20: role(s) that may write a domain column but cannot run its CHECK''s function: %', bad;
   END IF;
 
   -- work-k5fk.10.5 review F4: every write the AI or the worker holds is bound to its session by a t_session_scope

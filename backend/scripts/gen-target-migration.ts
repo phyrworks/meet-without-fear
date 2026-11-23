@@ -16,8 +16,9 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_definer check; schema app;
  *      app.current_user_id();
- *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, ordinal_no, kek_id, email,
- *      milestone_key, person_name), the
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, ordinal_no, kek_id,
+ *      wrapped_dek, push_token, model_id, turn_id, email, milestone_key, person_name, and the jsonb document domains:
+ *      the six envelope domains, preferences_doc, ai_memory_doc, activity_metadata; typed domains, 2026-11-23), the
  *      enums and the 49 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
@@ -82,10 +83,12 @@ const CIPHERTEXT_PLACEHOLDER = '@@CIPHERTEXT_COLUMNS@@';
 const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
 
 /**
- * The jsonb-envelope columns of SENSITIVE_FIELD_MAP, each guarded by the
- * t_jsonb_envelope trigger (trailer.sql T5; work-k5fk.8 — a trigger, not a
- * CHECK, so a refusal never echoes the row). Step 20 ties the triggers to the
- * columns whose COMMENT says 'jsonb envelope' and requires this many;
+ * The jsonb-envelope columns of SENSITIVE_FIELD_MAP, each typed by an envelope
+ * domain — one per app contract, its CHECK constraint jsonb_envelope calling
+ * app.jsonb_envelope_violation (tables.sql; typed domains, 2026-11-23: it replaced
+ * the work-k5fk.8 t_jsonb_envelope trigger; a domain CHECK refusal, unlike a table
+ * CHECK's, never echoes the row). checkTables() counts the columns; step 20 ties
+ * them to the columns whose COMMENT says 'jsonb envelope' and requires this many;
  * encryption-at-rest-schema.target.test.ts ties them to the map.
  * 6 since work-k5fk.9 (owner decision OD-1): brain_activity.output; 7 (its follow-up): brain_activity.input.
  */
@@ -118,6 +121,10 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   if (ct !== CIPHERTEXT_COLUMNS) throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
   const ca = (sql.match(/^ {4}[a-z0-9_]+ ciphertext_list\b/gm) ?? []).length;
   if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} ciphertext_list columns, expected ${CIPHERTEXT_ARRAYS}`);
+  // The envelope domains: `CREATE DOMAIN <name> AS jsonb` whose CHECK is the jsonb_envelope constraint.
+  const envelopes = [...sql.matchAll(/^CREATE DOMAIN ([a-z0-9_]+) AS jsonb\n {2}CONSTRAINT jsonb_envelope CHECK/gm)].map(m => m[1]);
+  const je = envelopes.reduce((k, d) => k + (sql.match(new RegExp(`^ {4}[a-z0-9_]+ ${d}\\b`, 'gm')) ?? []).length, 0);
+  if (je !== JSONB_ENVELOPES) throw new Error(`tables.sql has ${je} envelope-domain columns, expected ${JSONB_ENVELOPES}`);
   return { names: names.size, uuid7 };
 }
 
@@ -188,7 +195,8 @@ const HEADER = `-- =============================================================
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id(), app.session_scope()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version),
+--   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version, the jsonb
+--      document domains and the other typed domains of 2026-11-23),
 --      the jsonb validators' reference table app.json_schema and its seed, enums and the 49
 --      tables, hand-written, each table complete in its CREATE TABLE (and its grants) in
 --      dependency order, the milestone seed after its table

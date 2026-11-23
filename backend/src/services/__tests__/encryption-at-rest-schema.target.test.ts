@@ -3,9 +3,10 @@
  * says exactly what SENSITIVE_FIELD_MAP says.
  *
  *   - catalog ⇄ map, both directions: the text columns typed `ciphertext`,
- *     the text[] columns typed `ciphertext_list`, and the jsonb
+ *     the text[] columns typed `ciphertext_list`, and the jsonb-domain
  *     columns whose COMMENT starts 'encrypted' are exactly the map's text,
- *     text[] and jsonb (envelope / leaves) columns;
+ *     text[] and jsonb (envelope / leaves) columns; the envelope columns are
+ *     exactly those typed by an envelope domain (typed domains, 2026-11-23);
  *   - every encrypted column's COMMENT starts 'encrypted (<its key class>)';
  *   - the `ciphertext` domain accepts real encrypt() output (empty, short,
  *     long, unicode plaintext) and plaintext (keyless mode), and refuses a
@@ -55,7 +56,7 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
       `SELECT c.relname AS t, a.attname AS c
          FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
         WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
-          AND a.atttypid = 'pg_catalog.jsonb'::regtype
+          AND (SELECT t.typbasetype FROM pg_type t WHERE t.oid = a.atttypid) = 'pg_catalog.jsonb'::regtype
           AND col_description(c.oid, a.attnum) LIKE 'encrypted%'`,
     );
     const want = (kinds: string[]) =>
@@ -65,12 +66,12 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     expect(sorted(jsonb.map(r => key(r.t, r.c)))).toEqual(want(['jsonb-envelope', 'jsonb-leaves']));
   });
 
-  it('t_jsonb_envelope guards exactly the jsonb-envelope columns; the leaves column has the structural trigger (work-k5fk.8)', async () => {
+  it('an envelope domain types exactly the jsonb-envelope columns; the leaves column has the structural trigger (work-k5fk.8)', async () => {
     const enveloped = await run.sql<{ t: string; c: string }>(
       `SELECT c.relname AS t, a.attname AS c
-         FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
-         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (g.tgattr::int2[])
-        WHERE g.tgname = 't_jsonb_envelope'`,
+         FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+        WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+          AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.contypid = a.atttypid AND k.conname = 'jsonb_envelope')`,
     );
     const want = (kind: string) =>
       sorted(ENCRYPTED_COLUMNS.filter(e => e.kind === kind).map(e => key(e.table, e.column)));
@@ -113,9 +114,8 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
         (e: unknown) => e as PgError,
       );
     expect(err?.code).toBe('23514');
-    expect(err?.message).toBe(
-      'feature_state.doc is not a well-formed envelope: "$enc" is not a ciphertext (plaintext in an envelope)',
-    );
+    // the domain CHECK names the contract's domain and the rule, never the value (typed domains, 2026-11-23)
+    expect(err?.message).toBe('value for domain feature_state_doc violates check constraint "jsonb_envelope"');
     expect(err?.detail).toBeUndefined();
     expect(JSON.stringify(err)).not.toContain(secret);
   });

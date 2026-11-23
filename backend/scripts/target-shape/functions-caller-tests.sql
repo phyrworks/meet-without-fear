@@ -1226,11 +1226,12 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
--- 28. the envelope rule on the seven jsonb-envelope documents (the t_jsonb_envelope trigger; feature_state.doc
---     as mwf_app here, step 20 asserts all seven are guarded): a sealed document is exactly
---     {"$enc": <a v1 ciphertext>}; a keyless plaintext document (no "$enc" key) still passes, as the
---     ciphertext domain lets plaintext through. A refusal names the column and the reason, never the
---     value: no DETAIL (a CHECK's "Failing row contains …" would echo the plaintext).
+-- 28. the envelope rule on the seven jsonb-envelope documents (the CHECK of their envelope domains,
+--     app.jsonb_envelope_violation; feature_state.doc as mwf_app here, step 20 asserts all seven are typed so):
+--     a sealed document is exactly {"$enc": <a v1 ciphertext>}; a keyless plaintext document (no "$enc" key)
+--     still passes, as the ciphertext domain lets plaintext through. A refusal names the domain and the
+--     constraint, never the value: no DETAIL (a table CHECK's "Failing row contains …" would echo the
+--     plaintext); the reason is the function's.
 \connect - mwf_app
 SELECT set_config('t.a_user', :'a_user', false) \g /dev/null
 DO $$
@@ -1257,8 +1258,11 @@ BEGIN
       RAISE EXCEPTION 'TEST FAILED: % was stored', c -> 0;
     EXCEPTION WHEN check_violation THEN
       GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT, v_detail = PG_EXCEPTION_DETAIL, v_hint = PG_EXCEPTION_HINT;
-      IF v_msg IS DISTINCT FROM 'feature_state.doc is not a well-formed envelope: ' || (c ->> 1) THEN
+      IF v_msg IS DISTINCT FROM 'value for domain feature_state_doc violates check constraint "jsonb_envelope"' THEN
         RAISE EXCEPTION 'TEST FAILED: case % message %', i, v_msg;
+      END IF;
+      IF app.jsonb_envelope_violation(c -> 0) IS DISTINCT FROM c ->> 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: case % reason %', i, app.jsonb_envelope_violation(c -> 0);
       END IF;
       IF v_detail <> '' OR v_hint <> '' OR (v_msg || v_detail || v_hint) LIKE '%SECRET%' THEN
         RAISE EXCEPTION 'TEST FAILED: case % leaks the value (detail %)', i, v_detail;
@@ -1289,26 +1293,74 @@ DO $$ DECLARE v_detail text; v_n int := 0; BEGIN
     END IF;
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-    IF SQLERRM <> 'proposal_revision.after is not a well-formed envelope: "$enc" is not a ciphertext (plaintext in an envelope)' OR v_detail <> '' THEN RAISE; END IF;
+    IF SQLERRM <> 'value for domain proposal_snapshot violates check constraint "jsonb_envelope"' OR v_detail <> '' THEN RAISE; END IF;
   END;
   BEGIN
     INSERT INTO reflection (user_id, summary_doc) VALUES ('00000000-0000-7e00-8000-0000000000b1', '{"$enc": "MY SECRET SUMMARY"}');
     RAISE EXCEPTION 'TEST FAILED: plaintext envelope in reflection.summary_doc';
   EXCEPTION WHEN check_violation THEN
-    IF SQLERRM NOT LIKE 'reflection.summary_doc is not a well-formed envelope: %' OR SQLERRM LIKE '%SECRET%' THEN RAISE; END IF;
+    IF SQLERRM <> 'value for domain reflection_summary_doc violates check constraint "jsonb_envelope"' OR SQLERRM LIKE '%SECRET%' THEN RAISE; END IF;
     v_n := v_n + 1;
   END;
   BEGIN
     UPDATE follow_up_checkin SET payload = '"MY SECRET ANSWERS"' WHERE id = (SELECT id FROM follow_up_checkin LIMIT 1);
     IF FOUND THEN RAISE EXCEPTION 'TEST FAILED: a non-object payload'; END IF;
   EXCEPTION WHEN check_violation THEN
-    IF SQLERRM <> 'follow_up_checkin.payload is not a well-formed envelope: not an object, got string' THEN RAISE; END IF;
+    IF SQLERRM <> 'value for domain checkin_payload violates check constraint "jsonb_envelope"' THEN RAISE; END IF;
     v_n := v_n + 1;
   END;
   IF v_n < 1 THEN RAISE EXCEPTION 'TEST FAILED: the reflection INSERT was not refused'; END IF;
   RAISE NOTICE 'PASS 28c the envelope rule on reflection (an INSERT), proposal_revision and follow_up_checkin (fixture rows when present): % refused, no value in the message', v_n;
 END $$;
 ROLLBACK;
+-- 28d. typed domains (owner, 2026-11-23), as their writers: brain_activity.metadata (activity_metadata) is the
+--      turn-trace.ts whitelist — what brain-service writes passes, a key outside it, a value of the wrong type
+--      and a non-object are refused; model_id and turn_id bound the telemetry ids. As mwf_ai (its EXECUTE on
+--      app.activity_metadata_violation is what the cast needs).
+\connect - mwf_ai
+DO $$
+DECLARE
+  ok jsonb := '[{"maxTokens": 4096, "toolCount": 1, "cacheReadInputTokens": 10, "toolInvocations": [{"name": "update_session_state"}, {"name": "other"}],
+                 "contextSizes": {"pinnedTokens": 1, "summaryTokens": 2, "recentTokens": 3, "ragTokens": 0}},
+                {"error": "ThrottlingException"},
+                {"queryCount": 2, "turnTrace": {"totalDurationMs": 12.5, "modelUsed": "sonnet", "usedMock": false,
+                  "steps": [{"name": "Dispatch (ignored)", "type": "dispatch", "startMs": 0, "durationMs": 3, "result": "other: unknown tag, fell through to the normal response", "status": "skipped"}]}},
+                {}]';
+  bad jsonb := '[{"prompt": "MY SECRET"}, {"maxTokens": "4096"}, {"error": "connect ECONNREFUSED 10.0.0.1:5432"},
+                 {"toolInvocations": [{"name": "update_session_state", "input": "MY SECRET"}]},
+                 {"contextSizes": {"pinnedTokens": 1, "note": 2}}, {"turnTrace": {"steps": [{"name": "x", "status": "MY SECRET"}]}},
+                 {"turnTrace": {"text": "MY SECRET"}}, ["MY SECRET"], "MY SECRET"]';
+  c jsonb; n int := 0;
+BEGIN
+  FOR c IN SELECT * FROM jsonb_array_elements(ok) LOOP PERFORM c::activity_metadata; END LOOP;
+  FOR c IN SELECT * FROM jsonb_array_elements(bad) LOOP
+    BEGIN
+      PERFORM c::activity_metadata;
+      RAISE EXCEPTION 'TEST FAILED: metadata % accepted', c;
+    EXCEPTION WHEN check_violation THEN
+      IF SQLERRM <> 'value for domain activity_metadata violates check constraint "activity_metadata_whitelist"' THEN RAISE; END IF;
+      n := n + 1;
+    END;
+  END LOOP;
+  PERFORM 'global.anthropic.claude-haiku-4-5-20251001-v1:0'::model_id, 'amazon.titan-embed-text-v2:0'::model_id, 'system-retrieval'::model_id;
+  PERFORM '0193d4a0-0000-7000-8000-000000000001-0193d4a0-0000-7000-8000-000000000002-consent-share'::turn_id;
+  BEGIN PERFORM 'Claude Sonnet'::model_id; RAISE EXCEPTION 'TEST FAILED: model id with a space'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  BEGIN PERFORM 'a turn'::turn_id; RAISE EXCEPTION 'TEST FAILED: turn id with a space'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  RAISE NOTICE 'PASS 28d activity_metadata takes what brain-service writes and refuses % off-whitelist / ill-typed documents and ids', n;
+END $$;
+-- 28e. user_device.push_token (push_token) as mwf_app: an Expo token passes, a token with a space or a control
+--      character is refused; wrapped_dek is 1-6144 bytes.
+\connect - mwf_app
+DO $$ DECLARE n int := 0; BEGIN
+  PERFORM 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]'::push_token;
+  BEGIN PERFORM 'ExponentPushToken[ab cd]'::push_token; RAISE EXCEPTION 'TEST FAILED: a token with a space'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  BEGIN PERFORM (E'ExponentPushToken[ab\ncd]')::push_token; RAISE EXCEPTION 'TEST FAILED: a token with a newline'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  BEGIN PERFORM ''::push_token; RAISE EXCEPTION 'TEST FAILED: an empty token'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  PERFORM '\x01'::bytea::wrapped_dek;
+  BEGIN PERFORM ''::bytea::wrapped_dek; RAISE EXCEPTION 'TEST FAILED: an empty wrapped key'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  BEGIN PERFORM decode(repeat('00', 6145), 'hex')::wrapped_dek; RAISE EXCEPTION 'TEST FAILED: a 6145-byte wrapped key'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
+  RAISE NOTICE 'PASS 28e push_token refuses a space, a control character and empty (% refusals with wrapped_dek''s bounds)', n;
+END $$;
 
 -- 29. app.json_schema is reference data: mwf_app and mwf_ai read it (the invoker-rights triggers
 --     do) and write nothing.
