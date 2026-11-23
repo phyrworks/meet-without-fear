@@ -1258,7 +1258,7 @@ BEGIN
       RAISE EXCEPTION 'TEST FAILED: % was stored', c -> 0;
     EXCEPTION WHEN check_violation THEN
       GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT, v_detail = PG_EXCEPTION_DETAIL, v_hint = PG_EXCEPTION_HINT;
-      IF v_msg IS DISTINCT FROM 'value for domain feature_state_doc violates check constraint "jsonb_envelope"' THEN
+      IF v_msg IS DISTINCT FROM 'value for domain feature_state_json_schema violates check constraint "jsonb_envelope"' THEN
         RAISE EXCEPTION 'TEST FAILED: case % message %', i, v_msg;
       END IF;
       IF app.jsonb_envelope_violation(c -> 0) IS DISTINCT FROM c ->> 1 THEN
@@ -1293,27 +1293,27 @@ DO $$ DECLARE v_detail text; v_n int := 0; BEGIN
     END IF;
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-    IF SQLERRM <> 'value for domain proposal_snapshot violates check constraint "jsonb_envelope"' OR v_detail <> '' THEN RAISE; END IF;
+    IF SQLERRM <> 'value for domain proposal_snapshot_json_schema violates check constraint "jsonb_envelope"' OR v_detail <> '' THEN RAISE; END IF;
   END;
   BEGIN
     INSERT INTO reflection (user_id, summary_doc) VALUES ('00000000-0000-7e00-8000-0000000000b1', '{"$enc": "MY SECRET SUMMARY"}');
     RAISE EXCEPTION 'TEST FAILED: plaintext envelope in reflection.summary_doc';
   EXCEPTION WHEN check_violation THEN
-    IF SQLERRM <> 'value for domain reflection_summary_doc violates check constraint "jsonb_envelope"' OR SQLERRM LIKE '%SECRET%' THEN RAISE; END IF;
+    IF SQLERRM <> 'value for domain reflection_summary_json_schema violates check constraint "jsonb_envelope"' OR SQLERRM LIKE '%SECRET%' THEN RAISE; END IF;
     v_n := v_n + 1;
   END;
   BEGIN
     UPDATE follow_up_checkin SET payload = '"MY SECRET ANSWERS"' WHERE id = (SELECT id FROM follow_up_checkin LIMIT 1);
     IF FOUND THEN RAISE EXCEPTION 'TEST FAILED: a non-object payload'; END IF;
   EXCEPTION WHEN check_violation THEN
-    IF SQLERRM <> 'value for domain checkin_payload violates check constraint "jsonb_envelope"' THEN RAISE; END IF;
+    IF SQLERRM <> 'value for domain checkin_payload_json_schema violates check constraint "jsonb_envelope"' THEN RAISE; END IF;
     v_n := v_n + 1;
   END;
   IF v_n < 1 THEN RAISE EXCEPTION 'TEST FAILED: the reflection INSERT was not refused'; END IF;
   RAISE NOTICE 'PASS 28c the envelope rule on reflection (an INSERT), proposal_revision and follow_up_checkin (fixture rows when present): % refused, no value in the message', v_n;
 END $$;
 ROLLBACK;
--- 28d. typed domains (owner, 2026-11-23), as their writers: brain_activity.metadata (activity_metadata) is the
+-- 28d. typed domains (owner, 2026-11-23), as their writers: brain_activity.metadata (activity_metadata_json_schema) is the
 --      turn-trace.ts whitelist — what brain-service writes passes, a key outside it, a value of the wrong type
 --      and a non-object are refused; model_id and turn_id bound the telemetry ids. As mwf_ai (its EXECUTE on
 --      app.activity_metadata_violation is what the cast needs).
@@ -1332,13 +1332,13 @@ DECLARE
                  {"turnTrace": {"text": "MY SECRET"}}, ["MY SECRET"], "MY SECRET"]';
   c jsonb; n int := 0;
 BEGIN
-  FOR c IN SELECT * FROM jsonb_array_elements(ok) LOOP PERFORM c::activity_metadata; END LOOP;
+  FOR c IN SELECT * FROM jsonb_array_elements(ok) LOOP PERFORM c::activity_metadata_json_schema; END LOOP;
   FOR c IN SELECT * FROM jsonb_array_elements(bad) LOOP
     BEGIN
-      PERFORM c::activity_metadata;
+      PERFORM c::activity_metadata_json_schema;
       RAISE EXCEPTION 'TEST FAILED: metadata % accepted', c;
     EXCEPTION WHEN check_violation THEN
-      IF SQLERRM <> 'value for domain activity_metadata violates check constraint "activity_metadata_whitelist"' THEN RAISE; END IF;
+      IF SQLERRM <> 'value for domain activity_metadata_json_schema violates check constraint "activity_metadata_whitelist"' THEN RAISE; END IF;
       n := n + 1;
     END;
   END LOOP;
@@ -1346,7 +1346,7 @@ BEGIN
   PERFORM '0193d4a0-0000-7000-8000-000000000001-0193d4a0-0000-7000-8000-000000000002-consent-share'::turn_id;
   BEGIN PERFORM 'Claude Sonnet'::model_id; RAISE EXCEPTION 'TEST FAILED: model id with a space'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
   BEGIN PERFORM 'a turn'::turn_id; RAISE EXCEPTION 'TEST FAILED: turn id with a space'; EXCEPTION WHEN check_violation THEN n := n + 1; END;
-  RAISE NOTICE 'PASS 28d activity_metadata takes what brain-service writes and refuses % off-whitelist / ill-typed documents and ids', n;
+  RAISE NOTICE 'PASS 28d activity_metadata_json_schema takes what brain-service writes and refuses % off-whitelist / ill-typed documents and ids', n;
 END $$;
 -- 28e. user_device.push_token (push_token) as mwf_app: an Expo token passes, a token with a space or a control
 --      character is refused; wrapped_dek is 1-6144 bytes.

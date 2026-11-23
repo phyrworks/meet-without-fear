@@ -3892,7 +3892,7 @@ BEGIN
   -- Typed domains (owner, 2026-11-23): a domain CHECK also runs with the writer's rights, and an INSERT that leaves a
   -- domain column to its default (or NULL) runs it too. So every role that may INSERT into a table with a column of
   -- such a domain, or UPDATE that column, may EXECUTE each function the domain's CHECKs call (pg_depend: the
-  -- envelope domains' app.jsonb_envelope_violation, activity_metadata's app.activity_metadata_violation,
+  -- envelope domains' app.jsonb_envelope_violation, activity_metadata_json_schema's app.activity_metadata_violation,
   -- ciphertext_list's app.all_ciphertext). Same exemptions.
   SELECT string_agg(DISTINCT r.rolname || ' on ' || c.relname || '.' || a.attname || ' (' || dp.refobjid::regprocedure::text || ')', ', ') INTO bad
   FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid

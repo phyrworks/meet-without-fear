@@ -91,7 +91,7 @@ const WORKER_GRANTS = [
 
 /** Schema USAGE and function EXECUTE of each, by name. */
 const AI_ROUTINES = [
-  // typed domains (2026-11-23): the CHECK of brain_activity.metadata's activity_metadata domain
+  // typed domains (2026-11-23): the CHECK of brain_activity.metadata's activity_metadata_json_schema domain
   'activity_metadata_violation:EXECUTE',
   'deliver_message:EXECUTE',
   'empathy_mark_delivery:EXECUTE',

@@ -18,7 +18,7 @@
  *      app.current_user_id();
  *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, ordinal_no, kek_id,
  *      wrapped_dek, push_token, model_id, turn_id, email, milestone_key, person_name, and the jsonb document domains:
- *      the six envelope domains, preferences_doc, ai_memory_doc, activity_metadata; typed domains, 2026-11-23), the
+ *      the six envelope domains, preferences_json_schema, ai_memory_json_schema, activity_metadata_json_schema; typed domains, 2026-11-23), the
  *      enums and the 49 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the

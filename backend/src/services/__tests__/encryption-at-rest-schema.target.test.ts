@@ -115,7 +115,7 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
       );
     expect(err?.code).toBe('23514');
     // the domain CHECK names the contract's domain and the rule, never the value (typed domains, 2026-11-23)
-    expect(err?.message).toBe('value for domain feature_state_doc violates check constraint "jsonb_envelope"');
+    expect(err?.message).toBe('value for domain feature_state_json_schema violates check constraint "jsonb_envelope"');
     expect(err?.detail).toBeUndefined();
     expect(JSON.stringify(err)).not.toContain(secret);
   });
