@@ -176,9 +176,9 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- anything that does must be a well-formed v1 envelope. There is no v2 arm:
 -- no code writes enc:v2 yet (W13 will, with a key id; add the arm with it).
 -- A strict variant (every value an envelope) is planned for when
--- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
--- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
--- CHECK (app.all_ciphertext(col)) instead. Of the eight jsonb columns in the map,
+-- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns are
+-- ciphertext_list (below), not ciphertext[]: an array of a domain has its own
+-- type OID, which node-postgres does not parse (step 20). Of the eight jsonb columns in the map,
 -- the seven jsonb-envelope ones carry the t_jsonb_envelope trigger (brain_activity.input
 -- and output since work-k5fk.9, OD-1) and ai_memory.doc (jsonb-leaves) the structural
 -- t_doc_schema trigger (work-k5fk.8, trailer.sql T5); all eight have a COMMENT starting 'encrypted'.
@@ -194,7 +194,16 @@ COMMENT ON DOMAIN ciphertext IS 'Encrypted by the app (utils/field-encryption.ts
 CREATE FUNCTION app.all_ciphertext(v text[]) RETURNS boolean
   LANGUAGE sql IMMUTABLE PARALLEL SAFE
   RETURN v IS NULL OR (v::public.ciphertext[]) IS NOT NULL;
-COMMENT ON FUNCTION app.all_ciphertext(text[]) IS 'True when every element is a ciphertext; raises the ciphertext domain error otherwise. The CHECK on each encrypted text[] column.';
+COMMENT ON FUNCTION app.all_ciphertext(text[]) IS 'True when every element is a ciphertext; raises the ciphertext domain error otherwise. The CHECK of the ciphertext_list domain.';
+
+-- Every encrypted text[] column (SENSITIVE_FIELD_MAP, kind text[]) is a
+-- ciphertext_list: a text[] whose every element is a ciphertext, so the type
+-- says the column is encrypted. A domain over text[], not an array of the
+-- ciphertext domain: drivers see the base type (text[], oid 1009) and
+-- node-postgres parses it into a string array, where ciphertext[] would have
+-- its own oid and arrive as the string '{…}' (step 20 refuses one).
+CREATE DOMAIN ciphertext_list AS text[] CHECK (app.all_ciphertext(VALUE));
+COMMENT ON DOMAIN ciphertext_list IS 'A text[] whose every element is a ciphertext (the ciphertext domain, checked by app.all_ciphertext): each element encrypted by the app on its own; every encrypted text[] column. Drivers see text[] (oid 1009); Prisma sees String[]. NULL elements and a NULL array pass.';
 
 -- Every timestamp column is a ts_ms: a timestamptz rounded to milliseconds.
 -- A JS Date holds milliseconds, so a microsecond value written by PostgreSQL
@@ -1000,7 +1009,7 @@ CREATE TABLE proposal (
     description ciphertext NOT NULL,
     duration ciphertext,
     measure_of_success ciphertext,
-    unresolved_need_labels text[] DEFAULT ARRAY[]::text[],
+    unresolved_need_labels ciphertext_list DEFAULT ARRAY[]::text[],
     removed_at ts_ms,
     removed_by_user_id uuid7,
     removal_reason ciphertext,
@@ -1011,8 +1020,6 @@ CREATE TABLE proposal (
     -- §1.4 proposal [P21]
     CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
     CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL),
-    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
-    CHECK (app.all_ciphertext(unresolved_need_labels)),
     -- work-k5fk.3: creator and remover are participants of the proposal's own session
     UNIQUE (id, session_id),
     FOREIGN KEY (session_id, created_by_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
@@ -1029,7 +1036,7 @@ COMMENT ON COLUMN proposal.description IS 'encrypted (session): what the proposa
 COMMENT ON COLUMN proposal.duration IS 'encrypted (session): free text for how long, e.g. 3 days or 10 minutes, once this week (AI or user; max 100 on POST /strategies). NOT a true interval: nothing parses it.';
 COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text: how the participants will know it worked (max 500 on POST /strategies).';
 COMMENT ON COLUMN proposal.removal_reason IS 'encrypted (session): why it was removed: the AI''s REMOVE reason or the participant''s chat text.';
-COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): text[], each element encrypted: need labels the proposal addresses that matched no need_share, as given by the AI or the participant.';
+COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): ciphertext_list, each element encrypted: need labels the proposal addresses that matched no need_share, as given by the AI or the participant.';
 -- mwf_app: Stage 4 capture, the sub-chat and the shared-proposal routes create and edit proposals and their need labels
 -- (stage4-capture.service.ts, stage4-subchat.service.ts, controllers/stage4.ts). FINDING: capture can set and re-assign
 -- created_by_user_id to the PARTNER (from model output) and edit a partner's proposal. shared_at and the
@@ -1185,7 +1192,7 @@ CREATE TABLE need (
     user_id uuid7 NOT NULL,
     label ciphertext NOT NULL,
     category need_category NOT NULL,
-    evidence text[] DEFAULT ARRAY[]::text[],
+    evidence ciphertext_list DEFAULT ARRAY[]::text[],
     ai_confidence real NOT NULL,
     confirmed_at ts_ms,
     locked_at ts_ms,
@@ -1196,8 +1203,6 @@ CREATE TABLE need (
 
     -- §1.4 need [P30]
     CHECK (ai_confidence BETWEEN 0 AND 1),
-    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
-    CHECK (app.all_ciphertext(evidence)),
     -- work-k5fk.3: what consent and need_share pin to (a share is its owner's, by key)
     UNIQUE (id, session_id),
     UNIQUE (id, session_id, user_id),
@@ -1217,7 +1222,7 @@ COMMENT ON COLUMN need.ai_confidence IS 'The model''s confidence in the need, 0 
 COMMENT ON COLUMN need.locked_at IS 'When the need was locked against further edits.';
 COMMENT ON COLUMN need.superseded_by_need_id IS 'The need that replaced this one after an edit.';
 COMMENT ON COLUMN need.label IS 'encrypted (participant): the need statement in the participant''s words (AI-identified or typed); free text, not a taxonomy (category is the classification).';
-COMMENT ON COLUMN need.evidence IS 'encrypted (participant): text[], each element encrypted: short quotes of what the participant said; never copied to need_share.';
+COMMENT ON COLUMN need.evidence IS 'encrypted (participant): ciphertext_list, each element encrypted: short quotes of what the participant said; never copied to need_share.';
 -- mwf_app: the caller's needs — extraction, edits, confirm / lock, supersede and soft delete (needs.ts,
 -- needs-edit-applier.service.ts, controllers/stage3.ts). Never a DELETE.
 GRANT SELECT ON need TO app_access;
@@ -1370,9 +1375,9 @@ CREATE TABLE reconciler_result (
     alignment_summary ciphertext NOT NULL,
     gap_summary ciphertext NOT NULL,
     gap_severity gap_severity NOT NULL,
-    correctly_identified text[] DEFAULT ARRAY[]::text[],
-    missed_feelings text[] DEFAULT ARRAY[]::text[],
-    misattributions text[] DEFAULT ARRAY[]::text[],
+    correctly_identified ciphertext_list DEFAULT ARRAY[]::text[],
+    missed_feelings ciphertext_list DEFAULT ARRAY[]::text[],
+    misattributions ciphertext_list DEFAULT ARRAY[]::text[],
     most_important_gap ciphertext,
     recommended_action recommender_action NOT NULL,
     rationale ciphertext NOT NULL,
@@ -1388,10 +1393,6 @@ CREATE TABLE reconciler_result (
     UNIQUE (attempt_id, iteration),
     -- §1.2 reconciler_result [P17f]
     CHECK (alignment_score BETWEEN 0 AND 100),
-    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
-    CHECK (app.all_ciphertext(correctly_identified)),
-    CHECK (app.all_ciphertext(missed_feelings)),
-    CHECK (app.all_ciphertext(misattributions)),
     -- work-k5fk.3: the result's subject is its attempt's subject, by key (the subject half of t_result_live_attempt);
     -- work-k5fk.9 (C9): and its author the attempt's author, so the guidance cut from it names the right author
     UNIQUE (id, session_id),
@@ -1414,9 +1415,9 @@ COMMENT ON COLUMN reconciler_result.circuit_breaker_tripped IS 'Meant to mark a 
 COMMENT ON COLUMN reconciler_result.superseded_at IS 'Set when a newer result replaces this one; NULL marks the current result.';
 COMMENT ON COLUMN reconciler_result.alignment_summary IS 'encrypted (participant): the reconciler''s 1-2 sentence summary of what the attempt got right.';
 COMMENT ON COLUMN reconciler_result.gap_summary IS 'encrypted (participant): the reconciler''s 1-2 sentence summary of what it missed.';
-COMMENT ON COLUMN reconciler_result.correctly_identified IS 'encrypted (participant): text[], each element encrypted: the feelings the attempt identified, LLM output.';
-COMMENT ON COLUMN reconciler_result.missed_feelings IS 'encrypted (participant): text[], each element encrypted: the feelings the attempt missed, LLM output.';
-COMMENT ON COLUMN reconciler_result.misattributions IS 'encrypted (participant): text[], each element encrypted: what the attempt attributed wrongly, LLM output.';
+COMMENT ON COLUMN reconciler_result.correctly_identified IS 'encrypted (participant): ciphertext_list, each element encrypted: the feelings the attempt identified, LLM output.';
+COMMENT ON COLUMN reconciler_result.missed_feelings IS 'encrypted (participant): ciphertext_list, each element encrypted: the feelings the attempt missed, LLM output.';
+COMMENT ON COLUMN reconciler_result.misattributions IS 'encrypted (participant): ciphertext_list, each element encrypted: what the attempt attributed wrongly, LLM output.';
 COMMENT ON COLUMN reconciler_result.most_important_gap IS 'encrypted (participant): the single most important gap, LLM output, or NULL.';
 COMMENT ON COLUMN reconciler_result.rationale IS 'encrypted (participant): why the reconciler recommends its action, LLM output.';
 COMMENT ON COLUMN reconciler_result.suggested_share_focus IS 'encrypted (participant): what the subject might share, LLM output, or NULL.';

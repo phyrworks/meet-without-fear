@@ -69,7 +69,7 @@ const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 /**
  * The encrypted columns of SENSITIVE_FIELD_MAP (lib/prisma-encryption-middleware.ts)
  * as tables.sql types them: CIPHERTEXT_COLUMNS text columns typed ciphertext,
- * CIPHERTEXT_ARRAYS text[] columns with CHECK (app.all_ciphertext(col)). Like
+ * CIPHERTEXT_ARRAYS text[] columns typed ciphertext_list. Like
  * UUID7_COLUMNS, checkTables() counts them and the trailer's step-20 assertion
  * gets the numbers; encryption-at-rest-schema.target.test.ts ties the catalog
  * to the map itself, in both directions.
@@ -116,8 +116,8 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   if (uuid7 !== UUID7_COLUMNS) throw new Error(`tables.sql has ${uuid7} uuid7 columns, expected ${UUID7_COLUMNS}`);
   const ct = (sql.match(/^ {4}[a-z0-9_]+ ciphertext\b/gm) ?? []).length;
   if (ct !== CIPHERTEXT_COLUMNS) throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
-  const ca = (sql.match(/^ {4}CHECK \(app\.all_ciphertext\([a-z0-9_]+\)\)/gm) ?? []).length;
-  if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} all_ciphertext CHECKs, expected ${CIPHERTEXT_ARRAYS}`);
+  const ca = (sql.match(/^ {4}[a-z0-9_]+ ciphertext_list\b/gm) ?? []).length;
+  if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} ciphertext_list columns, expected ${CIPHERTEXT_ARRAYS}`);
   return { names: names.size, uuid7 };
 }
 

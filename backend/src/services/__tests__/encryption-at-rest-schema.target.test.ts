@@ -3,13 +3,15 @@
  * says exactly what SENSITIVE_FIELD_MAP says.
  *
  *   - catalog ⇄ map, both directions: the text columns typed `ciphertext`,
- *     the text[] columns with CHECK (app.all_ciphertext(col)), and the jsonb
+ *     the text[] columns typed `ciphertext_list`, and the jsonb
  *     columns whose COMMENT starts 'encrypted' are exactly the map's text,
  *     text[] and jsonb (envelope / leaves) columns;
  *   - every encrypted column's COMMENT starts 'encrypted (<its key class>)';
  *   - the `ciphertext` domain accepts real encrypt() output (empty, short,
  *     long, unicode plaintext) and plaintext (keyless mode), and refuses a
- *     malformed enc: envelope; app.all_ciphertext does the same per element.
+ *     malformed enc: envelope; app.all_ciphertext does the same per element;
+ *   - a ciphertext_list column refuses a malformed element and takes a
+ *     plaintext one (keyless mode), and node-postgres reads it as string[].
  *
  * Requires: npx tsx src/testing/golden/cli.ts build CREATED
  */
@@ -36,18 +38,18 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     await run?.drop();
   });
 
-  it('ciphertext columns, all_ciphertext CHECKs and encrypted jsonb comments equal the map', async () => {
+  it('ciphertext columns, ciphertext_list columns and encrypted jsonb comments equal the map', async () => {
     const typed = await run.sql<{ t: string; c: string }>(
       `SELECT c.relname AS t, a.attname AS c
          FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
         WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
           AND a.atttypid = 'public.ciphertext'::regtype`,
     );
-    const checked = await run.sql<{ t: string; c: string }>(
-      `SELECT k.conrelid::regclass::text AS t,
-              substring(pg_get_constraintdef(k.oid) FROM 'app\\.all_ciphertext\\(([a-z_]+)\\)') AS c
-         FROM pg_constraint k
-        WHERE k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ 'app\\.all_ciphertext\\('`,
+    const lists = await run.sql<{ t: string; c: string }>(
+      `SELECT c.relname AS t, a.attname AS c
+         FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+        WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.atttypid = 'public.ciphertext_list'::regtype`,
     );
     const jsonb = await run.sql<{ t: string; c: string }>(
       `SELECT c.relname AS t, a.attname AS c
@@ -59,7 +61,7 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     const want = (kinds: string[]) =>
       sorted(ENCRYPTED_COLUMNS.filter(e => kinds.includes(e.kind)).map(e => key(e.table, e.column)));
     expect(sorted(typed.map(r => key(r.t, r.c)))).toEqual(want(['text']));
-    expect(sorted(checked.map(r => key(r.t, r.c)))).toEqual(want(['text[]']));
+    expect(sorted(lists.map(r => key(r.t, r.c)))).toEqual(want(['text[]']));
     expect(sorted(jsonb.map(r => key(r.t, r.c)))).toEqual(want(['jsonb-envelope', 'jsonb-leaves']));
   });
 
@@ -163,5 +165,23 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
       await expect(run.sql(`SELECT $1::ciphertext AS v`, [m])).rejects.toThrow(/ciphertext/);
       await expect(run.sql(`SELECT app.all_ciphertext($1::text[])`, [[good, m]])).rejects.toThrow(/ciphertext/);
     }
+  });
+
+  it('a ciphertext_list column refuses a malformed element, takes plaintext, and reads back as string[]', async () => {
+    process.env.FIELD_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString('base64');
+    const [p] = await run.sql<{ session_id: string; user_id: string }>(
+      `SELECT session_id, user_id FROM participant ORDER BY session_id, user_id LIMIT 1`,
+    );
+    const insert = (labels: (string | null)[]) =>
+      run.sql<{ labels: string[] }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, description, unresolved_need_labels)
+         VALUES ($1, $2, 'plain description', $3) RETURNING unresolved_need_labels AS labels`,
+        [p.session_id, p.user_id, labels],
+      );
+    const sealed = encrypt('a need label');
+    // keyless dev/test stores plaintext; a real envelope and a NULL element pass too
+    const [{ labels }] = await insert(['plain label', sealed, null]);
+    expect(labels).toEqual(['plain label', sealed, null]);
+    await expect(insert(['plain label', 'enc:v1:not-an-envelope'])).rejects.toThrow(/ciphertext/);
   });
 });
