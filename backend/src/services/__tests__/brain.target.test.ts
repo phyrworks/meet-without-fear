@@ -250,6 +250,21 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     expect(err.metadata).toEqual({ error: 'Error' });
   });
 
+  it('the database holds the metadata whitelist too: a raw write of an unknown key is refused (activity_metadata)', async () => {
+    const insert = (metadata: unknown) =>
+      run.as(
+        'mwf_ai',
+        reflectionOwner,
+        `INSERT INTO brain_activity (reflection_id, activity_type, model, metadata) VALUES ($1, 'LLM_CALL', 'm', $2::jsonb)`,
+        [reflectionId, JSON.stringify(metadata)],
+      );
+    await expect(insert({ maxTokens: 1024, toolInvocations: [{ name: 'other' }] })).resolves.toBeDefined();
+    await expect(insert({ maxTokens: 1024, prompt: 'PROBE_PROMPT' })).rejects.toThrow(
+      'value for domain activity_metadata violates check constraint "activity_metadata_whitelist"',
+    );
+    await expect(insert({ maxTokens: '1024' })).rejects.toThrow(/activity_metadata_whitelist/);
+  });
+
   it('a telemetry failure never breaks the call: an unsaved record, and complete/fail are no-ops', async () => {
     const { brainService } = await import('../brain-service');
     const bad = await brainService.startActivity({

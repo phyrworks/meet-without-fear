@@ -209,6 +209,11 @@ export function sanitizeTurnTrace(trace: TurnTrace): { trace: TurnTrace; redacte
 // brain_activity.metadata is ops-readable, so every writer stores a whitelisted ActivityMetadata: numbers, the names of
 // the tools the app declares, and the context window sizes. sanitizeActivityMetadata is the guard in brain-service's
 // startActivity / completeActivity; anything else is dropped. (The turn trace and the error class have their own.)
+//
+// The database mirrors this whitelist: brain_activity.metadata is the activity_metadata domain, whose CHECK
+// app.activity_metadata_violation (backend/scripts/target-shape/tables.sql) refuses any key but ActivityMetadata's,
+// turnTrace and error, and any value of another type. A key, a field or a closed set (TOOL_NAMES, STEP_TYPES,
+// STEP_STATUSES) added here must be added there too, or every write carrying it fails.
 
 /** The tools the app declares to the model (stage-tools.ts); any other name is 'other'. */
 const TOOL_NAMES = new Set(['update_session_state']);

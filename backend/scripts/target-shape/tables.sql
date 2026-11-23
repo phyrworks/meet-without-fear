@@ -179,9 +179,10 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns are
 -- ciphertext_list (below), not ciphertext[]: an array of a domain has its own
 -- type OID, which node-postgres does not parse (step 20). Of the eight jsonb columns in the map,
--- the seven jsonb-envelope ones carry the t_jsonb_envelope trigger (brain_activity.input
--- and output since work-k5fk.9, OD-1) and ai_memory.doc (jsonb-leaves) the structural
--- t_doc_schema trigger (work-k5fk.8, trailer.sql T5); all eight have a COMMENT starting 'encrypted'.
+-- the seven jsonb-envelope ones are typed by a domain per contract whose CHECK is the envelope
+-- rule (app.jsonb_envelope_violation, below; brain_activity.input and output since work-k5fk.9,
+-- OD-1) and ai_memory.doc (jsonb-leaves) carries the structural t_doc_schema trigger (work-k5fk.8,
+-- trailer.sql T5); all eight have a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
          OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
@@ -204,6 +205,51 @@ COMMENT ON FUNCTION app.all_ciphertext(text[]) IS 'True when every element is a 
 -- its own oid and arrive as the string '{…}' (step 20 refuses one).
 CREATE DOMAIN ciphertext_list AS text[] CHECK (app.all_ciphertext(VALUE));
 COMMENT ON DOMAIN ciphertext_list IS 'A text[] whose every element is a ciphertext (the ciphertext domain, checked by app.all_ciphertext): each element encrypted by the app on its own; every encrypted text[] column. Drivers see text[] (oid 1009); Prisma sees String[]. NULL elements and a NULL array pass.';
+
+-- The envelope rule for the seven jsonb-envelope columns: the CHECK of each envelope domain (the
+-- jsonb documents section below; brain_activity.input and output since work-k5fk.9). Here, in the
+-- prelude, because a domain's CHECK needs its function first (typed domains, 2026-11-23; it was the
+-- t_jsonb_envelope trigger's). IMMUTABLE and reads no table, so pg_dump/restore order cannot break it.
+-- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
+-- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
+-- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
+-- writes '{}'; so an object WITHOUT a "$enc" key passes. One WITH it is an
+-- envelope and must be well formed: "$enc" its only key, a string, starting
+-- enc: (plaintext in the envelope is refused — the domain alone would let it
+-- through) and castable to ciphertext (a malformed ciphertext is refused).
+-- A non-object is refused too. The strict variant (every document an envelope)
+-- lands with the strict ciphertext domain (work-k5fk.11), here, in one place.
+-- Returns the reason, never the value; NULL when the document passes. A domain
+-- CHECK refusal names the domain and the constraint only (no DETAIL, no value).
+CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
+  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$
+  BEGIN
+    IF doc IS NULL THEN RETURN NULL; END IF;
+    IF jsonb_typeof(doc) <> 'object' THEN RETURN 'not an object, got ' || jsonb_typeof(doc); END IF;
+    IF NOT doc ? '$enc' THEN RETURN NULL; END IF;
+    IF doc - '$enc' <> '{}'::jsonb THEN RETURN 'a sealed document has "$enc" as its only key'; END IF;
+    IF jsonb_typeof(doc -> '$enc') <> 'string' THEN RETURN '"$enc" is not a string, got ' || jsonb_typeof(doc -> '$enc'); END IF;
+    IF doc ->> '$enc' NOT LIKE 'enc:%' THEN RETURN '"$enc" is not a ciphertext (plaintext in an envelope)'; END IF;
+    BEGIN
+      PERFORM (doc ->> '$enc')::public.ciphertext;
+    EXCEPTION WHEN check_violation THEN
+      RETURN '"$enc" is a malformed ciphertext';
+    END;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. The CHECK of every envelope domain (feature_state_doc, checkin_payload, proposal_snapshot, reflection_summary_doc, llm_call_input, llm_call_output).';
+-- A domain CHECK runs with the writer's rights, also for a row whose INSERT leaves the column to its default: every
+-- role that may INSERT into a table with an envelope column, or UPDATE one, runs it (step 20 asserts it, T8).
+-- app_access (mwf_app's: feature_state, follow_up_checkin, proposal_revision, reflection), worker_access (mwf_worker's:
+-- proposal_revision INSERT, brain_activity input / output purge), ai_access (mwf_ai's: brain_activity, brain-service
+-- start/completeActivity; owner decision OD-1, work-k5fk.9).
+REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO app_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO worker_access;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO ai_access;
 
 -- Every timestamp column is a ts_ms: a timestamptz rounded to milliseconds.
 -- A JS Date holds milliseconds, so a microsecond value written by PostgreSQL
@@ -230,11 +276,44 @@ COMMENT ON DOMAIN ordinal_no IS 'A 1-based ordinal: 1, 2, 3 … (message.seq, co
 
 -- work-k5fk.9 (D3): the id of the KMS key (the KEK) that wrapped a DEK (session_key, participant_key, user_key).
 -- No format is fixed yet (nothing writes these tables before W13), so only its bounds: 1..2048 characters (an
--- AWS KMS key ARN or alias fits) with no whitespace or control character. There is deliberately no domain for
--- wrapped_key: its format is W13's.
+-- AWS KMS key ARN or alias fits) with no whitespace or control character. The wrapped key itself is a wrapped_dek
+-- (below): its format is fixed at W13, and that domain is where it tightens.
 CREATE DOMAIN kek_id AS text
   CHECK (char_length(VALUE) BETWEEN 1 AND 2048 AND VALUE COLLATE "C" !~ '[[:space:][:cntrl:]]');
 COMMENT ON DOMAIN kek_id IS 'The id of the KMS key (the KEK) that wrapped a data key: 1-2048 characters, no whitespace or control character. No format is fixed before W13.';
+
+-- Typed domains (owner, 2026-11-23): a data key (DEK) wrapped by the KMS key named in kek_id — session_key,
+-- participant_key and user_key.wrapped_dek. The format is fixed at W13 (nothing writes these tables before it), and
+-- this domain is where it tightens; until then only its bounds: 1..6144 bytes, the largest ciphertext blob AWS KMS
+-- Encrypt returns. Prisma reads it as Bytes.
+CREATE DOMAIN wrapped_dek AS bytea CHECK (octet_length(VALUE) BETWEEN 1 AND 6144);
+COMMENT ON DOMAIN wrapped_dek IS 'A data key (DEK) wrapped by a KMS key (the KEK, kek_id): 1-6144 bytes (the AWS KMS ciphertext blob limit). Never an unwrapped key. The format is fixed at W13, which tightens this domain.';
+
+-- Typed domains (owner, 2026-11-23): an install's push token (user_device.push_token), in its provider's format
+-- (push_provider; today Expo's ExponentPushToken[…], which Expo.isExpoPushToken checks in the app). Only bounds here,
+-- since a new provider brings its own format: 1..512 characters (the API contract's max) with no whitespace or
+-- control character (pg_c_utf8: Unicode White_Space and Cc), which no Expo, APNs (hex) or FCM token contains.
+CREATE DOMAIN push_token AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 512 AND VALUE COLLATE pg_c_utf8 !~ '[[:space:][:cntrl:]]');
+COMMENT ON DOMAIN push_token IS 'A device push token in its provider''s format (user_device.push_provider): 1-512 characters, no whitespace or control character. The app validates the format per provider (push.ts, Expo.isExpoPushToken).';
+
+-- Typed domains (owner, 2026-11-23): the model id an AI call used (brain_activity.model): a Bedrock model or
+-- inference-profile id (global.anthropic.claude-haiku-4-5-20251001-v1:0, amazon.titan-embed-text-v2:0;
+-- lib/bedrock.ts BEDROCK_*_MODEL_ID) or a pseudo-model of the app's (system-retrieval, context-retriever.ts; test
+-- names such as claude-sonnet, test-model). Not an enum or a lookup table: the ids come from environment config and
+-- change without a migration. So only the spelling: 1..200 of lower-case letters, digits and . - _ :.
+CREATE DOMAIN model_id AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 200 AND VALUE COLLATE "C" ~ '^[a-z0-9._:-]+$');
+COMMENT ON DOMAIN model_id IS 'A model id as Bedrock spells it (e.g. global.anthropic.claude-haiku-4-5-20251001-v1:0, amazon.titan-embed-text-v2:0) or an app pseudo-model (system-retrieval): 1-200 lower-case letters, digits and . - _ :. Not a closed set: model ids come from environment config.';
+
+-- Typed domains (owner, 2026-11-23): the id that correlates the AI calls of one request or chat turn
+-- (brain_activity.turn_id). Ad hoc today — `${sessionId}-${requestId}` (middleware/request-context.ts),
+-- `${sessionId}-${userId}-consent-share`, `${sessionId}:need-share:${Date.now()}`, … — so only bounds: 1..256
+-- characters, no whitespace (Unicode White_Space) or control character. A refused value fails only the telemetry write (brain-service
+-- logs it; the call goes on).
+CREATE DOMAIN turn_id AS text
+  CHECK (char_length(VALUE) BETWEEN 1 AND 256 AND VALUE COLLATE pg_c_utf8 !~ '[[:space:][:cntrl:]]');
+COMMENT ON DOMAIN turn_id IS 'Correlates the AI calls of one request or chat turn: 1-256 characters, no whitespace or control character. Built ad hoc by each call site (e.g. <sessionId>-<userId>-feel-heard); no format.';
 
 -- work-k5fk.9 (D1): a person's name as a person typed it, or a sign-in provider sent it: "user".first_name and
 -- last_name, user_contact.nickname. At most 100 characters and never blank; NULL, not '', is "no name" (the app
@@ -314,23 +393,151 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- ----------------------------------------------------------------------------
 -- jsonb documents (work-k5fk.8). The shapes, their writers and why each column
 -- is validated the way it is: docs/backend/data-model/jsonb-shapes-2026-11.md.
---  * Every jsonb column keeps its jsonb_typeof CHECK (step 20).
---  * The seven jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
---    t_jsonb_envelope BEFORE trigger (trailer.sql T5): a sealed document is
---    exactly {"$enc": <a v1 ciphertext>}. A trigger, not a CHECK: a CHECK
---    refusal's DETAIL ("Failing row contains …") would echo the row — the
---    very plaintext the rule exists to catch — to the client and the log; the
---    trigger reports a reason only. Their plaintext is opaque to the database;
---    the app validates it (zod) before sealing.
+-- Typed domains (owner, 2026-11-23): every jsonb column is typed by a domain
+-- named for its app contract, so the schema says what the document is, and each
+-- rule lives in one place (step 20 refuses a plain jsonb column).
+--  * The seven jsonb-envelope columns (SENSITIVE_FIELD_MAP): one domain per
+--    contract, each with the envelope rule as its CHECK, constraint
+--    jsonb_envelope (app.jsonb_envelope_violation, above): a sealed document is
+--    exactly {"$enc": <a v1 ciphertext>}. A domain CHECK, not a table CHECK: a
+--    table CHECK refusal's DETAIL ("Failing row contains …") would echo the row
+--    — the very plaintext the rule exists to catch — to the client and the log;
+--    a domain CHECK refusal names the domain and the constraint only. Their
+--    plaintext is opaque to the database; the app validates it (zod) before
+--    sealing. Each domain is over jsonb, not over a shared jsonb_envelope
+--    domain: Prisma reads a domain over a domain as Unsupported("<base>"), not
+--    Json (prisma db pull, 7.x), so the shared part is the function.
 --  * The two plaintext app documents — user_preferences.doc and the structure
 --    of ai_memory.doc (its string leaves are encrypted; its keys, numbers and
 --    arrays are not) — are validated by a BEFORE trigger (trailer.sql T5)
---    against app.json_schema, by the row's doc_schema_version.
---  * brain_activity.metadata stays at jsonb_typeof: telemetry, written by the
---    AI only, read by the ops dashboard; its shape is each call site's.
+--    against app.json_schema, by the row's doc_schema_version. Their domains
+--    (preferences_doc, ai_memory_doc) hold the static part only: a domain CHECK
+--    cannot see doc_schema_version or kind, and must not read a table (pg_dump
+--    restores data after the domain, in no promised order).
+--  * brain_activity.metadata is an activity_metadata: telemetry, written by the
+--    AI only, read by the ops dashboard, so its keys and value types are the
+--    privacy whitelist of types/turn-trace.ts (app.activity_metadata_violation).
 --    brain_activity.input and output are jsonb envelopes (owner decision OD-1
 --    and its follow-up, work-k5fk.9).
 -- ----------------------------------------------------------------------------
+
+-- The envelope domains, one per app contract. Prisma reads each as Json.
+CREATE DOMAIN feature_state_doc AS jsonb
+  CONSTRAINT jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN feature_state_doc IS 'feature_state.doc: a jsonb envelope sealing one wellbeing feature''s document — the zod schema FEATURE_DOC_SCHEMAS[feature] (meditationDocSchema, gratitudeDocSchema, needsAssessmentDocSchema, peopleDocSchema) in shared/src/dto/feature-state.ts, written by services/feature-state.ts. The plain document passes for keyless dev/test.';
+COMMENT ON CONSTRAINT jsonb_envelope ON DOMAIN feature_state_doc IS 'A well-formed envelope {"$enc": <a v1 ciphertext>} or keyless plaintext (an object without "$enc"): app.jsonb_envelope_violation.';
+CREATE DOMAIN checkin_payload AS jsonb
+  CONSTRAINT jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN checkin_payload IS 'follow_up_checkin.payload: a jsonb envelope sealing a FollowUpCheckinPayload — the zod schema followUpCheckinPayloadSchema in shared/src/contracts/stages.ts, checked by services/tending.service.ts validateCheckinPayload before sealing. The plain document passes for keyless dev/test.';
+COMMENT ON CONSTRAINT jsonb_envelope ON DOMAIN checkin_payload IS 'A well-formed envelope {"$enc": <a v1 ciphertext>} or keyless plaintext (an object without "$enc"): app.jsonb_envelope_violation.';
+CREATE DOMAIN proposal_snapshot AS jsonb
+  CONSTRAINT jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN proposal_snapshot IS 'proposal_revision.before and .after: a jsonb envelope sealing a snapshot of a proposal''s fields — services/stage4-capture.service.ts proposalSnapshot() (plus the capture lineage), controllers/stage4.ts, services/stage4-subchat.service.ts and stage4-store.ts; an untyped Record<string, unknown>, no zod schema. The plain document passes for keyless dev/test.';
+COMMENT ON CONSTRAINT jsonb_envelope ON DOMAIN proposal_snapshot IS 'A well-formed envelope {"$enc": <a v1 ciphertext>} or keyless plaintext (an object without "$enc"): app.jsonb_envelope_violation.';
+CREATE DOMAIN reflection_summary_doc AS jsonb
+  CONSTRAINT jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN reflection_summary_doc IS 'reflection.summary_doc: a jsonb envelope sealing an inner-thoughts rolling summary — services/conversation-summarizer.ts updateInnerThoughtsSummary (ConversationSummary plus keyThemes, emotionalJourney, unresolvedTopics; no zod schema). The plain document passes for keyless dev/test.';
+COMMENT ON CONSTRAINT jsonb_envelope ON DOMAIN reflection_summary_doc IS 'A well-formed envelope {"$enc": <a v1 ciphertext>} or keyless plaintext (an object without "$enc"): app.jsonb_envelope_violation.';
+CREATE DOMAIN llm_call_input AS jsonb
+  CONSTRAINT jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN llm_call_input IS 'brain_activity.input: a jsonb envelope sealing what an AI call was given — services/brain-service.ts ActivityInput.input (unknown; lib/bedrock.ts { operation, messageCount, systemPromptLength } / { textLength }, context-retriever.ts a retrieval''s queries). The plain document passes for keyless dev/test.';
+COMMENT ON CONSTRAINT jsonb_envelope ON DOMAIN llm_call_input IS 'A well-formed envelope {"$enc": <a v1 ciphertext>} or keyless plaintext (an object without "$enc"): app.jsonb_envelope_violation.';
+CREATE DOMAIN llm_call_output AS jsonb
+  CONSTRAINT jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN llm_call_output IS 'brain_activity.output: a jsonb envelope sealing an AI call''s outcome — services/brain-service.ts completeActivity result.output (unknown; lib/bedrock.ts { text, stopReason } / { success }, context-retriever.ts a retrieval''s matches). The plain document passes for keyless dev/test.';
+COMMENT ON CONSTRAINT jsonb_envelope ON DOMAIN llm_call_output IS 'A well-formed envelope {"$enc": <a v1 ciphertext>} or keyless plaintext (an object without "$enc"): app.jsonb_envelope_violation.';
+
+-- The two plaintext app documents: the static part of their shape (the versioned schema is t_doc_schema's).
+CREATE DOMAIN preferences_doc AS jsonb
+  CHECK (jsonb_typeof(VALUE) = 'object' AND VALUE ?& ARRAY['memory', 'notifications', 'privacy']);
+COMMENT ON DOMAIN preferences_doc IS 'user_preferences.doc: the user''s plaintext settings, services/user-settings.ts PreferencesDoc — an object with memory, notifications and privacy. The full, versioned shape is the t_doc_schema trigger''s (app.json_schema user_preferences, by doc_schema_version).';
+CREATE DOMAIN ai_memory_doc AS jsonb CHECK (jsonb_typeof(VALUE) = 'object');
+COMMENT ON DOMAIN ai_memory_doc IS 'ai_memory.doc: an object whose string leaves are encrypted (jsonb-leaves) — conversation-summarizer.ts (SUMMARY), partner-session-classifier.ts (NOTABLE_FACTS), global-memory.ts (GLOBAL_FACTS). The kind-dependent keys are table CHECKs; the versioned shape is the t_doc_schema trigger''s (app.json_schema ai_memory.<kind>).';
+
+-- brain_activity.metadata, the DB-side mirror of the ops-telemetry privacy whitelist (review r2 R2-2): the keys
+-- types/turn-trace.ts lets through, with their value types — sanitizeActivityMetadata (maxTokens, toolCount,
+-- queryCount, cacheReadInputTokens, cacheWriteInputTokens: numbers; toolInvocations: [{ name }]; contextSizes: four
+-- numbers), sanitizeTurnTrace (turnTrace, merged by brain-service mergeTurnTrace) and errorClass (error, failActivity).
+-- Closed-set strings (a tool name, a model alias, an error class, a step's type and status) are pinned to their
+-- form, so no sentence fits; step names and results are template strings, checked by the app only. An object: the
+-- old CHECK's 'array' arm (spec §1.8, from the legacy column) had no writer. A function, not inline CHECKs: arrays of
+-- objects need iteration, which a CHECK expression cannot do. Keep it in step with turn-trace.ts (its comment points
+-- here). Reports the first violation, by key (structure), never a value.
+CREATE FUNCTION app.activity_metadata_violation(doc jsonb) RETURNS text
+  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$
+  DECLARE
+    ident CONSTANT text := '^[A-Za-z][A-Za-z0-9_]*$';
+    k text;
+    v jsonb;
+    e jsonb;
+    i bigint;
+  BEGIN
+    IF doc IS NULL THEN RETURN NULL; END IF;
+    IF jsonb_typeof(doc) <> 'object' THEN RETURN 'not an object, got ' || jsonb_typeof(doc); END IF;
+    FOR k, v IN SELECT d.key, d.value FROM jsonb_each(doc) d ORDER BY d.key LOOP
+      CASE
+        WHEN k IN ('maxTokens', 'toolCount', 'queryCount', 'cacheReadInputTokens', 'cacheWriteInputTokens') THEN
+          IF jsonb_typeof(v) <> 'number' THEN RETURN format('%s: expected number, got %s', k, jsonb_typeof(v)); END IF;
+        WHEN k = 'toolInvocations' THEN
+          IF jsonb_typeof(v) <> 'array' THEN RETURN format('%s: expected array, got %s', k, jsonb_typeof(v)); END IF;
+          FOR e, i IN SELECT a.value, a.ordinality - 1 FROM jsonb_array_elements(v) WITH ORDINALITY a(value, ordinality) LOOP
+            IF jsonb_typeof(e) <> 'object' OR e - 'name' <> '{}'::jsonb OR jsonb_typeof(e -> 'name') IS DISTINCT FROM 'string'
+               OR NOT e ->> 'name' ~ ident THEN
+              RETURN format('%s[%s]: expected {name: <identifier>}', k, i);
+            END IF;
+          END LOOP;
+        WHEN k = 'contextSizes' THEN
+          IF jsonb_typeof(v) <> 'object' THEN RETURN format('%s: expected object, got %s', k, jsonb_typeof(v)); END IF;
+          IF v - ARRAY['pinnedTokens', 'summaryTokens', 'recentTokens', 'ragTokens'] <> '{}'::jsonb
+             OR EXISTS (SELECT 1 FROM jsonb_each(v) c WHERE jsonb_typeof(c.value) <> 'number') THEN
+            RETURN format('%s: expected {pinnedTokens, summaryTokens, recentTokens, ragTokens: number}', k);
+          END IF;
+        WHEN k = 'turnTrace' THEN
+          IF jsonb_typeof(v) <> 'object' THEN RETURN format('%s: expected object, got %s', k, jsonb_typeof(v)); END IF;
+          IF v - ARRAY['totalDurationMs', 'modelUsed', 'usedMock', 'steps'] <> '{}'::jsonb
+             OR coalesce(jsonb_typeof(v -> 'totalDurationMs'), 'number') <> 'number'
+             OR coalesce(jsonb_typeof(v -> 'usedMock'), 'boolean') <> 'boolean'
+             OR coalesce(jsonb_typeof(v -> 'modelUsed'), 'string') <> 'string'
+             OR NOT coalesce(v ->> 'modelUsed', 'unknown') ~ ident
+             OR coalesce(jsonb_typeof(v -> 'steps'), 'array') <> 'array' THEN
+            RETURN format('%s: expected {totalDurationMs: number, modelUsed: <identifier>, usedMock: boolean, steps: array}', k);
+          END IF;
+          FOR e, i IN SELECT a.value, a.ordinality - 1
+                      FROM jsonb_array_elements(coalesce(v -> 'steps', '[]'::jsonb)) WITH ORDINALITY a(value, ordinality) LOOP
+            IF jsonb_typeof(e) <> 'object'
+               OR e - ARRAY['name', 'type', 'startMs', 'durationMs', 'result', 'status'] <> '{}'::jsonb
+               OR coalesce(jsonb_typeof(e -> 'name'), 'string') <> 'string'
+               OR coalesce(jsonb_typeof(e -> 'result'), 'string') <> 'string'
+               OR coalesce(jsonb_typeof(e -> 'startMs'), 'number') <> 'number'
+               OR coalesce(jsonb_typeof(e -> 'durationMs'), 'number') <> 'number'
+               OR coalesce(e -> 'type', '"decision"') NOT IN ('"decision"', '"llm_call"', '"retrieval"', '"parsing"', '"dispatch"')
+               OR coalesce(e -> 'status', '"success"') NOT IN ('"success"', '"error"', '"skipped"') THEN
+              RETURN format('%s.steps[%s]: expected a TraceStep {name, type, startMs, durationMs, result, status}', k, i);
+            END IF;
+          END LOOP;
+        WHEN k = 'error' THEN
+          IF jsonb_typeof(v) <> 'string' OR NOT v #>> '{}' ~ ident THEN
+            RETURN format('%s: expected an error class (an identifier)', k);
+          END IF;
+        ELSE
+          RETURN format('unexpected key %s', k);
+      END CASE;
+    END LOOP;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.activity_metadata_violation(jsonb) IS 'Why a brain_activity.metadata document is refused, or NULL: an object whose keys are the whitelist of types/turn-trace.ts (ActivityMetadata, turnTrace, error), each with its value type. Names the key, never the value. The CHECK of the activity_metadata domain.';
+-- A domain CHECK runs with the writer's rights (step 20, T8): ai_access (mwf_ai's: brain-service startActivity INSERT,
+-- complete/failActivity and mergeTurnTrace UPDATE), worker_access (mwf_worker's: the retention purge sets it NULL).
+REVOKE EXECUTE ON FUNCTION app.activity_metadata_violation(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.activity_metadata_violation(jsonb) TO ai_access;
+GRANT EXECUTE ON FUNCTION app.activity_metadata_violation(jsonb) TO worker_access;
+CREATE DOMAIN activity_metadata AS jsonb
+  CONSTRAINT activity_metadata_whitelist CHECK (app.activity_metadata_violation(VALUE) IS NULL);
+COMMENT ON DOMAIN activity_metadata IS 'brain_activity.metadata: ops-readable telemetry, so exactly the privacy whitelist of backend/src/types/turn-trace.ts — ActivityMetadata (sanitizeActivityMetadata), turnTrace (sanitizeTurnTrace) and error (errorClass) — as an object, each value of its type (app.activity_metadata_violation).';
+COMMENT ON CONSTRAINT activity_metadata_whitelist ON DOMAIN activity_metadata IS 'Only whitelisted keys, each with its type; closed-set strings are identifiers or their enum (app.activity_metadata_violation).';
 
 -- A JSON-schema version: 1, 2, … per schema name.
 CREATE DOMAIN schema_version AS smallint CHECK (VALUE >= 1);
@@ -418,10 +625,11 @@ COMMENT ON CONSTRAINT json_schema_schema_check ON app.json_schema IS 'Only the s
 -- throughout), so the roles whose writes fire them read the schemas. Read only: no runtime role writes a
 -- schema. A schema is not secret — it restates the contract shared/src/dto already publishes — so SELECT
 -- is harmless, and a SECURITY DEFINER lookup would add an owner hop for nothing. mwf_ops, mwf_auth: none
--- (no reader, and no write of theirs fires a trigger). Whoever is granted a write that fires t_doc_schema or
--- t_jsonb_envelope needs this and the validators' EXECUTE: trailer T8 refuses the baseline when a role may write a
--- validated column without them (work-k5fk.10.4.1). mwf_ai: the summarizer's / classifier's ai_memory.doc
--- (t_doc_schema). mwf_worker writes only enveloped columns (proposal_revision; t_jsonb_envelope needs no schema).
+-- (no reader, and no write of theirs fires a trigger). Whoever is granted a write that fires t_doc_schema needs
+-- this and the validator's EXECUTE (and a writer of a column whose domain CHECK calls an app.* function needs that
+-- function's): trailer T8 refuses the baseline when a role may write a validated column without them
+-- (work-k5fk.10.4.1). mwf_ai: the summarizer's / classifier's ai_memory.doc (t_doc_schema). mwf_worker writes only
+-- enveloped columns (proposal_revision; an envelope domain needs no schema).
 GRANT SELECT ON app.json_schema TO app_access;
 GRANT SELECT ON app.json_schema TO ai_access;
 
@@ -1607,7 +1815,7 @@ CREATE TABLE ai_memory (
     session_id uuid7,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     kind ai_memory_kind NOT NULL,
-    doc jsonb NOT NULL,
+    doc ai_memory_doc NOT NULL,
     doc_schema_version schema_version NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1617,7 +1825,7 @@ CREATE TABLE ai_memory (
     -- session, kind): sql_ai_memory_one_per_participant and sql_ai_memory_one_global (sql-only.sql).
     FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
     CHECK ((kind = 'GLOBAL_FACTS') = (session_id IS NULL)),
-    CHECK (jsonb_typeof(doc) = 'object'),
+    -- doc is an object (ai_memory_doc); the keys depend on kind, which a domain cannot see
     CHECK (
         CASE kind WHEN 'SUMMARY' THEN doc ?& ARRAY['text', 'messageCount', 'generatedAt']
                   ELSE jsonb_typeof(doc -> 'facts') = 'array' END)
@@ -1824,7 +2032,7 @@ CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     key_id kek_id NOT NULL,
-    wrapped_dek bytea NOT NULL,
+    wrapped_dek wrapped_dek NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -1842,7 +2050,7 @@ CREATE TABLE participant_key (
     session_id uuid7 NOT NULL,
     user_id uuid7 NOT NULL,
     key_id kek_id NOT NULL,
-    wrapped_dek bytea NOT NULL,
+    wrapped_dek wrapped_dek NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -2118,15 +2326,13 @@ CREATE TABLE proposal_revision (
     session_id uuid7 NOT NULL,
     actor_user_id uuid7,
     action revision_action NOT NULL,
-    before jsonb,
-    after jsonb,
+    before proposal_snapshot,
+    after proposal_snapshot,
     reason proposal_revision_reason,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal_revision [P23c]
-    CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
-    CHECK (after IS NULL OR jsonb_typeof(after) = 'object'),
-    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
+    -- before / after: a well-formed envelope or keyless plaintext object (the proposal_snapshot domain)
     -- work-k5fk.3: the actor is a participant of the proposal's session
     FOREIGN KEY (proposal_id, session_id) REFERENCES proposal (id, session_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, actor_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
@@ -2300,16 +2506,14 @@ CREATE TABLE follow_up_checkin (
     next_action next_action,
     continue_choice continue_choice,
     reflection_summary ciphertext,
-    payload jsonb NOT NULL DEFAULT '{}',
+    payload checkin_payload NOT NULL DEFAULT '{}'::checkin_payload,
     submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (follow_up_id, session_id, user_id),
     -- work-k5fk.9 (C5): what follow_up_note's carried-into key pins to (a note goes into its owner's own check-in)
     UNIQUE (id, session_id, user_id),
-    -- §1.5 follow_up_checkin
-    CHECK (jsonb_typeof(payload) = 'object'),
-    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
+    -- §1.5 follow_up_checkin: payload is a well-formed envelope or keyless plaintext object (checkin_payload)
     -- work-k5fk.3: a check-in is by a participant of the follow-up's session
     FOREIGN KEY (follow_up_id, session_id) REFERENCES follow_up (id, session_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
@@ -2412,7 +2616,7 @@ CREATE TABLE reflection (
     theme text,
     status reflection_status NOT NULL DEFAULT 'ACTIVE',
     summary ciphertext,
-    summary_doc jsonb,
+    summary_doc reflection_summary_doc,
     linked_session_id uuid7,
     linked_at ts_ms,
     context_snapshot ciphertext,
@@ -2421,8 +2625,7 @@ CREATE TABLE reflection (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.6 reflection, takeaway_link [P31]
-    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object'),
-    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
+    -- summary_doc: a well-formed envelope or keyless plaintext object (reflection_summary_doc)
     -- work-k5fk.9 (C6): the linked session is one the owner is a participant of, for every role (the app_access RLS
     -- WITH CHECK says so for mwf_app only); deleting the participant (the session cascade) nulls the link alone
     -- (PG15 SET NULL (col); step 20 pins the column list). An FK out of reflection, never into it.
@@ -2517,7 +2720,7 @@ GRANT DELETE ON takeaway_link TO app_access;
 CREATE TABLE user_device (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    push_token text CHECK (char_length(push_token) BETWEEN 1 AND 512),
+    push_token push_token,
     push_provider push_provider,
     platform device_platform,
     biometric_enabled boolean NOT NULL DEFAULT false,
@@ -2532,9 +2735,8 @@ CREATE TABLE user_device (
 CREATE INDEX ON user_device (user_id);
 -- + sql_user_device_token (sql-only.sql)
 COMMENT ON TABLE user_device IS 'A device a user registered: its push token and biometric enrolment.';
-COMMENT ON COLUMN user_device.push_token IS 'The push token of this install, in its provider''s format (push_provider); NULL until registered or once cleared. At most 512 characters; no format CHECK (the app validates it for its provider).';
+COMMENT ON COLUMN user_device.push_token IS 'The push token of this install, in its provider''s format (push_provider); NULL until registered or once cleared. A push_token: 1-512 characters, no whitespace or control character; no format CHECK (the app validates it for its provider).';
 COMMENT ON COLUMN user_device.push_provider IS 'The push service push_token belongs to (work-k5fk.9, V1); set exactly when push_token is.';
-COMMENT ON CONSTRAINT user_device_push_token_check ON user_device IS 'A push token is 1-512 characters (work-k5fk.9, V1).';
 COMMENT ON CONSTRAINT user_device_check ON user_device IS 'A push token and its provider are set and cleared together (work-k5fk.9, V1).';
 -- mwf_app: the caller's push token registration / clearing and biometric setting (user-settings.ts); other users' tokens are
 -- read by the job (push.ts).
@@ -2556,14 +2758,11 @@ GRANT UPDATE (push_token, push_provider) ON user_device TO worker_access;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
-    doc jsonb NOT NULL DEFAULT '{}',
+    doc preferences_doc NOT NULL DEFAULT '{}'::preferences_doc,
     doc_schema_version schema_version NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    -- §1.7 user_preferences
-    CHECK (
-      jsonb_typeof(doc) = 'object' AND doc ?& ARRAY['memory', 'notifications', 'privacy'])
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
+    -- §1.7 user_preferences: doc is an object with memory, notifications and privacy (preferences_doc)
 );
 COMMENT ON TABLE user_preferences IS 'The user''s preference documents (memory, notifications, privacy), one row per user.';
 COMMENT ON COLUMN user_preferences.doc IS 'Plaintext settings (read by SQL jsonb operators); validated by the t_doc_schema trigger against app.json_schema user_preferences.';
@@ -2613,14 +2812,12 @@ GRANT DELETE ON user_memory TO mwf_definer;
 CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     feature wellbeing_feature NOT NULL,
-    doc jsonb NOT NULL DEFAULT '{}',
+    doc feature_state_doc NOT NULL DEFAULT '{}'::feature_state_doc,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (user_id, feature),
-    -- §1.7 feature_state
-    CHECK (jsonb_typeof(doc) = 'object')
-    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
+    -- §1.7 feature_state: doc is a well-formed envelope or keyless plaintext object (feature_state_doc)
+    PRIMARY KEY (user_id, feature)
 );
 COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (meditation, gratitude, needs assessment, people).';
 COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';
@@ -2639,7 +2836,7 @@ CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     key_id kek_id NOT NULL,
-    wrapped_dek bytea NOT NULL,
+    wrapped_dek wrapped_dek NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     destroyed_at ts_ms,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -2660,13 +2857,13 @@ CREATE TABLE brain_activity (
     session_id uuid7 REFERENCES session ON DELETE CASCADE,
     reflection_id uuid7 REFERENCES reflection ON DELETE CASCADE,
     participant_user_id uuid7,
-    turn_id text,
+    turn_id turn_id,
     activity_type activity_type NOT NULL,
     call_type brain_call_type,
-    model text NOT NULL,
-    input jsonb,
-    output jsonb,
-    metadata jsonb,
+    model model_id NOT NULL,
+    input llm_call_input,
+    output llm_call_output,
+    metadata activity_metadata,
     token_count_input integer NOT NULL DEFAULT 0,
     token_count_output integer NOT NULL DEFAULT 0,
     duration_ms integer NOT NULL DEFAULT 0,
@@ -2677,10 +2874,8 @@ CREATE TABLE brain_activity (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.8 brain_activity [P28c]
-    -- input / output are jsonb envelopes, always objects (the t_jsonb_envelope trigger refuses anything else; review r1 F6)
-    CHECK (input IS NULL OR jsonb_typeof(input) = 'object'),
-    CHECK (output IS NULL OR jsonb_typeof(output) = 'object'),
-    CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
+    -- input / output are jsonb envelopes, always objects (llm_call_input, llm_call_output; review r1 F6); metadata is
+    -- the telemetry whitelist (activity_metadata)
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
     FOREIGN KEY (session_id, participant_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
@@ -2693,10 +2888,11 @@ CREATE INDEX ON brain_activity (turn_id);
 CREATE INDEX ON brain_activity (created_at);
 COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retrieval or tool call, with its prompt, output, tokens, cost and timing.';
 COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, participant_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn.';
-COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
+COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn (a turn_id: bounded, no format).';
+COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a model_id: a Bedrock model id, the embedding model, or an app pseudo-model such as system-retrieval).';
 COMMENT ON COLUMN brain_activity.input IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: what the call was given — sizes and options, a retrieval''s search queries and detected references; the same key as output (owner decision, work-k5fk.9 follow-up). Timings, tokens, cost, status and call type are plain columns.';
 COMMENT ON COLUMN brain_activity.output IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: the call''s outcome — the model''s text and stop reason, a retrieval''s matches; the participant key when attributed, the session key for a call over both parties, the user key for a reflection''s (owner decision OD-1, work-k5fk.9). Nothing on the ops path reads it: mwf_ops holds no grant on it, and the key never enters the database.';
+COMMENT ON COLUMN brain_activity.metadata IS 'Ops-readable telemetry (the Neural Monitor reads it in plain): call options, cache and tool counts, context sizes, the sanitized turn trace, an error class — never content. An activity_metadata: exactly the whitelist of types/turn-trace.ts.';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads

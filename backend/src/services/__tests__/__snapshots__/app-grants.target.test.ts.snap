@@ -460,6 +460,9 @@ column public.v_current_stage SELECT: session_id, user_id, milestone_key, ordina
 database: CONNECT, CREATE, TEMPORARY (mwf_migrator)
 database: CONNECT, TEMPORARY (PUBLIC)
 default acl rows: 0
+routine app.activity_metadata_violation(jsonb): EXECUTE (ai_access)
+routine app.activity_metadata_violation(jsonb): EXECUTE (mwf_migrator)
+routine app.activity_metadata_violation(jsonb): EXECUTE (worker_access)
 routine app.actor_name_for(uuid): EXECUTE (mwf_definer)
 routine app.agreement_parties_ok(uuid): EXECUTE (mwf_migrator)
 routine app.ai_user_id(): EXECUTE (mwf_migrator)
@@ -535,7 +538,6 @@ routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
 routine app.t_conversation_seq_start(): EXECUTE (mwf_migrator)
 routine app.t_doc_schema(): EXECUTE (mwf_migrator)
-routine app.t_jsonb_envelope(): EXECUTE (mwf_migrator)
 routine app.t_live_session_pair(): EXECUTE (mwf_definer)
 routine app.t_live_session_pair_end(): EXECUTE (mwf_definer)
 routine app.t_message_app_delete(): EXECUTE (mwf_migrator)
@@ -651,6 +653,7 @@ table public.v_participant: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGE
 table public.v_reflection_theme: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.v_session_closure_items: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.v_session_readiness: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
+routine owner app.activity_metadata_violation(jsonb): mwf_migrator
 routine owner app.actor_name_for(uuid): mwf_definer
 routine owner app.agreement_parties_ok(uuid): mwf_migrator
 routine owner app.ai_user_id(): mwf_migrator
@@ -706,7 +709,6 @@ routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
 routine owner app.t_conversation_seq_start(): mwf_migrator
 routine owner app.t_doc_schema(): mwf_migrator
-routine owner app.t_jsonb_envelope(): mwf_migrator
 routine owner app.t_live_session_pair(): mwf_definer
 routine owner app.t_live_session_pair_end(): mwf_definer
 routine owner app.t_message_app_delete(): mwf_migrator

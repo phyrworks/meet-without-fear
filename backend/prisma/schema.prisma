@@ -922,7 +922,7 @@ model FollowUpCheckin {
   nextAction        NextAction?     @map("next_action")
   continueChoice    ContinueChoice? @map("continue_choice")
   reflectionSummary String?         @map("reflection_summary")
-  payload           Json            @default("{}")
+  payload           Json            @default(dbgenerated("('{}'::jsonb)::checkin_payload"))
   submittedAt       DateTime        @default(now()) @map("submitted_at") @db.Timestamptz(3)
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
@@ -1174,7 +1174,7 @@ model UserDevice {
 
 model UserPreferences {
   userId           String   @id @map("user_id") @db.Uuid
-  doc              Json     @default("{}")
+  doc              Json     @default(dbgenerated("('{}'::jsonb)::preferences_doc"))
   docSchemaVersion Int      @default(1) @map("doc_schema_version") @db.SmallInt
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1207,7 +1207,7 @@ model UserMemory {
 model FeatureState {
   userId    String           @map("user_id") @db.Uuid
   feature   WellbeingFeature
-  doc       Json             @default("{}")
+  doc       Json             @default(dbgenerated("('{}'::jsonb)::feature_state_doc"))
   createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 

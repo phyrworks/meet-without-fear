@@ -70,7 +70,9 @@ describe production.
   the metadata stay readable in plain columns. So `metadata` holds telemetry only (review r1, work-k5fk.9): the
   turn trace is sanitized at its writer (`types/turn-trace.ts` `sanitizeTurnTrace`: known step names, template
   results, a dispatch tag's kind, no crisis classification), and an error is stored as its class or code, never its
-  message. The `/brain/*` responses carry
+  message. The database holds the same line: `metadata` is the `activity_metadata` domain, which refuses any key
+  outside the `turn-trace.ts` whitelist and any value of another type (typed domains, 2026-11-23;
+  `jsonb-shapes-2026-11.md` §2). The `/brain/*` responses carry
   telemetry and structure only, never text a user or the AI wrote ("close all", work-k5fk.9): an activity has no
   input or output, the prompt inspector gives tokens, cost, timing and the context window, a
   reflection's title is neither returned nor searched, and the context endpoint (`/brain/sessions/:id/context`)
