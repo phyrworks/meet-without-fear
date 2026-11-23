@@ -2,15 +2,15 @@
   "stage": "STRATEGIC_REPAIR_COMPLETE",
   "database": "mwf_tfx_strategic_repair_complete",
   "seeded": {
-    "sessionId": "01a1fae3-d79d-7db1-bf8c-62528815708e",
-    "invitationId": "01a1fae3-d7a9-7c9c-bcbc-0e22c603e466",
+    "sessionId": "01a20a43-b353-75d1-b1df-11ab31b22e00",
+    "invitationId": "01a20a43-b360-7053-a810-7f3557a546a9",
     "userA": {
-      "id": "01a1fae3-d793-73f8-b384-472400065399",
+      "id": "01a20a43-b349-72d2-a490-f3b9b76666a5",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1fae3-d798-7a28-969d-a8e4d43ebc64",
+      "id": "01a20a43-b34d-7f6e-a4e1-7cfebb4c793f",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -87,5 +87,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-20T21:36:38.383Z"
+  "builtAt": "2026-11-23T21:15:38.800Z"
 }
