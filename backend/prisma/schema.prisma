@@ -492,9 +492,9 @@ model ReconcilerResult {
   alignmentSummary      String            @map("alignment_summary")
   gapSummary            String            @map("gap_summary")
   gapSeverity           GapSeverity       @map("gap_severity")
-  correctlyIdentified   String[]          @default([]) @map("correctly_identified")
-  missedFeelings        String[]          @default([]) @map("missed_feelings")
-  misattributions       String[]          @default([])
+  correctlyIdentified   String[]          @default(dbgenerated("('{}'::text[])::ciphertext_list")) @map("correctly_identified")
+  missedFeelings        String[]          @default(dbgenerated("('{}'::text[])::ciphertext_list")) @map("missed_feelings")
+  misattributions       String[]          @default(dbgenerated("('{}'::text[])::ciphertext_list"))
   mostImportantGap      String?           @map("most_important_gap")
   recommendedAction     RecommenderAction @map("recommended_action")
   rationale             String
@@ -643,7 +643,7 @@ model Need {
   userId             String       @map("user_id") @db.Uuid
   label              String
   category           NeedCategory
-  evidence           String[]     @default([])
+  evidence           String[]     @default(dbgenerated("('{}'::text[])::ciphertext_list"))
   aiConfidence       Float        @map("ai_confidence") @db.Real
   confirmedAt        DateTime?    @map("confirmed_at") @db.Timestamptz(3)
   lockedAt           DateTime?    @map("locked_at") @db.Timestamptz(3)
@@ -726,7 +726,7 @@ model Proposal {
   description          String
   duration             String?
   measureOfSuccess     String?        @map("measure_of_success")
-  unresolvedNeedLabels String[]       @default([]) @map("unresolved_need_labels")
+  unresolvedNeedLabels String[]       @default(dbgenerated("('{}'::text[])::ciphertext_list")) @map("unresolved_need_labels")
   removedAt            DateTime?      @map("removed_at") @db.Timestamptz(3)
   removedByUserId      String?        @map("removed_by_user_id") @db.Uuid
   removalReason        String?        @map("removal_reason")
