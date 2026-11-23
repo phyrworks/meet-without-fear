@@ -3677,17 +3677,19 @@ BEGIN
   IF n <> @@UUID7_COLUMNS@@ THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected @@UUID7_COLUMNS@@', n; END IF;
 
   -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): @@CIPHERTEXT_COLUMNS@@ text
-  -- columns typed ciphertext and @@CIPHERTEXT_ARRAYS@@ text[] columns CHECKed by
-  -- app.all_ciphertext. The jest test encryption-at-rest-schema ties both sets
+  -- columns typed ciphertext and @@CIPHERTEXT_ARRAYS@@ text[] columns typed
+  -- ciphertext_list. The jest test encryption-at-rest-schema ties both sets
   -- to the map by name; these counts catch a retype here.
   SELECT count(*) INTO n
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.ciphertext'::regtype;
   IF n <> @@CIPHERTEXT_COLUMNS@@ THEN RAISE EXCEPTION 'step 20: % ciphertext columns, expected @@CIPHERTEXT_COLUMNS@@', n; END IF;
-  SELECT count(*) INTO n FROM pg_constraint k
-  WHERE k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ 'app\.all_ciphertext\(';
-  IF n <> @@CIPHERTEXT_ARRAYS@@ THEN RAISE EXCEPTION 'step 20: % all_ciphertext CHECKs, expected @@CIPHERTEXT_ARRAYS@@', n; END IF;
+  SELECT count(*) INTO n
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND a.atttypid = 'public.ciphertext_list'::regtype;
+  IF n <> @@CIPHERTEXT_ARRAYS@@ THEN RAISE EXCEPTION 'step 20: % ciphertext_list columns, expected @@CIPHERTEXT_ARRAYS@@', n; END IF;
 
   -- Every timestamp column of a table is a ts_ms (tables.sql): none is a plain
   -- timestamptz or timestamp (Prisma's own _prisma_migrations aside).

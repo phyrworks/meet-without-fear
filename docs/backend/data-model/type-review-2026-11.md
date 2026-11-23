@@ -1,7 +1,7 @@
 ---
 title: Type review, November 2026
 description: Decision log for the owner's 2026-11-10 DDL review (work-gevt). Covers every text, text[], *_type, *_kind and *_label column of the target shape, the domains, and what is left open.
-updated: "2026-11-19"
+updated: "2026-11-23"
 ---
 # Type review, November 2026 (work-gevt)
 
@@ -65,7 +65,7 @@ says what the plaintext is.
 | Kind | Columns | Typed as |
 |---|---|---|
 | text (44) | `session.topic_frame`; `message.content`; `draft.content`; `mood_reading.context`; `invitation.invitee_name`, `decline_reason`; `empathy_attempt.content`; `empathy_review.feedback`; `reconciler_result.alignment_summary`, `gap_summary`, `most_important_gap`, `rationale`, `suggested_share_focus`, `suggested_share_content`, `suggested_share_reason`; `reconciler_guidance.area_hint`, `prompt_seed`; `context_share_offer.offer_message`, `suggested_content`, `suggested_reason`, `shared_content`; `need.label`; `need_share.shared_text`; `need_disposition.note`; `proposal.description`, `duration`, `measure_of_success`, `removal_reason`; `proposal_choice.note`; `agreement.description`, `duration`, `measure_of_success`; `session_closure.summary`; `follow_up.summary`; `follow_up_checkin.reflection_summary`; `follow_up_note.content`; `reflection.title`, `summary`, `context_snapshot`; `reflection_message.content`; `takeaway.content`; `user_memory.content`, `suggested_text`; `reminder.note` | `ciphertext` |
-| text[] (5) | `reconciler_result.correctly_identified`, `missed_feelings`, `misattributions`; `need.evidence`; `proposal.unresolved_need_labels` | text[] + `CHECK (app.all_ciphertext(col))` |
+| text[] (5) | `reconciler_result.correctly_identified`, `missed_feelings`, `misattributions`; `need.evidence`; `proposal.unresolved_need_labels` | text[] + `CHECK (app.all_ciphertext(col))`; since 2026-11-23 the `ciphertext_list` domain (`text[] CHECK (app.all_ciphertext(VALUE))`), so the type says encrypted |
 | jsonb (6) | `ai_memory.doc` (leaves); `proposal_revision.before`, `after`; `follow_up_checkin.payload`; `reflection.summary_doc`; `feature_state.doc` (envelopes) | jsonb + COMMENT marker |
 
 The audit counted 47 / 5 / 5. The map has 44 text, 5 text[] and 6 jsonb (`proposal_revision`
