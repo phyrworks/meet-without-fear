@@ -250,7 +250,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     expect(err.metadata).toEqual({ error: 'Error' });
   });
 
-  it('the database holds the metadata whitelist too: a raw write of an unknown key is refused (activity_metadata)', async () => {
+  it('the database holds the metadata whitelist too: a raw write of an unknown key is refused (activity_metadata_json_schema)', async () => {
     const insert = (metadata: unknown) =>
       run.as(
         'mwf_ai',
@@ -260,7 +260,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       );
     await expect(insert({ maxTokens: 1024, toolInvocations: [{ name: 'other' }] })).resolves.toBeDefined();
     await expect(insert({ maxTokens: 1024, prompt: 'PROBE_PROMPT' })).rejects.toThrow(
-      'value for domain activity_metadata violates check constraint "activity_metadata_whitelist"',
+      'value for domain activity_metadata_json_schema violates check constraint "activity_metadata_whitelist"',
     );
     await expect(insert({ maxTokens: '1024' })).rejects.toThrow(/activity_metadata_whitelist/);
   });

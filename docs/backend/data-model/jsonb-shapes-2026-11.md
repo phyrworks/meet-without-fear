@@ -15,18 +15,18 @@ not the spec), and the validation chosen. The DDL is `backend/scripts/target-sha
 
 | Column | Writer (role) | Shape written today | Validation |
 |---|---|---|---|
-| `user_preferences.doc` | `services/user-settings.ts` `updatePreferences` (mwf_app: raw `INSERT … ON CONFLICT DO NOTHING` of the defaults, then a Prisma update of the merged doc) | `{ memory: MemoryPreferencesDTO, notifications: NotificationPreferencesDTO, privacy: PrivacyPreferencesDTO }` (`shared/src/dto/auth.ts`), all booleans; older rows may miss members (`withDefaults`) | domain `preferences_doc` (object with the three keys), and **trigger** against `user_preferences` v1 |
-| `ai_memory.doc` (SUMMARY) | `conversation-summarizer.ts` `updateSessionSummary` (mwf_ai, raw upsert) | `{ text, messageCount, oldestMessageAt, newestMessageAt, tokenCount, generatedAt, keyThemes[], emotionalJourney, unresolvedTopics[], agreedFacts[], userNeeds[], partnerNeeds[], openQuestions[], agreements[], lastUnresolvedThread }` — timestamps ISO strings; the model's fields normalised first (`normalizeSummarizationResult`: a string list from a single string, non-string items dropped, a non-string `emotionalJourney` → `''`, `lastUnresolvedThread` → null; no summary text → nothing stored) | domain `ai_memory_doc` (object) + `facts` / key CHECK, and **trigger** against `ai_memory.summary` v1 |
-| `ai_memory.doc` (NOTABLE_FACTS) | `partner-session-classifier.ts` (mwf_ai, raw upsert) | `{ facts: [{ id, category, fact }] }` (`id` a uuidv7 from `ensureFactIds`, or the model's id — a numeric one is stringified by `normalizeResult`, an unusable one dropped) | domain `ai_memory_doc` (object) + `facts` / key CHECK, and **trigger** against `ai_memory.notable_facts` v1 |
-| `ai_memory.doc` (GLOBAL_FACTS) | `global-memory.ts` `consolidateGlobalFacts` (mwf_app, Prisma upsert) | `{ facts: [{ category, fact }], consolidatedAt, sessionCount }` | domain `ai_memory_doc` (object) + `facts` / key CHECK, and **trigger** against `ai_memory.global_facts` v1 |
-| `feature_state.doc` | `services/feature-state.ts` (mwf_app: raw empty-row INSERT, then a Prisma update) | encrypted envelope `{"$enc": "enc:v1:…"}` of the per-feature zod document (`shared/src/dto/feature-state.ts`); `{}` / the plain document when keyless | domain `feature_state_doc` (envelope rule) |
-| `follow_up_checkin.payload` | `tending.service.ts` `insertCheckin` (mwf_app, Prisma create after `validateCheckinPayload`, zod) | envelope of `FollowUpCheckinPayload` (`entryOutcomes[]`, `needOutcomes[]`, `adjustments[]`, `partialClosures[]`, `responses[]`, `carriedNotes[]`); column DEFAULT `{}` | domain `checkin_payload` (envelope rule) |
-| `reflection.summary_doc` | `conversation-summarizer.ts` (inner-thoughts summary; mwf_app, Prisma update) | envelope of `{ text, messageCount, oldestMessageAt, newestMessageAt, tokenCount, generatedAt, keyThemes[], emotionalJourney, unresolvedTopics[] }` | domain `reflection_summary_doc` (envelope rule) |
-| `proposal_revision.before` | `stage4-capture.service.ts` (mwf_app, Prisma create); `stage4-store.ts` conversion (mwf_worker, raw) | envelope of the proposal fields before the change, or `{ status }` at conversion; often NULL | domain `proposal_snapshot` (envelope rule) |
-| `proposal_revision.after` | `controllers/stage4.ts` (legacy agreement marks `{ <mark>: true, type, followUpDate }` / `{ <mark>: true, confirmed }`), `stage4-subchat.service.ts` (`{ description, duration, measureOfSuccess }`), `stage4-capture.service.ts` (fields + `capturedFromUserMessage`, `reasonText`), `stage4-store.ts` (`{ agreementId, status }`) | envelope of one of those | domain `proposal_snapshot` (envelope rule) |
-| `brain_activity.metadata` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | domain `activity_metadata` (the turn-trace.ts whitelist) |
-| `brain_activity.input` | `brain-service.ts` `startActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / a retrieval's `{ searchQueries, referencesDetected, … }` (the owner's follow-up to OD-1, work-k5fk.9) | domain `llm_call_input` (envelope rule) |
-| `brain_activity.output` | `brain-service.ts` `completeActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ text, stopReason }` / `{ streaming, stopReason }` / `{ success }` / a retrieval's matches; never read on the ops path — mwf_ops holds no grant on it (owner decision OD-1, work-k5fk.9) | domain `llm_call_output` (envelope rule) |
+| `user_preferences.doc` | `services/user-settings.ts` `updatePreferences` (mwf_app: raw `INSERT … ON CONFLICT DO NOTHING` of the defaults, then a Prisma update of the merged doc) | `{ memory: MemoryPreferencesDTO, notifications: NotificationPreferencesDTO, privacy: PrivacyPreferencesDTO }` (`shared/src/dto/auth.ts`), all booleans; older rows may miss members (`withDefaults`) | domain `preferences_json_schema` (object with the three keys), and **trigger** against `user_preferences` v1 |
+| `ai_memory.doc` (SUMMARY) | `conversation-summarizer.ts` `updateSessionSummary` (mwf_ai, raw upsert) | `{ text, messageCount, oldestMessageAt, newestMessageAt, tokenCount, generatedAt, keyThemes[], emotionalJourney, unresolvedTopics[], agreedFacts[], userNeeds[], partnerNeeds[], openQuestions[], agreements[], lastUnresolvedThread }` — timestamps ISO strings; the model's fields normalised first (`normalizeSummarizationResult`: a string list from a single string, non-string items dropped, a non-string `emotionalJourney` → `''`, `lastUnresolvedThread` → null; no summary text → nothing stored) | domain `ai_memory_json_schema` (object) + `facts` / key CHECK, and **trigger** against `ai_memory.summary` v1 |
+| `ai_memory.doc` (NOTABLE_FACTS) | `partner-session-classifier.ts` (mwf_ai, raw upsert) | `{ facts: [{ id, category, fact }] }` (`id` a uuidv7 from `ensureFactIds`, or the model's id — a numeric one is stringified by `normalizeResult`, an unusable one dropped) | domain `ai_memory_json_schema` (object) + `facts` / key CHECK, and **trigger** against `ai_memory.notable_facts` v1 |
+| `ai_memory.doc` (GLOBAL_FACTS) | `global-memory.ts` `consolidateGlobalFacts` (mwf_app, Prisma upsert) | `{ facts: [{ category, fact }], consolidatedAt, sessionCount }` | domain `ai_memory_json_schema` (object) + `facts` / key CHECK, and **trigger** against `ai_memory.global_facts` v1 |
+| `feature_state.doc` | `services/feature-state.ts` (mwf_app: raw empty-row INSERT, then a Prisma update) | encrypted envelope `{"$enc": "enc:v1:…"}` of the per-feature zod document (`shared/src/dto/feature-state.ts`); `{}` / the plain document when keyless | domain `feature_state_json_schema` (envelope rule) |
+| `follow_up_checkin.payload` | `tending.service.ts` `insertCheckin` (mwf_app, Prisma create after `validateCheckinPayload`, zod) | envelope of `FollowUpCheckinPayload` (`entryOutcomes[]`, `needOutcomes[]`, `adjustments[]`, `partialClosures[]`, `responses[]`, `carriedNotes[]`); column DEFAULT `{}` | domain `checkin_payload_json_schema` (envelope rule) |
+| `reflection.summary_doc` | `conversation-summarizer.ts` (inner-thoughts summary; mwf_app, Prisma update) | envelope of `{ text, messageCount, oldestMessageAt, newestMessageAt, tokenCount, generatedAt, keyThemes[], emotionalJourney, unresolvedTopics[] }` | domain `reflection_summary_json_schema` (envelope rule) |
+| `proposal_revision.before` | `stage4-capture.service.ts` (mwf_app, Prisma create); `stage4-store.ts` conversion (mwf_worker, raw) | envelope of the proposal fields before the change, or `{ status }` at conversion; often NULL | domain `proposal_snapshot_json_schema` (envelope rule) |
+| `proposal_revision.after` | `controllers/stage4.ts` (legacy agreement marks `{ <mark>: true, type, followUpDate }` / `{ <mark>: true, confirmed }`), `stage4-subchat.service.ts` (`{ description, duration, measureOfSuccess }`), `stage4-capture.service.ts` (fields + `capturedFromUserMessage`, `reasonText`), `stage4-store.ts` (`{ agreementId, status }`) | envelope of one of those | domain `proposal_snapshot_json_schema` (envelope rule) |
+| `brain_activity.metadata` | `services/brain-service.ts` (mwf_ai, raw), from `lib/bedrock.ts` and `context-retriever.ts` call sites | per call site: `{ maxTokens, toolCount, … }`, `{ error }`, merged `turnTrace` | domain `activity_metadata_json_schema` (the turn-trace.ts whitelist) |
+| `brain_activity.input` | `brain-service.ts` `startActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ operation, messageCount, systemPromptLength, streaming? }` / `{ textLength }` / a retrieval's `{ searchQueries, referencesDetected, … }` (the owner's follow-up to OD-1, work-k5fk.9) | domain `llm_call_input_json_schema` (envelope rule) |
+| `brain_activity.output` | `brain-service.ts` `completeActivity` (mwf_ai, raw, sealed with `encryptColumnValue`) | envelope of `{ text, stopReason }` / `{ streaming, stopReason }` / `{ success }` / a retrieval's matches; never read on the ops path — mwf_ops holds no grant on it (owner decision OD-1, work-k5fk.9) | domain `llm_call_output_json_schema` (envelope rule) |
 
 Writers in the test suites follow the same shapes (golden `tombstone` and the target tests seed
 `ai_memory` and `user_preferences` rows directly; the tombstone seed's GLOBAL_FACTS fact was a bare
@@ -40,8 +40,8 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
   domain over a domain as `Unsupported("<base>")` (`prisma db pull`, verified 2026-11-23), so there is no
   shared `jsonb_envelope` base domain; the shared part is the function.
 - **The seven `jsonb-envelope` columns** of `SENSITIVE_FIELD_MAP` (`brain_activity.input` and `.output` since
-  work-k5fk.9): one domain per contract — `feature_state_doc`, `checkin_payload`, `proposal_snapshot`
-  (`proposal_revision.before` and `.after`), `reflection_summary_doc`, `llm_call_input`, `llm_call_output` —
+  work-k5fk.9): one domain per contract — `feature_state_json_schema`, `checkin_payload_json_schema`, `proposal_snapshot_json_schema`
+  (`proposal_revision.before` and `.after`), `reflection_summary_json_schema`, `llm_call_input_json_schema`, `llm_call_output_json_schema` —
   each with the constraint `jsonb_envelope CHECK (app.jsonb_envelope_violation(VALUE) IS NULL)`. A document
   *with* a `"$enc"` key must be
   exactly `{"$enc": <a v1 ciphertext>}` — `"$enc"` the only key, a string, starting `enc:` and
@@ -54,7 +54,7 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
   by the app (zod) before sealing; the database cannot see it.
   **A domain CHECK, not a table CHECK** (review L1): a table CHECK refusal carries `DETAIL: Failing row
   contains (…)`, which echoes the whole row — the plaintext the rule exists to catch — to the client
-  error and the server log. A domain CHECK refusal is `value for domain feature_state_doc violates check
+  error and the server log. A domain CHECK refusal is `value for domain feature_state_json_schema violates check
   constraint "jsonb_envelope"` (SQLSTATE 23514) with no DETAIL: it names the contract and the rule, not
   the column or the reason (`SELECT app.jsonb_envelope_violation(doc)` gives the reason). It replaced the
   work-k5fk.8 `t_jsonb_envelope` trigger, which reported `<table>.<column> … : <reason>`.
@@ -74,12 +74,12 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
   reports that as P2003 "Foreign key constraint failed". A refused document is `23514`
   (`check_violation`). The other `MW` codes: `MWA0x` session archive (`app.session_archive`),
   `MWF0x` sign-in (`app.create_user`).
-- **The plaintext documents' domains** hold only what a domain can see: `preferences_doc` (an object with
-  `memory`, `notifications`, `privacy`) and `ai_memory_doc` (an object). The versioned schema stays in the
+- **The plaintext documents' domains** hold only what a domain can see: `preferences_json_schema` (an object with
+  `memory`, `notifications`, `privacy`) and `ai_memory_json_schema` (an object). The versioned schema stays in the
   `t_doc_schema` trigger: a domain CHECK cannot see `doc_schema_version` or `kind`, and must not read a
   table (`pg_dump` restores data after the domain, in no promised order). `ai_memory`'s kind-dependent key
   CHECKs stay on the table.
-- **`brain_activity.metadata`** is an `activity_metadata`: telemetry, written only by the AI and read in plain
+- **`brain_activity.metadata`** is an `activity_metadata_json_schema`: telemetry, written only by the AI and read in plain
   by the ops dashboard, so its CHECK (`app.activity_metadata_violation`) is the DB-side mirror of the privacy
   whitelist in `types/turn-trace.ts` — the keys `maxTokens`, `toolCount`, `queryCount`,
   `cacheReadInputTokens`, `cacheWriteInputTokens` (numbers), `toolInvocations` (`[{ name }]`, a name an
