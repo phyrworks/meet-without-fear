@@ -4167,13 +4167,17 @@ BEGIN
         SELECT 1 FROM pg_trigger tg
         WHERE tg.tgrelid = w.reloid AND NOT tg.tgisinternal AND tg.tgfoid = 'app.t_session_scope()'::regprocedure
           AND (tg.tgtype & w.bit) <> 0
+          -- enabled (an ALTER TABLE … DISABLE TRIGGER, or ENABLE REPLICA, would leave it in the catalog unfired),
+          -- FOR EACH ROW (bit 1) and BEFORE (bit 2): a statement or AFTER trigger cannot refuse the row (work-k5fk.10.29)
+          AND tg.tgenabled IN ('O', 'A') AND (tg.tgtype & 3) = 3
           AND position(quote_literal(w.cap) IN pg_get_triggerdef(tg.oid)) > 0);
     IF bad IS NOT NULL THEN
-      RAISE EXCEPTION 'step 20: AI / worker write(s) with no t_session_scope trigger for the event (capability:table:event): %', bad;
+      RAISE EXCEPTION 'step 20: AI / worker write(s) with no enabled BEFORE … FOR EACH ROW t_session_scope trigger for the event (capability:table:event): %', bad;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.session'::regclass
-                   AND tg.tgfoid = 'app.t_session_purge()'::regprocedure AND (tg.tgtype & 8) <> 0) THEN
-      RAISE EXCEPTION 'step 20: the worker''s DELETE of session is not bound to ARCHIVED sessions (t_session_purge)';
+                   AND tg.tgfoid = 'app.t_session_purge()'::regprocedure AND (tg.tgtype & 8) <> 0
+                   AND tg.tgenabled IN ('O', 'A') AND (tg.tgtype & 3) = 3) THEN
+      RAISE EXCEPTION 'step 20: the worker''s DELETE of session is not bound to ARCHIVED sessions (t_session_purge: enabled, BEFORE, FOR EACH ROW)';
     END IF;
   END;
 
