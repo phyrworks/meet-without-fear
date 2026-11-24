@@ -183,7 +183,9 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
     await ready(sessionId);
 
     // Unclaimed, the link's preview is anyone's; opening it (acknowledge) claims it.
-    expect((await http(gus, 'get', `/invitations/${invitationId}`)).status).toBe(200);
+    const unclaimed = await http(gus, 'get', `/invitations/${invitationId}`);
+    expect(unclaimed.status).toBe(200);
+    expect(unclaimed.body.data.invitation.claimedByYou).toBe(false);
     expect((await http(fay, 'post', `/invitations/${invitationId}/acknowledge`)).body.data.acknowledged).toBe(true);
     const claim = await run.sql<{ claimed_by_user_id: string; claimed: boolean }>(
       `SELECT claimed_by_user_id, claimed_at IS NOT NULL AS claimed FROM invitation WHERE id = $1`,
@@ -221,9 +223,11 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
     );
 
     // The claimer still reads the details and accepts.
+    // work-k5fk.10.41: and is told it is theirs (the website keeps a signed-in claimer's session).
     expect((await http(fay, 'get', `/invitations/${invitationId}`)).body.data.invitation).toMatchObject({
       invitedBy: { name: 'Ada Lovelace' },
       status: 'PENDING',
+      claimedByYou: true,
     });
     expect((await http(fay, 'post', `/invitations/${invitationId}/accept`)).status).toBe(200);
     expect(

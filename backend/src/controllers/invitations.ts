@@ -513,6 +513,8 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
           id: invitation.sessionId,
           status: invitation.sessionStatus,
         },
+        // work-k5fk.10.41: a signed-in caller learns whether they are its claimer (the website keeps their session).
+        claimedByYou: !!req.user && invitation.claimedBy?.userId === req.user.id,
       },
     });
   } catch (error) {
