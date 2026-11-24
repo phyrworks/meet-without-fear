@@ -324,36 +324,110 @@ REVOKE EXECUTE ON FUNCTION app.owns_reflection(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.owns_reflection(uuid) TO ai_access;
 
 -- An invitation as someone who is not (yet) a participant may see it (design note §6 invitation: "pre-membership
--- accept read via definer app.invitation_peek(id)"). The invitation's link is the bearer credential, so a caller
--- who names the id reads this much — never the session's content, only whether it is ready to join. No identity is
--- required: GET /invitations/:id (the link's preview) is public, rate-limited (routes/invitations.ts). invitee_name
--- is the inviter's name for the invitee, ciphertext (the caller decrypts). No row: not found.
+-- accept read via definer app.invitation_peek(id)"). Until it is claimed, the invitation's link is the credential: a
+-- caller who names the id reads this much — never the session's content, only whether it is ready to join. No identity
+-- is required: GET /invitations/:id (the link's preview) is public, rate-limited (routes/invitations.ts). Once claimed
+-- (work-k5fk.10.8: the first signed-in non-inviter to open it, app.invitation_claim), only the claimer and the inviter
+-- read the details; anyone else gets the claim notice: withheld = true, and only the id, status, expiry, creation and
+-- claimed = true. claimed_by_name is the claimer's name (user.name, read now, never stored), for the inviter and the
+-- claimer. invitee_name is the inviter's name for the invitee, ciphertext (the caller decrypts). No row: not found.
 CREATE FUNCTION app.invitation_peek(invitation uuid)
   RETURNS TABLE (id uuid, session_id uuid, invited_by_user_id uuid, inviter_display_name text, invitee_name text,
                  status public.invitation_status, accepted_by_user_id uuid, message_confirmed_at timestamptz,
                  expires_at timestamptz, created_at timestamptz, session_status public.session_status,
-                 topic_frame_confirmed boolean)
+                 topic_frame_confirmed boolean, claimed boolean, withheld boolean, claimed_by_user_id uuid,
+                 claimed_by_name text, claimed_at timestamptz)
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
-    SELECT i.id, i.session_id, i.invited_by_user_id, p.display_name, i.invitee_name, i.status, i.accepted_by_user_id,
-           i.message_confirmed_at, i.expires_at, i.created_at, s.status,
-           (s.topic_frame IS NOT NULL AND s.topic_frame_confirmed_at IS NOT NULL)
+    SELECT i.id,
+           CASE WHEN v.shown THEN i.session_id END,
+           CASE WHEN v.shown THEN i.invited_by_user_id END,
+           CASE WHEN v.shown THEN p.display_name END,
+           CASE WHEN v.shown THEN i.invitee_name END,
+           i.status,
+           CASE WHEN v.shown THEN i.accepted_by_user_id END,
+           CASE WHEN v.shown THEN i.message_confirmed_at END,
+           i.expires_at, i.created_at,
+           CASE WHEN v.shown THEN s.status END,
+           CASE WHEN v.shown THEN (s.topic_frame IS NOT NULL AND s.topic_frame_confirmed_at IS NOT NULL) END,
+           i.claimed_by_user_id IS NOT NULL,
+           NOT v.shown,
+           CASE WHEN v.shown THEN i.claimed_by_user_id END,
+           CASE WHEN v.shown THEN u.name END,
+           CASE WHEN v.shown THEN i.claimed_at END
     FROM public.invitation i
     JOIN public.session s ON s.id = i.session_id
     JOIN public.participant p ON p.session_id = i.session_id AND p.user_id = i.invited_by_user_id
+    LEFT JOIN public."user" u ON u.id = i.claimed_by_user_id
+    CROSS JOIN LATERAL (SELECT (i.claimed_by_user_id IS NULL
+                                OR i.claimed_by_user_id = app.current_user_id()
+                                OR i.invited_by_user_id = app.current_user_id()) IS TRUE AS shown) v
     WHERE i.id = invitation_peek.invitation AND pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
   $$;
-COMMENT ON FUNCTION app.invitation_peek(uuid) IS 'The invitation by id for a caller who need not be a participant, nor signed in (its link is the credential; the preview is public): status, expiry, the inviter''s display name, the invitee name (ciphertext) and whether the session is ready to join. app_access (work-k5fk.10.7).';
--- mwf_app (app_access): invitations.ts getInvitation, acceptInvitation, declineInvitation, acknowledgeInvitation.
+COMMENT ON FUNCTION app.invitation_peek(uuid) IS 'The invitation by id for a caller who need not be a participant, nor signed in (until it is claimed its link is the credential; the preview is public): status, expiry, the inviter''s display name, the invitee name (ciphertext), whether the session is ready to join, and who claimed it. Once claimed, only the claimer and the inviter see past the claim notice (withheld). app_access (work-k5fk.10.7, work-k5fk.10.8).';
+-- mwf_app (app_access): invitations.ts getInvitation, acceptInvitation, declineInvitation, acknowledgeInvitation;
+-- sessions.ts getInvitation and session-state.ts (the inviter's view of who claimed it).
 REVOKE EXECUTE ON FUNCTION app.invitation_peek(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.invitation_peek(uuid) TO app_access;
+
+-- The first signed-in caller other than the inviter to open a PENDING, unexpired invitation claims it: they become its
+-- invitee, the only one who reads its details (app.invitation_peek), accepts or declines it (app.invitation_answer).
+-- Owner decision 2026-11-23, work-k5fk.10.8. One UPDATE … WHERE claimed_by_user_id IS NULL, so two openers race to
+-- one winner; the claimer opening it again is a no-op. Identity-bound. Refusals: not found (P0002; the inviter, no
+-- identity), claimed by someone else (MWI01), not PENDING or expired (check_violation). Returns claimed_at.
+CREATE FUNCTION app.invitation_claim(invitation uuid) RETURNS timestamptz
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me      uuid := app.current_user_id();
+    v_inviter uuid;
+    v_status  public.invitation_status;
+    v_expires timestamptz;
+    v_claimer uuid;
+    v_at      timestamptz;
+  BEGIN
+    IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
+      RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    UPDATE public.invitation i SET claimed_by_user_id = v_me, claimed_at = CURRENT_TIMESTAMP
+    WHERE i.id = invitation_claim.invitation AND i.claimed_by_user_id IS NULL AND i.invited_by_user_id <> v_me
+      AND i.status = 'PENDING' AND i.expires_at > CURRENT_TIMESTAMP
+    RETURNING i.claimed_at INTO v_at;
+    IF FOUND THEN
+      RETURN v_at;
+    END IF;
+    SELECT i.invited_by_user_id, i.status, i.expires_at, i.claimed_by_user_id, i.claimed_at
+    INTO v_inviter, v_status, v_expires, v_claimer, v_at
+    FROM public.invitation i WHERE i.id = invitation_claim.invitation;
+    IF v_inviter IS NULL OR v_inviter = v_me THEN
+      RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_claimer = v_me THEN
+      RETURN v_at;
+    END IF;
+    IF v_claimer IS NOT NULL THEN
+      RAISE EXCEPTION 'invitation was claimed by someone else' USING ERRCODE = 'MWI01';
+    END IF;
+    IF v_status <> 'PENDING' THEN
+      RAISE EXCEPTION 'invitation is %, not PENDING', v_status USING ERRCODE = 'check_violation';
+    END IF;
+    RAISE EXCEPTION 'invitation has expired' USING ERRCODE = 'check_violation';
+  END
+  $$;
+COMMENT ON FUNCTION app.invitation_claim(uuid) IS 'The caller (signed in, not the inviter) claims a PENDING unexpired invitation as its invitee: first opener wins; idempotent for the claimer. Returns claimed_at. Refusals: P0002 not found / the inviter, MWI01 claimed by someone else, check_violation not PENDING or expired. Identity-bound, app_access (work-k5fk.10.8).';
+-- mwf_app (app_access): invitations.ts acknowledgeInvitation (what the app calls when the link opens).
+REVOKE EXECUTE ON FUNCTION app.invitation_claim(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.invitation_claim(uuid) TO app_access;
 
 -- The invitee's answer to a PENDING invitation (design note §6: the inviter's row is written only through a
 -- function): ACCEPTED (not yet expired; accepted by the caller, at instant), DECLINED (with the reason, ciphertext),
 -- or EXPIRED (only once past expires_at). Identity-bound, never the inviter. Locks the invitation FOR UPDATE first:
--- the accept's lock (work-99k2: a concurrent pre-join draft save holds it FOR SHARE). Refusals: not found (P0002;
--- the inviter too), not PENDING, not expired, expired (check_violation).
+-- the accept's lock (work-99k2: a concurrent pre-join draft save holds it FOR SHARE). ACCEPTED and DECLINED are the
+-- claimer's alone (work-k5fk.10.8): an unclaimed invitation is claimed by the answer, under that lock; one claimed by
+-- someone else is refused (MWI01). EXPIRED is a fact about the clock, any non-inviter's to record. Refusals: not found
+-- (P0002; the inviter too), claimed by someone else (MWI01), not PENDING, not expired, expired (check_violation).
 CREATE FUNCTION app.invitation_answer(invitation uuid, answer public.invitation_status, instant timestamptz DEFAULT NULL,
                                       reason text DEFAULT NULL)
   RETURNS void
@@ -367,14 +441,19 @@ CREATE FUNCTION app.invitation_answer(invitation uuid, answer public.invitation_
     v_inviter uuid;
     v_status  public.invitation_status;
     v_expires timestamptz;
+    v_claimer uuid;
   BEGIN
     IF v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') THEN
       RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
     END IF;
-    SELECT i.invited_by_user_id, i.status, i.expires_at INTO v_inviter, v_status, v_expires
+    SELECT i.invited_by_user_id, i.status, i.expires_at, i.claimed_by_user_id
+    INTO v_inviter, v_status, v_expires, v_claimer
     FROM public.invitation i WHERE i.id = invitation_answer.invitation FOR UPDATE;
     IF v_inviter IS NULL OR v_inviter = v_me THEN
       RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF invitation_answer.answer IN ('ACCEPTED', 'DECLINED') AND v_claimer <> v_me THEN
+      RAISE EXCEPTION 'invitation was claimed by someone else' USING ERRCODE = 'MWI01';
     END IF;
     IF v_status <> 'PENDING' THEN
       RAISE EXCEPTION 'invitation is %, not PENDING', v_status USING ERRCODE = 'check_violation';
@@ -388,11 +467,14 @@ CREATE FUNCTION app.invitation_answer(invitation uuid, answer public.invitation_
       IF v_expires <= v_now THEN
         RAISE EXCEPTION 'invitation has expired' USING ERRCODE = 'check_violation';
       END IF;
-      UPDATE public.invitation i SET status = 'ACCEPTED', accepted_by_user_id = v_me, accepted_at = v_at
+      UPDATE public.invitation i
+      SET status = 'ACCEPTED', accepted_by_user_id = v_me, accepted_at = v_at,
+          claimed_by_user_id = v_me, claimed_at = coalesce(i.claimed_at, v_at)
       WHERE i.id = invitation_answer.invitation;
     ELSIF invitation_answer.answer = 'DECLINED' THEN
       UPDATE public.invitation i
-      SET status = 'DECLINED', declined_at = v_at, decline_reason = invitation_answer.reason::public.ciphertext
+      SET status = 'DECLINED', declined_at = v_at, decline_reason = invitation_answer.reason::public.ciphertext,
+          claimed_by_user_id = v_me, claimed_at = coalesce(i.claimed_at, v_at)
       WHERE i.id = invitation_answer.invitation;
     ELSIF invitation_answer.answer = 'EXPIRED' THEN
       IF v_expires > v_now THEN
@@ -404,7 +486,7 @@ CREATE FUNCTION app.invitation_answer(invitation uuid, answer public.invitation_
     END IF;
   END
   $$;
-COMMENT ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) IS 'The invitee''s answer to a PENDING invitation: ACCEPTED (by the caller, before expiry), DECLINED (with a ciphertext reason) or EXPIRED (past expiry). Identity-bound, app_access, never the inviter; locks the invitation FOR UPDATE (work-k5fk.10.7).';
+COMMENT ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) IS 'The invitee''s answer to a PENDING invitation: ACCEPTED (by the caller, before expiry), DECLINED (with a ciphertext reason) or EXPIRED (past expiry). ACCEPTED and DECLINED only by its claimer, claiming it when no one has (MWI01 otherwise). Identity-bound, app_access, never the inviter; locks the invitation FOR UPDATE (work-k5fk.10.7, work-k5fk.10.8).';
 -- mwf_app (app_access): invitations.ts acceptInvitation, declineInvitation.
 REVOKE EXECUTE ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) TO app_access;
@@ -596,7 +678,8 @@ REVOKE EXECUTE ON FUNCTION app.validated_at(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.validated_at(uuid[]) TO app_access;
 
 -- requireSessionAccess for a caller with no participant row (middleware/auth.ts): 'missing' when the session does
--- not exist, 'invited' when it has an invitation the caller did not send that is PENDING and unexpired, or that
+-- not exist, 'invited' when it has an invitation the caller did not send that is PENDING, unexpired and not claimed
+-- by someone else (work-k5fk.10.8), or that
 -- the caller accepted (the acceptance timing gap; Phase 3 §7 W6 schedules its removal), else 'denied'. Under RLS a
 -- non-participant sees neither the session nor its invitation.
 -- Review F13 (accepted, documented): 'missing' against 'denied' tells any signed-in caller whether a session id
@@ -611,11 +694,12 @@ CREATE FUNCTION app.session_invitee_access(session uuid) RETURNS text
       WHEN NOT EXISTS (SELECT 1 FROM public.session s WHERE s.id = session_invitee_access.session) THEN 'missing'
       WHEN EXISTS (SELECT 1 FROM public.invitation i
                    WHERE i.session_id = session_invitee_access.session AND i.invited_by_user_id <> app.current_user_id()
-                     AND ((i.status = 'PENDING' AND i.expires_at > CURRENT_TIMESTAMP)
+                     AND ((i.status = 'PENDING' AND i.expires_at > CURRENT_TIMESTAMP
+                           AND (i.claimed_by_user_id IS NULL OR i.claimed_by_user_id = app.current_user_id()))
                           OR (i.status = 'ACCEPTED' AND i.accepted_by_user_id = app.current_user_id()))) THEN 'invited'
       ELSE 'denied' END
   $$;
-COMMENT ON FUNCTION app.session_invitee_access(uuid) IS 'For a caller with no participant row in the session: missing (no such session), invited (a PENDING unexpired invitation they did not send, or one they accepted) or denied. Identity-bound, app_access (work-k5fk.10.7).';
+COMMENT ON FUNCTION app.session_invitee_access(uuid) IS 'For a caller with no participant row in the session: missing (no such session), invited (a PENDING unexpired invitation they did not send and no one else claimed, or one they accepted) or denied. Identity-bound, app_access (work-k5fk.10.7, work-k5fk.10.8).';
 -- mwf_app (app_access): middleware/auth.ts requireSessionAccess.
 REVOKE EXECUTE ON FUNCTION app.session_invitee_access(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_invitee_access(uuid) TO app_access;
@@ -1639,6 +1723,7 @@ ALTER FUNCTION app.owns_persona(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.scope_actor_is_member() OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.invitation_claim(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_invitee_access(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.shares_delivered_to_me(uuid) OWNER TO mwf_definer;
@@ -3079,7 +3164,7 @@ CREATE POLICY app_update ON proposal FOR UPDATE TO app_access
   USING (app.is_member(session_id) AND status <> 'CONVERTED_TO_AGREEMENT'
          AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'))
   WITH CHECK (app.is_member(session_id) AND (created_by_user_id = (SELECT app.current_user_id()) OR kind = 'SHARED_PROPOSAL'));
-COMMENT ON POLICY app_update ON proposal IS 'A shared proposal is the pair''s (either edits, refines or removes it: Stage 4 capture, the sub-chat); an individual commitment only its creator''s. Never one converted to an agreement (the worker''s; closes work-k5fk.10.9''s revival). Design note §6 says created_by = me; a shared proposal''s co-editing is the app''s behaviour (stage4-capture / stage4-subchat target tests). work-k5fk.10.7.';
+COMMENT ON POLICY app_update ON proposal IS 'Creator-only until shared (owner decision 2026-11-23, work-k5fk.10.10): the caller''s own proposal, or a SHARED_PROPOSAL, which is shared with every member from birth (app_select is membership; stage4-store loadProposals shows it to all) — so either participant edits, refines or removes it (Stage 4 capture, the sub-chat). Never the partner''s INDIVIDUAL_COMMITMENT, even once shared_at makes it visible. Never one converted to an agreement (the worker''s; closes work-k5fk.10.9''s revival). The app checks the same rule first (stage4-store proposalEditableBy). work-k5fk.10.7.';
 CREATE POLICY worker_session ON proposal TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 CREATE POLICY definer_all ON proposal TO mwf_definer USING (true) WITH CHECK (true);
 
@@ -3118,7 +3203,7 @@ CREATE POLICY app_insert ON proposal_revision FOR INSERT TO app_access
   WITH CHECK (actor_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
               AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id
                             AND (p.created_by_user_id = (SELECT app.current_user_id()) OR p.kind = 'SHARED_PROPOSAL')));
-COMMENT ON POLICY app_insert ON proposal_revision IS 'A revision the caller made, in a session of theirs (design note §6: member + actor = me), of a proposal they may edit (their own, or a shared one) — never of the partner''s individual commitment (work-k5fk.10.11, in part; work-k5fk.10.7).';
+COMMENT ON POLICY app_insert ON proposal_revision IS 'A revision the caller made, in a session of theirs (design note §6: member + actor = me), of a proposal they may edit as proposal app_update has it: their own, or a SHARED_PROPOSAL (shared with every member from birth) — never the partner''s INDIVIDUAL_COMMITMENT, shared or not (owner decision 2026-11-23: creator-only until shared; work-k5fk.10.11, work-k5fk.10.7). The app checks the same rule first (stage4-store proposalEditableBy).';
 CREATE POLICY worker_session ON proposal_revision TO worker_access USING (session_id = (SELECT app.session_scope())) WITH CHECK (session_id = (SELECT app.session_scope()));
 
 -- reconciler_guidance: ai_access SI, app_access S

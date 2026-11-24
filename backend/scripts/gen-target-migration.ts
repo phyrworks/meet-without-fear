@@ -62,9 +62,10 @@ const INCLUDE = '-- @@include sql-only.sql';
  * 155 since work-k5fk.4: message.id and conversation_read_state.last_seen_message_id
  * went (-2), conversation_read_state.last_seen_conversation_id came (+1); message's
  * key is (conversation_id, seq) and seq is an integer.
- * 156 since work-k5fk.9 (C9): reconciler_result.author_user_id came (+1); 157 (C8): reminder.session_id (+1).
+ * 156 since work-k5fk.9 (C9): reconciler_result.author_user_id came (+1); 157 (C8): reminder.session_id (+1);
+ * 158 (work-k5fk.10.8): invitation.claimed_by_user_id (+1).
  */
-export const UUID7_COLUMNS = 157;
+export const UUID7_COLUMNS = 158;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**
@@ -104,27 +105,34 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   const names = new Set<string>();
   // Identifiers are unquoted except the reserved word "user" (tables.sql
   // conventions); indexes and most constraints are unnamed (`CREATE INDEX ON t`).
-  for (const m of sql.matchAll(/CREATE (?:DOMAIN|TYPE|TABLE|UNIQUE INDEX|INDEX) (?!ON )"?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
+  for (const m of sql.matchAll(/CREATE (?:DOMAIN|TYPE|TABLE|UNIQUE INDEX|INDEX) (?!ON )"?([A-Za-z0-9_]+)"?/g))
+    names.add(m[1]);
   for (const m of sql.matchAll(/CONSTRAINT "?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
   const bad = [...names].filter(n => !/^[a-z_][a-z0-9_]*$/.test(n));
   if (bad.length) throw new Error(`tables.sql creates names that are not lower-case: ${bad.join(', ')}`);
   const tables = (sql.match(/^CREATE TABLE (?!app\.)/gm) ?? []).length;
   if (tables !== 49) throw new Error(`tables.sql creates ${tables} tables, expected 49`);
   const appTables = (sql.match(/^CREATE TABLE app\.[a-z_]+ /gm) ?? []).length;
-  if (appTables !== 1) throw new Error(`tables.sql creates ${appTables} tables in schema app, expected 1 (app.json_schema)`);
+  if (appTables !== 1)
+    throw new Error(`tables.sql creates ${appTables} tables in schema app, expected 1 (app.json_schema)`);
   // A column line is `    name <type>…` inside a CREATE TABLE.
   const plainUuid = [...sql.matchAll(/^ {4}"?([a-z0-9_]+)"? uuid\b/gim)].map(m => m[1]);
   if (plainUuid.length) throw new Error(`tables.sql has uuid columns not typed uuid7: ${plainUuid.join(', ')}`);
   const uuid7 = (sql.match(/^ {4}"?[a-z0-9_]+"? uuid7\b/gm) ?? []).length;
   if (uuid7 !== UUID7_COLUMNS) throw new Error(`tables.sql has ${uuid7} uuid7 columns, expected ${UUID7_COLUMNS}`);
   const ct = (sql.match(/^ {4}[a-z0-9_]+ ciphertext\b/gm) ?? []).length;
-  if (ct !== CIPHERTEXT_COLUMNS) throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
+  if (ct !== CIPHERTEXT_COLUMNS)
+    throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
   const ca = (sql.match(/^ {4}[a-z0-9_]+ ciphertext_list\b/gm) ?? []).length;
-  if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} ciphertext_list columns, expected ${CIPHERTEXT_ARRAYS}`);
+  if (ca !== CIPHERTEXT_ARRAYS)
+    throw new Error(`tables.sql has ${ca} ciphertext_list columns, expected ${CIPHERTEXT_ARRAYS}`);
   // The envelope domains: `CREATE DOMAIN <name> AS jsonb` whose CHECK is the jsonb_envelope constraint.
-  const envelopes = [...sql.matchAll(/^CREATE DOMAIN ([a-z0-9_]+) AS jsonb\n {2}CONSTRAINT jsonb_envelope CHECK/gm)].map(m => m[1]);
+  const envelopes = [
+    ...sql.matchAll(/^CREATE DOMAIN ([a-z0-9_]+) AS jsonb\n {2}CONSTRAINT jsonb_envelope CHECK/gm),
+  ].map(m => m[1]);
   const je = envelopes.reduce((k, d) => k + (sql.match(new RegExp(`^ {4}[a-z0-9_]+ ${d}\\b`, 'gm')) ?? []).length, 0);
-  if (je !== JSONB_ENVELOPES) throw new Error(`tables.sql has ${je} envelope-domain columns, expected ${JSONB_ENVELOPES}`);
+  if (je !== JSONB_ENVELOPES)
+    throw new Error(`tables.sql has ${je} envelope-domain columns, expected ${JSONB_ENVELOPES}`);
   return { names: names.size, uuid7 };
 }
 

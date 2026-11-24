@@ -49,6 +49,7 @@ import { getOrchestratedResponse, type FullAIContext } from '../services/ai';
 import { embedSessionContent } from '../services/embedding';
 import { updateSessionSummary, getSessionSummary } from '../services/conversation-summarizer';
 import { updateContext } from '../lib/request-context';
+import { invitationClaimantFor } from '../services/invitation-peek';
 
 async function getShowActivityStatus(userId: string): Promise<boolean> {
   // The caller's own preferences document (user_preferences.doc, spec §1.7).
@@ -489,6 +490,7 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const claimant = await invitationClaimantFor(invitation, participant.userId);
     successResponse(res, {
       invitation: {
         id: invitation.id,
@@ -496,6 +498,8 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
         messageConfirmed: invitation.messageConfirmedAt !== null,
         messageConfirmedAt: invitation.messageConfirmedAt?.toISOString() ?? null,
         acceptedAt: invitation.acceptedAt?.toISOString() ?? null,
+        // work-k5fk.10.8: the inviter sees who opened it first (its invitee), until they are seated
+        ...(claimant ? { claimedBy: claimant } : {}),
         status: invitation.status,
         expiresAt: invitation.expiresAt.toISOString(),
         isInviter: invitation.invitedByUserId === participant.userId,

@@ -88,8 +88,9 @@ describeTarget('live_session_pair under concurrency and on every release path (w
    */
   const accepted = async (sessionId: string, invitee: string, inviter: string = ada) =>
     run.sql(
-      `INSERT INTO invitation (session_id, invited_by_user_id, status, expires_at, accepted_by_user_id, accepted_at)
-       VALUES ($1, $2, 'ACCEPTED', now() + interval '7 days', $3, now())`,
+      `INSERT INTO invitation (session_id, invited_by_user_id, status, expires_at, accepted_by_user_id, accepted_at,
+                               claimed_by_user_id, claimed_at)
+       VALUES ($1, $2, 'ACCEPTED', now() + interval '7 days', $3, now(), $3, now())`,
       [sessionId, inviter, invitee],
     );
   const join = async (sessionId: string, userId: string, addedBy: string) => {

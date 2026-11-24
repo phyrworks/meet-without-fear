@@ -348,6 +348,7 @@ model Invitation {
   sessionId          String           @map("session_id") @db.Uuid
   invitedByUserId    String           @map("invited_by_user_id") @db.Uuid
   acceptedByUserId   String?          @map("accepted_by_user_id") @db.Uuid
+  claimedByUserId    String?          @map("claimed_by_user_id") @db.Uuid
   inviteeName        String?          @map("invitee_name")
   status             InvitationStatus @default(PENDING)
   messageConfirmedAt DateTime?        @map("message_confirmed_at") @db.Timestamptz(3)
@@ -355,12 +356,14 @@ model Invitation {
   acceptedAt         DateTime?        @map("accepted_at") @db.Timestamptz(3)
   declinedAt         DateTime?        @map("declined_at") @db.Timestamptz(3)
   declineReason      String?          @map("decline_reason")
+  claimedAt          DateTime?        @map("claimed_at") @db.Timestamptz(3)
   createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   session              Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   invitedByParticipant Participant @relation(fields: [sessionId, invitedByUserId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
-  acceptedByUser       User?       @relation(fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  acceptedByUser       User?       @relation("InvitationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  claimedByUser        User?       @relation("InvitationClaimedBy", fields: [claimedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   drafts               Draft[]
   draftInvitationPins  Draft[]     @relation("DraftInvitationPin")
 
@@ -369,6 +372,7 @@ model Invitation {
   @@index([sessionId])
   @@index([status, expiresAt])
   @@index([acceptedByUserId])
+  @@index([claimedByUserId])
   @@index([sessionId, invitedByUserId])
   @@map("invitation")
 }
@@ -1089,7 +1093,8 @@ model User {
   contactOf           UserContact[]    @relation("UserContactContact")
   participants        Participant[]
   aiMemories          AiMemory[]
-  invitationsAccepted Invitation[]
+  invitationsAccepted Invitation[]     @relation("InvitationAcceptedBy")
+  invitationsClaimed  Invitation[]     @relation("InvitationClaimedBy")
   reminders           Reminder[]
   reflections         Reflection[]
   devices             UserDevice[]

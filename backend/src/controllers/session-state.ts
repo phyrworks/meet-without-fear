@@ -30,6 +30,7 @@ import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { lockInvitationForAccept, repointInvitationDraftsAsTooling } from '../services/empathy-store';
 import { ErrorCode } from '@meet-without-fear/shared';
+import { invitationClaimantFor } from '../services/invitation-peek';
 import { successResponse, errorResponse } from '../utils/response';
 import {
   getCoParticipantPresence,
@@ -79,6 +80,8 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
         topicFrameConfirmedAt: { not: null },
       },
       invitedByUserId: { not: userId },
+      // work-k5fk.10.8: never one someone else opened first (as app.invitation_answer)
+      OR: [{ claimedByUserId: null }, { claimedByUserId: userId }],
       messageConfirmedAt: { not: null },
       expiresAt: { gt: new Date() },
     },
@@ -113,7 +116,13 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
 
     await tx.invitation.update({
       where: { id: invitation.id },
-      data: { status: 'ACCEPTED', acceptedAt, acceptedByUserId: userId },
+      data: {
+        status: 'ACCEPTED',
+        acceptedAt,
+        acceptedByUserId: userId,
+        claimedByUserId: userId,
+        claimedAt: invitation.claimedAt ?? acceptedAt,
+      },
     });
 
     await tx.session.update({
@@ -253,6 +262,8 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     const invitation = latestInvitation;
     const invitedByUserId = invitation?.invitedByUserId ?? null;
     const isInviter = invitedByUserId === user.id;
+    // work-k5fk.10.8: the inviter sees who opened the invitation first (its invitee).
+    const claimedBy = invitation ? await invitationClaimantFor(invitation, user.id) : null;
     const invitationResponse = invitation
       ? {
           id: invitation.id,
@@ -269,6 +280,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
           topicFrame: session.topicFrame ?? null,
           topicFrameConfirmedAt: session.topicFrameConfirmedAt?.toISOString() ?? null,
           acceptedAt: invitation.acceptedAt?.toISOString() ?? null,
+          ...(claimedBy ? { claimedBy } : {}),
           isInviter,
         }
       : null;

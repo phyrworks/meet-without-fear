@@ -1911,6 +1911,7 @@ CREATE TABLE invitation (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     invited_by_user_id uuid7 NOT NULL,
     accepted_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
+    claimed_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     invitee_name ciphertext,
     status invitation_status NOT NULL DEFAULT 'PENDING',
     message_confirmed_at ts_ms,
@@ -1918,12 +1919,18 @@ CREATE TABLE invitation (
     accepted_at ts_ms,
     declined_at ts_ms,
     decline_reason ciphertext,
+    claimed_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 invitation [P14a, P14b] — P3 §6
     CHECK (
       status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND accepted_by_user_id IS NOT NULL)),
+    -- work-k5fk.10.8 (owner decision 2026-11-23, first opener claims): a claim names who and when, never the
+    -- inviter; whoever accepts is the claimer.
+    CHECK ((claimed_by_user_id IS NULL) = (claimed_at IS NULL)),
+    CHECK (claimed_by_user_id <> invited_by_user_id),
+    CHECK (accepted_by_user_id IS NULL OR accepted_by_user_id = claimed_by_user_id),
     -- work-k5fk.3: the inviter is a participant of the invitation's session; drafts pin to (id, session_id)
     UNIQUE (id, session_id),
     -- work-k5fk.9 (C11): what an EMPATHY draft written before the partner joins pins to (its owner is the inviter)
@@ -1934,9 +1941,15 @@ CREATE INDEX ON invitation (session_id);
 CREATE INDEX ON invitation (session_id, invited_by_user_id);
 CREATE INDEX ON invitation (status, expires_at);
 CREATE INDEX ON invitation (accepted_by_user_id);
+CREATE INDEX ON invitation (claimed_by_user_id);
 COMMENT ON TABLE invitation IS 'An invitation from a participant to someone not yet in the session; accepting it creates the invitee''s participant.';
 COMMENT ON COLUMN invitation.invited_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, invited_by_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set with accepted_at.';
+COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set with accepted_at. Always the claimer (claimed_by_user_id).';
+COMMENT ON COLUMN invitation.claimed_by_user_id IS 'The invitee: the first signed-in user other than the inviter to open the invitation (app.invitation_claim, or the answer itself); set with claimed_at, once. Only they read its details, accept or decline it (work-k5fk.10.8).';
+COMMENT ON COLUMN invitation.claimed_at IS 'When claimed_by_user_id opened the invitation and claimed it (work-k5fk.10.8).';
+COMMENT ON CONSTRAINT invitation_check1 ON invitation IS 'A claim names who and when, together (work-k5fk.10.8).';
+COMMENT ON CONSTRAINT invitation_check2 ON invitation IS 'The inviter never claims their own invitation (work-k5fk.10.8).';
+COMMENT ON CONSTRAINT invitation_check3 ON invitation IS 'Whoever accepts is the claimer: only the first opener can become the invitee (work-k5fk.10.8).';
 COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
 COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
 COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
@@ -1948,10 +1961,12 @@ GRANT INSERT (session_id, invited_by_user_id, invitee_name, status, expires_at, 
   ON invitation TO app_access;
 GRANT UPDATE (message_confirmed_at, updated_at) ON invitation TO app_access;
 -- mwf_definer: session_abandon_declined (invitations.ts declineInvitation: the decliner is no participant, so the
--- declined invitation is what lets the session end); invitation_peek, invitation_answer, session_invitee_access
-GRANT SELECT (id, session_id, invited_by_user_id, status, accepted_by_user_id, invitee_name, message_confirmed_at,
-              expires_at, created_at) ON invitation TO mwf_definer;
-GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason) ON invitation TO mwf_definer;
+-- declined invitation is what lets the session end); invitation_peek, invitation_claim, invitation_answer,
+-- session_invitee_access
+GRANT SELECT (id, session_id, invited_by_user_id, status, accepted_by_user_id, claimed_by_user_id, claimed_at,
+              invitee_name, message_confirmed_at, expires_at, created_at) ON invitation TO mwf_definer;
+GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, claimed_by_user_id, claimed_at)
+  ON invitation TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT (session_id, invited_by_user_id) ON invitation TO ops_access;
 

@@ -34,8 +34,9 @@ describe production.
   shared need while unrevoked, choices once `choices_shared`, a check-in once its shared follow-up
   completes, a review once its feedback is sent). No identity bound: no row. The goldens are the proof
   that no request moved. Where the app needs a fact of a row its caller may not see, a content-free
-  definer answers (trailer.sql T4): `app.invitation_peek` / `app.invitation_answer` (the invitee before
-  joining), `app.attempt_meta` (an unrevealed attempt's author and status, for its subject's share
+  definer answers (trailer.sql T4): `app.invitation_peek` / `app.invitation_claim` / `app.invitation_answer` (the invitee
+  before joining; once claimed — first opener, work-k5fk.10.8 — only the claimer and the inviter see past the
+  claim notice, and only the claimer answers), `app.attempt_meta` (an unrevealed attempt's author and status, for its subject's share
   offer), `app.result_facts` (the author's current guidance), `app.participant_presence` /
   `app.co_participant_presence` (a co-participant's shared-frame seen instant, and activity only as
   their privacy preference allows — never their mood or read state), `app.session_parties` (the

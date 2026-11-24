@@ -11,7 +11,7 @@ import {
   archiveSession,
   deleteSession,
 } from '../controllers/invitations';
-import { requireAuth, requireSessionAccess } from '../middleware/auth';
+import { optionalAuth, requireAuth, requireSessionAccess } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errors';
 import { invitationLookupRateLimit } from '../middleware/rate-limit';
 
@@ -33,10 +33,11 @@ router.post('/sessions', requireAuth, asyncHandler(createSession));
 
 /**
  * @route GET /api/v1/invitations/:id
- * @description Get invitation details (public info for accepting/declining)
+ * @description Get invitation details (public info for accepting/declining; once claimed, only the
+ * claimer and the inviter see past the claim notice: optional auth, work-k5fk.10.8)
  * @access Public - but only returns limited info
  */
-router.get('/invitations/:id', invitationLookupRateLimit, asyncHandler(getInvitation));
+router.get('/invitations/:id', invitationLookupRateLimit, optionalAuth, asyncHandler(getInvitation));
 
 /**
  * @route POST /api/v1/invitations/:id/accept

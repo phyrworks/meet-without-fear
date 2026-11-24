@@ -12,6 +12,7 @@ import { SessionStatus, StageStatus } from '../enums';
 import { CompactStatusResponse } from './stage';
 import { MessageDTO } from './message';
 import type { MilestoneMap } from './milestones';
+import type { InvitationClaimantDTO } from './session';
 
 // ============================================================================
 // Consolidated Session State
@@ -100,6 +101,8 @@ export interface SessionStateResponse {
     topicFrame?: string | null;
     topicFrameConfirmedAt?: string | null;
     acceptedAt?: string | null;
+    /** The inviter's view only, PENDING or DECLINED: who opened it first (work-k5fk.10.8; InvitationDTO.claimedBy) */
+    claimedBy?: InvitationClaimantDTO;
     isInviter: boolean;
   } | null;
   compact: CompactStatusResponse;

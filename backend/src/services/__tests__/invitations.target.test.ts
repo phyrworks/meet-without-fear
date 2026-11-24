@@ -157,8 +157,11 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
       { status: 'ABANDONED' },
     ]);
     expect(
-      await run.sql(`SELECT status::text AS status, decline_reason FROM invitation WHERE session_id = $1`, [sessionId]),
-    ).toEqual([{ status: 'DECLINED', decline_reason: 'not now' }]);
+      await run.sql(
+        `SELECT status::text AS status, decline_reason, claimed_by_user_id FROM invitation WHERE session_id = $1`,
+        [sessionId],
+      ),
+    ).toEqual([{ status: 'DECLINED', decline_reason: 'not now', claimed_by_user_id: dan.id }]); // the answer claims it
     expect((await http(dan, 'get', `/sessions/${sessionId}/emotions`)).status).toBe(403);
 
     const other = await http(ada, 'post', '/sessions', { inviteName: 'Erin' });
@@ -167,5 +170,117 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
     ]);
     expect((await http(erin, 'get', `/sessions/${other.body.data.session.id}/emotions`)).status).toBe(403);
     expect((await http(erin, 'post', `/invitations/${other.body.data.invitationId}/accept`)).status).toBe(410);
+  });
+
+  // work-k5fk.10.8 (owner decision 2026-11-23): the first signed-in non-inviter to open the invitation is its invitee.
+  it('first opener claims: only they read past the claim notice, accept or decline; the inviter sees who', async () => {
+    const fay = { id: randomUuidV7(), email: `fay-${process.pid}@e2e.test` };
+    const gus = { id: randomUuidV7(), email: `gus-${process.pid}@e2e.test` };
+    const created = await http(ada, 'post', '/sessions', { inviteName: 'Fay' });
+    const sessionId = created.body.data.session.id;
+    const invitationId = created.body.data.invitationId;
+    await ready(sessionId);
+
+    // Unclaimed, the link's preview is anyone's; opening it (acknowledge) claims it.
+    expect((await http(gus, 'get', `/invitations/${invitationId}`)).status).toBe(200);
+    expect((await http(fay, 'post', `/invitations/${invitationId}/acknowledge`)).body.data.acknowledged).toBe(true);
+    const claim = await run.sql<{ claimed_by_user_id: string; claimed: boolean }>(
+      `SELECT claimed_by_user_id, claimed_at IS NOT NULL AS claimed FROM invitation WHERE id = $1`,
+      [invitationId],
+    );
+    expect(claim).toEqual([{ claimed_by_user_id: fay.id, claimed: true }]);
+    // Opening it again changes nothing.
+    expect((await http(fay, 'post', `/invitations/${invitationId}/acknowledge`)).status).toBe(200);
+
+    // Anyone else: a refusal, and nothing moves (the decline would have abandoned Ada's session).
+    for (const [method, path] of [
+      ['get', `/invitations/${invitationId}`],
+      ['post', `/invitations/${invitationId}/acknowledge`],
+      ['post', `/invitations/${invitationId}/accept`],
+      ['post', `/invitations/${invitationId}/decline`],
+    ] as const) {
+      const r = await http(gus, method, path, method === 'post' ? {} : undefined);
+      expect({ path, status: r.status }).toEqual({ path, status: 403 });
+    }
+    expect((await http(gus, 'get', `/sessions/${sessionId}/emotions`)).status).toBe(403);
+    expect(
+      await run.sql(
+        `SELECT i.status::text AS invitation, s.status::text AS session FROM invitation i JOIN session s ON s.id = i.session_id WHERE i.id = $1`,
+        [invitationId],
+      ),
+    ).toEqual([{ invitation: 'PENDING', session: 'INVITED' }]);
+
+    // The inviter sees who claimed it, in both of their invitation views.
+    const claimedBy = { id: fay.id, claimedAt: expect.any(String) };
+    expect((await http(ada, 'get', `/sessions/${sessionId}/invitation`)).body.data.invitation.claimedBy).toMatchObject(
+      claimedBy,
+    );
+    expect((await http(ada, 'get', `/sessions/${sessionId}/state`)).body.data.invitation.claimedBy).toMatchObject(
+      claimedBy,
+    );
+
+    // The claimer still reads the details and accepts.
+    expect((await http(fay, 'get', `/invitations/${invitationId}`)).body.data.invitation).toMatchObject({
+      invitedBy: { name: 'Ada Lovelace' },
+      status: 'PENDING',
+    });
+    expect((await http(fay, 'post', `/invitations/${invitationId}/accept`)).status).toBe(200);
+    expect(
+      await run.sql(`SELECT accepted_by_user_id, claimed_by_user_id FROM invitation WHERE id = $1`, [invitationId]),
+    ).toEqual([{ accepted_by_user_id: fay.id, claimed_by_user_id: fay.id }]);
+  });
+
+  it('the database: one claim wins, the answer is the claimer’s, accepted_by is the claimer', async () => {
+    const hal = { id: randomUuidV7(), email: `hal-${process.pid}@e2e.test` };
+    const ivy = { id: randomUuidV7(), email: `ivy-${process.pid}@e2e.test` };
+    // Users exist once they have made a request (the E2E bypass creates them).
+    for (const u of [hal, ivy]) await http(u, 'get', '/sessions');
+    const created = await http(ada, 'post', '/sessions', { inviteName: 'Hal' });
+    const invitationId = created.body.data.invitationId;
+    await ready(created.body.data.session.id);
+    const code = (userId: string, text: string) =>
+      run.as('mwf_app', userId, text, [invitationId]).then(
+        () => 'ok',
+        (e: { code?: string }) => e.code ?? String(e),
+      );
+
+    expect(await code(ada.id, `SELECT app.invitation_claim($1::uuid)`)).toBe('P0002'); // the inviter
+    expect(await code(hal.id, `SELECT app.invitation_claim($1::uuid)`)).toBe('ok');
+    expect(await code(hal.id, `SELECT app.invitation_claim($1::uuid)`)).toBe('ok'); // idempotent
+    expect(await code(ivy.id, `SELECT app.invitation_claim($1::uuid)`)).toBe('MWI01');
+    expect(await code(ivy.id, `SELECT app.invitation_answer($1::uuid, 'DECLINED')`)).toBe('MWI01');
+    expect(await code(ivy.id, `SELECT app.invitation_answer($1::uuid, 'ACCEPTED')`)).toBe('MWI01');
+    // Past the claim notice: nothing of the invitation for anyone else.
+    expect(
+      await run.as(
+        'mwf_app',
+        ivy.id,
+        `SELECT withheld, session_id, invited_by_user_id, invitee_name FROM app.invitation_peek($1::uuid)`,
+        [invitationId],
+      ),
+    ).toEqual([{ withheld: true, session_id: null, invited_by_user_id: null, invitee_name: null }]);
+    expect(
+      await run.as('mwf_app', ada.id, `SELECT withheld, claimed_by_user_id FROM app.invitation_peek($1::uuid)`, [
+        invitationId,
+      ]),
+    ).toEqual([{ withheld: false, claimed_by_user_id: hal.id }]);
+    // The table refuses an acceptor who is not the claimer, and the inviter as claimer.
+    expect(
+      await run
+        .sql(`UPDATE invitation SET status = 'ACCEPTED', accepted_by_user_id = $2, accepted_at = now() WHERE id = $1`, [
+          invitationId,
+          ivy.id,
+        ])
+        .then(
+          () => 'ok',
+          (e: { constraint?: string }) => e.constraint,
+        ),
+    ).toBe('invitation_check3');
+    expect(
+      await run.sql(`UPDATE invitation SET claimed_by_user_id = invited_by_user_id WHERE id = $1`, [invitationId]).then(
+        () => 'ok',
+        (e: { constraint?: string }) => e.constraint,
+      ),
+    ).toBe('invitation_check2');
   });
 });

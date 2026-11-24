@@ -133,6 +133,21 @@ export interface InvitationDTO {
   topicFrame?: string | null;
   /** When the topic frame was finalized */
   topicFrameConfirmedAt?: string | null;
+  /**
+   * The inviter's view only, while the invitation is PENDING or DECLINED: who opened it first and
+   * so is its invitee (work-k5fk.10.8). Absent until it is claimed, and once accepted.
+   */
+  claimedBy?: InvitationClaimantDTO;
+}
+
+/**
+ * The first signed-in person other than the inviter to open an invitation: its invitee, the only
+ * one who may accept or decline it (work-k5fk.10.8). Shown to the inviter.
+ */
+export interface InvitationClaimantDTO {
+  id: string;
+  name: string | null;
+  claimedAt: string;
 }
 
 export enum InvitationStatus {

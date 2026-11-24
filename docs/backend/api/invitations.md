@@ -14,9 +14,13 @@ The backend **does not send invitations itself**. `POST /api/v1/sessions` (see [
 
 Invitations are valid for **7 days** from creation; after that the `GET /invitations/:id` endpoint returns `status: 'EXPIRED'`.
 
+### First opener claims (work-k5fk.10.8)
+
+Until someone opens it, the link is the credential: anyone holding it sees the preview. The **first signed-in person other than the inviter to open it** (the app calls `POST /invitations/:id/acknowledge` when the link opens; an accept or decline of an unclaimed invitation claims it too) becomes its invitee — `invitation.claimed_by_user_id` / `claimed_at`, written atomically by `app.invitation_claim`. From then on only the claimer reads its details, accepts or declines it; anyone else gets **403 `FORBIDDEN`** ("This invitation has already been opened by someone else") from `GET`, `acknowledge`, `accept` and `decline`. The database enforces the same: `app.invitation_peek` returns only the claim notice (`withheld`), `app.invitation_answer` refuses ACCEPTED / DECLINED by anyone but the claimer (SQLSTATE `MWI01`), and `accepted_by_user_id` must equal `claimed_by_user_id` (CHECK). The inviter sees who claimed it as `invitation.claimedBy` (`{ id, name, claimedAt }`) in `GET /sessions/:id/invitation` and `GET /sessions/:id/state`.
+
 ## Get Invitation Details
 
-Get details about an invitation (can be accessed without auth for preview).
+Get details about an invitation (can be accessed without auth for preview; auth is optional, and once the invitation is claimed only the claimer and the inviter get past the 403).
 
 ```
 GET /api/v1/invitations/:id
@@ -74,6 +78,7 @@ Rate limited to 10 requests per minute per IP. Returns `RATE_LIMITED` on breach.
 | Code | When |
 |------|------|
 | `NOT_FOUND` | Invitation doesn't exist |
+| `FORBIDDEN` (403) | Someone else claimed it (first opener claims) |
 | `RATE_LIMITED` | More than 10 requests per minute from the same IP |
 
 > Expired invitations return a successful 200 response with `status: 'EXPIRED'` rather than an error code — clients should branch on `data.status`.
@@ -82,7 +87,7 @@ Rate limited to 10 requests per minute per IP. Returns `RATE_LIMITED` on breach.
 
 ## Acknowledge Invitation
 
-Mark a pending invitation as viewed. Creates a notification so the invitee can see the invitation. Requires authentication.
+Mark a pending invitation as viewed, and **claim** it: the first signed-in non-inviter to call this becomes the invitee (`app.invitation_claim`; idempotent for them). Creates a notification so the invitee can see the invitation. Requires authentication.
 
 ```
 POST /api/v1/invitations/:id/acknowledge
@@ -116,6 +121,7 @@ interface AcknowledgeInvitationResponse {
 |------|------|
 | `VALIDATION_ERROR` (400) | User is the inviter (cannot acknowledge own invitation) |
 | `NOT_FOUND` | Invitation doesn't exist |
+| `FORBIDDEN` (403) | Someone else claimed it first |
 
 ---
 
@@ -194,6 +200,7 @@ curl -X POST /api/v1/invitations/inv_def456/accept \
 |------|------|
 | `NOT_FOUND` | Invitation doesn't exist |
 | `VALIDATION_ERROR` (400) | Invitation has expired, has already been accepted/declined, or the caller is the inviter trying to accept their own invitation |
+| `FORBIDDEN` (403) | Someone else claimed it first (first opener claims) |
 
 ---
 
