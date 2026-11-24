@@ -613,6 +613,7 @@ export function UnifiedSessionScreen({
     messages,
     inlineCards,
     isSending,
+    isStreaming,
     failedMessageContent,
     isSigningCompact,
     isConfirmingFeelHeard,
@@ -4157,7 +4158,7 @@ export function UnifiedSessionScreen({
           {aboveInputPanel === 'topic-proposal' ? renderAboveInput() : null}
           <ChatInput
             onSend={sendMessageWithTracking}
-            disabled={isSending}
+            disabled={isSending || isStreaming}
             inputDisabled={isSending}
             failedMessage={failedMessageContent}
           />
@@ -4350,8 +4351,11 @@ export function UnifiedSessionScreen({
             isAwaitingInvitationFollowUp ||
             isAwaitingEmpathyValidationFollowUp
           }
-          // isInputDisabled prevents sending while API call is in progress
-          isInputDisabled={isSending}
+          // isInputDisabled prevents sending while the previous turn is in flight: sending (before the
+          // first chunk) or streaming (until text_complete). handleSendMessage drops a send in either
+          // state, and ChatInput has already cleared the text by then, so an enabled button here loses
+          // the message (work-k5fk.10.42: the e2e flake was a send clicked while the reply streamed).
+          isInputDisabled={isSending || isStreaming}
           partnerName={partnerName}
           emotionSlider={
             !isInOnboardingUnsigned &&
