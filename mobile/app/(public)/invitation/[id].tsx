@@ -12,7 +12,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/src/hooks/useAuth';
-import { useInvitationDetails } from '@/src/hooks/useInvitation';
+import {
+  useInvitationDetails,
+  isInvitationClaimedError,
+  INVITATION_CLAIMED_MESSAGE,
+} from '@/src/hooks/useInvitation';
 import { useAcceptInvitation } from '@/src/hooks/useSessions';
 import { colors } from '@/src/theme';
 
@@ -85,6 +89,47 @@ function ExpiredState({ inviterName }: { inviterName: string | null }) {
             accessibilityLabel="Return home"
           >
             <Text style={styles.secondaryButtonText}>Return Home</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+/**
+ * Someone else opened the invitation first (work-k5fk.10.40): they are its invitee, so this account cannot read,
+ * accept or decline it. Not an error to retry.
+ */
+function ClaimedState() {
+  const handleReturnHome = () => {
+    router.replace('/(public)');
+  };
+
+  return (
+    <SafeAreaView style={styles.container} testID="invitation-claimed-state">
+      <View style={styles.content}>
+        <View style={styles.iconContainer}>
+          <Ionicons name="lock-closed-outline" size={64} color={colors.textMuted} />
+        </View>
+
+        <Text style={styles.title}>Invitation Already Opened</Text>
+
+        <Text style={styles.description}>{INVITATION_CLAIMED_MESSAGE}</Text>
+
+        <Text style={styles.subtitle}>
+          An invitation belongs to the first person who opens it. If that was you on another account, sign in with
+          that account; otherwise ask the sender to invite you directly.
+        </Text>
+
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleReturnHome}
+            accessibilityRole="button"
+            accessibilityLabel="Return home"
+          >
+            <Ionicons name="home-outline" size={20} color="#FFFFFF" style={styles.buttonIcon} />
+            <Text style={styles.primaryButtonText}>Return Home</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -270,6 +315,7 @@ function AlreadyProcessedState({
  *    - Loading: Shows spinner
  *    - Expired: Shows expired message with request new option
  *    - Not Found: Shows not found message with return home
+ *    - Claimed: someone else opened it first (403), return home
  *    - Network Error: Shows error with retry option
  *    - Valid: Stores invitation ID and redirects appropriately
  */
@@ -282,6 +328,7 @@ export default function InvitationScreen() {
     error,
     isExpired,
     isNotFound,
+    isClaimedByOther,
     refetch,
   } = useInvitationDetails(id);
 
@@ -334,6 +381,11 @@ export default function InvitationScreen() {
   // Show loading state while fetching data or accepting invitation
   if (isAuthLoading || isInvitationLoading || acceptInvitation.isPending) {
     return <LoadingState />;
+  }
+
+  // Someone else opened it first: the GET, the acknowledge or the accept said so (403)
+  if (isClaimedByOther || (acceptInvitation.isError && isInvitationClaimedError(acceptInvitation.error))) {
+    return <ClaimedState />;
   }
 
   // Show error if invitation acceptance failed

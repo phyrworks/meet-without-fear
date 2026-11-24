@@ -32,7 +32,18 @@ export interface InvitationDetails {
 }
 
 /** Error types for invitation fetching */
-export type InvitationErrorType = 'not_found' | 'network' | 'unknown';
+export type InvitationErrorType = 'not_found' | 'claimed' | 'network' | 'unknown';
+
+/**
+ * The API's 403 for an invitation someone else opened first (work-k5fk.10.8: the first signed-in opener claims
+ * it and only they read, accept or decline it). GET, acknowledge and accept all answer it so.
+ */
+export function isInvitationClaimedError(err: unknown): boolean {
+  return err instanceof ApiClientError && (err.code === ErrorCode.FORBIDDEN || err.status === 403);
+}
+
+/** What the invitee sees for an invitation someone else claimed (the server's message is not shown verbatim). */
+export const INVITATION_CLAIMED_MESSAGE = 'This invitation has already been opened by someone else.';
 
 /** State returned by useInvitationDetails hook */
 export interface UseInvitationDetailsState {
@@ -44,6 +55,8 @@ export interface UseInvitationDetailsState {
   } | null;
   isExpired: boolean;
   isNotFound: boolean;
+  /** Someone else opened (claimed) the invitation first (work-k5fk.10.40). */
+  isClaimedByOther: boolean;
   refetch: () => Promise<void>;
 }
 
@@ -243,7 +256,9 @@ export function useInvitationDetails(
     } catch (err) {
       console.error('[useInvitationDetails] Error fetching invitation:', err);
 
-      if (err instanceof ApiClientError) {
+      if (isInvitationClaimedError(err)) {
+        setError({ type: 'claimed', message: INVITATION_CLAIMED_MESSAGE });
+      } else if (err instanceof ApiClientError) {
         if (err.code === ErrorCode.NOT_FOUND) {
           setError({ type: 'not_found', message: 'Invitation not found' });
         } else if (err.code === ErrorCode.SERVICE_UNAVAILABLE) {
@@ -275,7 +290,13 @@ export function useInvitationDetails(
         setHasAcknowledged(true);
         console.log('[useInvitationDetails] Invitation acknowledged');
       } catch (err) {
-        // Silently fail - notification is nice-to-have, not critical
+        // Opening it claims it: someone else got there between the fetch and this call (work-k5fk.10.40).
+        if (isInvitationClaimedError(err)) {
+          setHasAcknowledged(true);
+          setError({ type: 'claimed', message: INVITATION_CLAIMED_MESSAGE });
+          return;
+        }
+        // Otherwise silently fail - notification is nice-to-have, not critical
         console.warn('[useInvitationDetails] Failed to acknowledge invitation:', err);
       }
     };
@@ -286,6 +307,7 @@ export function useInvitationDetails(
   // Compute derived states
   const isExpired = invitation?.status === 'EXPIRED';
   const isNotFound = error?.type === 'not_found';
+  const isClaimedByOther = error?.type === 'claimed';
 
   return {
     invitation,
@@ -293,6 +315,7 @@ export function useInvitationDetails(
     error,
     isExpired,
     isNotFound,
+    isClaimedByOther,
     refetch: fetchInvitation,
   };
 }
