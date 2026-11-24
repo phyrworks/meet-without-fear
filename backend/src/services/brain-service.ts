@@ -103,6 +103,12 @@ export class BrainService {
     return rows[0]?.user_id ?? null;
   }
 
+  /** The request's user (the identity lib/prisma-identity binds), when it is one. */
+  private actingUser(): string | null {
+    const userId = getRequestContext()?.userId;
+    return userId && UUID.test(userId) ? userId : null;
+  }
+
   /**
    * Start tracking a brain activity. Creates a PENDING record.
    */
@@ -115,6 +121,7 @@ export class BrainService {
       sessionId,
       reflectionId,
       participantUserId: null,
+      userId: null,
       turnId: params.turnId ?? null,
       activityType: params.activityType,
       callType: params.callType ?? null,
@@ -134,14 +141,18 @@ export class BrainService {
     };
     try {
       record.participantUserId = params.attributeToCaller ? await this.participantUserFor(sessionId) : null;
+      // work-k5fk.10.35: a call of neither a session nor a reflection is owned by the acting user (policy ai_own_call:
+      // only their AI transactions read or complete it). With no acting user the database refuses the row.
+      record.userId = sessionId || reflectionId ? null : this.actingUser();
       // The telemetry row of an AI call on `sessionId` is written in that session's scope.
       const rows = await this.inScope(
         sessionId,
         async () =>
           await getAiPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
-          (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
-           status)
-        VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.turnId},
+          (session_id, reflection_id, participant_user_id, user_id, turn_id, activity_type, call_type, model, input,
+           metadata, status)
+        VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.userId}::uuid,
+                ${record.turnId},
                 ${params.activityType}::activity_type, ${record.callType}::brain_call_type, ${params.model},
                 ${JSON.stringify(encryptColumnValue('brain_activity', 'input', record.input ?? {}))}::jsonb,
                 ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)

@@ -8,6 +8,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ErrorCode, ApiError, ApiResponse } from '@meet-without-fear/shared';
 import { ZodError } from 'zod';
 import { logger } from '../lib/logger';
+import { scrubPgDetail } from '../lib/log-redact';
 import { Prisma } from '../generated/prisma/client';
 
 // ============================================================================
@@ -352,17 +353,8 @@ function describeViolation(v: PgConstraintViolation): string {
   return v.constraint ? `Request violates ${label} "${v.constraint}"` : `Request violates a ${label}`;
 }
 
-/**
- * Removes the parts of a Postgres error text that quote data. Over-strips by
- * design: values can contain parentheses and newlines, so everything from the
- * first marker to the end of the text goes.
- */
-export function scrubPgDetail(text: string): string {
-  return text
-    .replace(/\bDETAIL:[\s\S]*$/, 'DETAIL: [redacted]')
-    .replace(/Failing row contains[\s\S]*$/, 'Failing row contains [redacted]')
-    .replace(/\bKey \([\s\S]*$/, 'Key [redacted]');
-}
+// scrubPgDetail lives in lib/log-redact.ts, where the logger's format uses it on every line (work-k5fk.30).
+export { scrubPgDetail };
 
 /** The stack as logged: unchanged unless its header quoted data, else rebuilt from the safe message. */
 function safeStack(err: Error, safeMessage: string): string | undefined {

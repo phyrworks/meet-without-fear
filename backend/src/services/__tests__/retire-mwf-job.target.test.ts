@@ -31,7 +31,7 @@ const AI_GRANTS = [
   'ai_memory:INSERT(doc,kind,session_id,user_id)',
   'ai_memory:SELECT(doc,id,kind,session_id,user_id)',
   'ai_memory:UPDATE(doc)',
-  'brain_activity:INSERT(activity_type,call_type,input,metadata,model,participant_user_id,reflection_id,session_id,status,turn_id)',
+  'brain_activity:INSERT(activity_type,call_type,input,metadata,model,participant_user_id,reflection_id,session_id,status,turn_id,user_id)',
   'brain_activity:SELECT(call_type,created_at,id,metadata,session_id,turn_id)',
   'brain_activity:UPDATE(completed_at,cost,duration_ms,metadata,output,status,token_count_input,token_count_output)',
   'context_share_offer:INSERT(attempt_id,iteration,offer_message,offered_at,result_id,session_id,status,subject_user_id,suggested_content,suggested_reason)',
@@ -96,6 +96,8 @@ const AI_ROUTINES = [
   'deliver_message:EXECUTE',
   'empathy_mark_delivery:EXECUTE',
   'empathy_set_status:EXECUTE',
+  // work-k5fk.10.35: the ai_own_call predicate (a call of neither a session nor a reflection is the acting user's)
+  'is_acting_user:EXECUTE',
   // owner decision OD-1 (work-k5fk.9): brain_activity.output is a jsonb envelope the AI writes
   'jsonb_envelope_violation:EXECUTE',
   'jsonb_violation:EXECUTE',

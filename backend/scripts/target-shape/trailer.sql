@@ -324,6 +324,18 @@ COMMENT ON FUNCTION app.owns_reflection(uuid) IS 'True when the reflection is th
 REVOKE EXECUTE ON FUNCTION app.owns_reflection(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.owns_reflection(uuid) TO ai_access;
 
+-- Is this the acting user? The AI's telemetry of a call of neither a session nor a reflection (brain_activity with
+-- user_id) is that user's only (work-k5fk.10.35). A definer, as owns_reflection: ai_access holds no EXECUTE on
+-- app.current_user_id() itself.
+CREATE FUNCTION app.is_acting_user("user" uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$ SELECT coalesce(is_acting_user."user" = app.current_user_id(), false) $$;
+COMMENT ON FUNCTION app.is_acting_user(uuid) IS 'True when the user is the acting user (app.current_user_id); false when either is NULL. RLS predicate of the AI''s brain_activity rows of neither a session nor a reflection (work-k5fk.10.35).';
+-- mwf_ai (ai_access): the brain_activity policy ai_own_call.
+REVOKE EXECUTE ON FUNCTION app.is_acting_user(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.is_acting_user(uuid) TO ai_access;
+
 -- An invitation as someone who is not (yet) a participant may see it (design note §6 invitation: "pre-membership
 -- accept read via definer app.invitation_peek(id)"). Until it is claimed, the invitation's link is the credential: a
 -- caller who names the id reads this much — never the session's content, only whether it is ready to join. No identity
@@ -1237,6 +1249,8 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     END LOOP;
     -- 4. reflection telemetry (participant telemetry went per session)
     DELETE FROM public.brain_activity b USING public.reflection x WHERE b.reflection_id = x.id AND x.user_id = v_uid;
+    -- and their calls of neither a session nor a reflection (work-k5fk.10.35)
+    DELETE FROM public.brain_activity WHERE user_id = v_uid;
     -- 5. U-class material
     DELETE FROM public.reflection WHERE user_id = v_uid;          -- cascades messages, takeaways, links
     DELETE FROM public.feature_state WHERE user_id = v_uid;
@@ -1723,6 +1737,7 @@ ALTER FUNCTION app.shares_session_with(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_persona(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.scope_actor_is_member() OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.is_acting_user(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_claim(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
@@ -2524,8 +2539,8 @@ COMMENT ON TRIGGER t_human_limit ON public.invitation IS 'No invitation beyond t
 -- transaction (the accept) rolls back. Lock order is the accept's: invitation
 -- (lockInvitationForAccept), then session. INSERT only: a participant's user
 -- and kind never change once seated (they are the primary key and its kind pin;
--- the pair's FKs hold a paired user_id in place); a later left_at does not
--- release a pair (work-k5fk follow-up for N-party leave).
+-- the pair's FKs hold a paired user_id in place); a later left_at releases the
+-- leaver's pairs (t_live_session_pair_leave, below; work-k5fk.18).
 CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -2569,6 +2584,34 @@ CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
   FOR EACH ROW WHEN (NEW.status IN ('RESOLVED', 'ABANDONED', 'ARCHIVED') AND OLD.status IS DISTINCT FROM NEW.status)
   EXECUTE FUNCTION app.t_live_session_pair_end();
 
+-- T-live-session-pair-leave (work-k5fk.18): a human who leaves (left_at set) releases their pairs of that session.
+-- With two humans per session (app.session_human_limit(), work-k5fk.10.38) the one writer of left_at today is the
+-- anonymize walk, which ends a live session first (t_live_session_pair_end has already released the pair), so this
+-- is defense in depth for every other route: a hand fix, a future "leave session" that keeps the session live (as
+-- T-cardinality-2 allows while one human stays), or more seats. Without it the leaver and the one who stays would
+-- hold a pair to a session neither can finish together — a leaver's seat is never refilled — and could never start
+-- another. Same lock as t_live_session_pair (the session row, FOR NO KEY UPDATE), so a leave and a join or a status
+-- move of the session serialise. left_at is never cleared (no grant to clear it, and a released pair is not
+-- re-written by a return).
+CREATE FUNCTION app.t_live_session_pair_leave() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    PERFORM 1 FROM public.session s WHERE s.id = NEW.session_id FOR NO KEY UPDATE;
+    DELETE FROM public.live_session_pair p
+    WHERE p.session_id = NEW.session_id AND NEW.user_id IN (p.user_a, p.user_b);
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_live_session_pair_leave() IS 'Trigger (work-k5fk.18): a human participant whose left_at is set releases their live_session_pair rows of that session, so neither user of the pair stays bound to a session one of them left.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_live_session_pair_leave() FROM PUBLIC;
+CREATE TRIGGER t_live_session_pair_leave AFTER UPDATE OF left_at ON public.participant
+  FOR EACH ROW WHEN (OLD.left_at IS NULL AND NEW.left_at IS NOT NULL AND NEW.kind = 'human')
+  EXECUTE FUNCTION app.t_live_session_pair_leave();
+COMMENT ON TRIGGER t_live_session_pair_leave ON public.participant IS 'A leaver releases their pairs (work-k5fk.18).';
+
 -- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
@@ -2576,6 +2619,7 @@ ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_agreement_parties() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_live_session_pair_leave() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_participant_human_limit() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_invitation_human_limit() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
@@ -2616,6 +2660,33 @@ CREATE TRIGGER t_message_seq BEFORE INSERT ON public.message
 COMMENT ON TRIGGER t_message_seq ON public.message IS 'Numbers the line in its conversation (work-k5fk.4).';
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_message_seq() OWNER TO mwf_definer;
+REVOKE CREATE ON SCHEMA app FROM mwf_definer;
+
+-- work-k5fk.25: an INSERT that supplies seq — only the owner or a superuser can (no runtime role holds INSERT (seq)):
+-- a data move or a hand-written fix copying rows with their numbers — advances the counter past it, under the
+-- same conversation row lock, so the next trigger-numbered line does not collide on the key. Never backwards:
+-- greatest(), so a copied old line leaves the counter where it is. SECURITY DEFINER (mwf_definer) because the
+-- owner is held to RLS on conversation with no policy of its own (work-k5fk.10.31). A missing conversation is
+-- left to the foreign key. Named to sort before t_message_seq: a BEFORE trigger's WHEN sees NEW as the triggers
+-- before it left it, so after t_message_seq every row would carry a seq.
+CREATE FUNCTION app.t_message_given_seq() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    UPDATE public.conversation SET next_seq = greatest(next_seq, NEW.seq + 1)
+    WHERE id = NEW.conversation_id AND next_seq <= NEW.seq;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_message_given_seq() IS 'Trigger (work-k5fk.25): a message inserted with its seq moves its conversation''s next_seq past it (never backwards), so the next numbered line does not collide.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_given_seq() FROM PUBLIC;
+CREATE TRIGGER t_message_given_seq BEFORE INSERT ON public.message
+  FOR EACH ROW WHEN (NEW.seq IS NOT NULL) EXECUTE FUNCTION app.t_message_given_seq();
+COMMENT ON TRIGGER t_message_given_seq ON public.message IS 'Keeps conversation.next_seq past an explicitly numbered line (work-k5fk.25).';
+GRANT CREATE ON SCHEMA app TO mwf_definer;
+ALTER FUNCTION app.t_message_given_seq() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
 
 -- T-conversation-seq-start: a new conversation's counter starts at 1, whatever
@@ -2955,8 +3026,8 @@ $$;
 --                 participant of it (app.scope_actor_is_member(), rows 9d–9g). Required: unset is NULL, which
 --                 matches no row, so an unscoped or actorless AI statement reads and writes nothing (t_session_scope
 --                 already refused its writes). session: its id; "user": the participants of that session;
---                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and,
---                 FINDING, the unattributed ones (ai_unattributed; work-k5fk.10.33); app.json_schema: reference
+--                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and
+--                 their own calls of neither (ai_own_call, by user_id; work-k5fk.10.35); app.json_schema: reference
 --                 data (ai_reference).
 --   worker_access worker_session on the Stage 4 closure's tables (agreement, agreement_party, session_closure,
 --                 proposal, proposal_choice, proposal_revision) and on the follow-ups it schedules (INSERT): the
@@ -3001,9 +3072,10 @@ CREATE POLICY ai_reflection ON brain_activity TO ai_access
   USING (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id))
   WITH CHECK (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id));
 COMMENT ON POLICY ai_reflection ON brain_activity IS 'An inner-work call''s telemetry: the acting user''s own reflection only (work-k5fk.10.33).';
-CREATE POLICY ai_unattributed ON brain_activity TO ai_access
-  USING (session_id IS NULL AND reflection_id IS NULL) WITH CHECK (session_id IS NULL AND reflection_id IS NULL);
-COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
+CREATE POLICY ai_own_call ON brain_activity TO ai_access
+  USING (session_id IS NULL AND reflection_id IS NULL AND app.is_acting_user(user_id))
+  WITH CHECK (session_id IS NULL AND reflection_id IS NULL AND app.is_acting_user(user_id));
+COMMENT ON POLICY ai_own_call ON brain_activity IS 'A call of neither a session nor a reflection (gratitude, meditation, memory, people extraction): the acting user''s own rows only, by brain_activity.user_id; an AI transaction with no acting user reads and writes none (work-k5fk.10.35, closing the 10.33 finding).';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
   WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL);
@@ -4190,6 +4262,34 @@ BEGIN
     OR (SELECT count(*) FROM pg_constraint c
         WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass) <> 1;
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: expected exactly one key: %', bad; END IF;
+
+  -- work-k5fk.23: same session is a key, everywhere. Every foreign key from one session-scoped table (it has a
+  -- session_id) to another pairs session_id with session_id, or its columns lie inside such a key of the same
+  -- table (the single-column key Prisma's relation reads, shadowed by the composite one) — so a new
+  -- single-column intra-session reference fails here instead of accepting another session's row. The one
+  -- exemption: context_share_offer (result_id, attempt_id) → reconciler_result (id, attempt_id) pins the
+  -- result to the offer's own attempt, and both rows pin that attempt with their session_id, so it is one
+  -- session through the attempt (work-k5fk.9, C10).
+  WITH f AS (
+    SELECT c.oid, c.conrelid, c.confrelid, c.conkey,
+           EXISTS (SELECT 1 FROM unnest(c.conkey, c.confkey) k(a, b)
+                   JOIN pg_attribute x ON x.attrelid = c.conrelid AND x.attnum = k.a
+                   JOIN pg_attribute y ON y.attrelid = c.confrelid AND y.attnum = k.b
+                   WHERE x.attname = 'session_id' AND y.attname = 'session_id')
+           OR (c.conrelid = 'public.context_share_offer'::regclass AND c.confrelid = 'public.reconciler_result'::regclass
+               AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM unnest(c.conkey) s(attnum)
+                      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = s.attnum) = '{attempt_id,result_id}')
+             AS pinned
+    FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
+    WHERE c.contype = 'f' AND n.nspname = 'public'
+      AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.conrelid AND attname = 'session_id' AND NOT attisdropped)
+      AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.confrelid AND attname = 'session_id' AND NOT attisdropped))
+  SELECT string_agg(f.conrelid::regclass || ': ' || pg_get_constraintdef(f.oid), '; ' ORDER BY 1) INTO bad
+  FROM f
+  WHERE NOT f.pinned
+    AND NOT EXISTS (SELECT 1 FROM f g WHERE g.pinned AND g.conrelid = f.conrelid AND g.confrelid = f.confrelid
+                    AND g.conkey @> f.conkey);
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: intra-session reference(s) not keyed on session_id: %', bad; END IF;
 
 END
 $$;

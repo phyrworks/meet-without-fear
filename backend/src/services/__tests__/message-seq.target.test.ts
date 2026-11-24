@@ -259,6 +259,29 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       expect(await nextSeqOf(ids.adaConv)).toBe(a);
       expect(await nextSeqOf(ids.bobConv)).toBe(b + 1);
     });
+
+    it('a line inserted with its seq (a data move, as the superuser) moves next_seq past it, never back (work-k5fk.25)', async () => {
+      const start = await nextSeqOf(ids.bobConv);
+      const copy = (seq: number) =>
+        run.sql(
+          `INSERT INTO message (conversation_id, session_id, role, content, seq) VALUES ($1, $2, 'AI', 'copied', $3)`,
+          [ids.bobConv, ids.session, seq],
+        );
+      await copy(start + 4); // a hole below it is allowed: seq orders, it does not count
+      expect(await nextSeqOf(ids.bobConv)).toBe(start + 5);
+      await copy(start + 1); // an older number fills a hole and leaves the counter where it is
+      expect(await nextSeqOf(ids.bobConv)).toBe(start + 5);
+      // the next numbered line does not collide on the key
+      const [line] = await run.as<{ seq: number }>(
+        'mwf_ai',
+        ids.ada,
+        `INSERT INTO message (conversation_id, session_id, role, content) VALUES ($1, $2, 'AI', 'after') RETURNING seq`,
+        [ids.bobConv, ids.session],
+        ids.session,
+      );
+      expect(line.seq).toBe(start + 5);
+      expect(await nextSeqOf(ids.bobConv)).toBe(start + 6);
+    });
   });
 
   describe('the roles cannot move the numbering', () => {

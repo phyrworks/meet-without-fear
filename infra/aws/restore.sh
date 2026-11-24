@@ -99,5 +99,10 @@ else
   compose exec -T db pg_restore -U postgres -d "$target" --role=mwf_app --no-owner $old_acl --exit-on-error --use-list=/tmp/mwf-restore.list < "$archive"
   printf 'GRANT CONNECT ON DATABASE "%s" TO slam_bot_readonly;\nGRANT USAGE ON SCHEMA public TO slam_bot_readonly;\nGRANT SELECT ON ALL TABLES IN SCHEMA public TO slam_bot_readonly;\nALTER DEFAULT PRIVILEGES FOR ROLE mwf_app IN SCHEMA public GRANT SELECT ON TABLES TO slam_bot_readonly;\n' "$target" | dbsql "$target"
 fi
-compose exec -T db psql -X -U postgres -d "$target" -v ON_ERROR_STOP=1 < "$dir/verify.sql"
+# verify.sql checks the target shape only (work-k5fk.14); an old-shape archive is restored for inspection, unverified.
+if [ "$shape" = target ]; then
+  compose exec -T db psql -X -U postgres -d "$target" -v ON_ERROR_STOP=1 < "$dir/verify.sql"
+else
+  echo 'Old-shape archive: restored without verify.sql (it checks the target shape only).' >&2
+fi
 printf 'Restore (%s shape) completed in %s seconds into %s\n' "$shape" "$(( $(date +%s) - start ))" "$target"

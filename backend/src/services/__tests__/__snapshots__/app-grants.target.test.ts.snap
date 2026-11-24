@@ -30,9 +30,9 @@ app.json_schema [rls true, force true]
 app.json_schema ai_reference FOR SELECT TO ai_access USING (true) CHECK (-)
 app.json_schema app_reference FOR SELECT TO app_access USING (true) CHECK (-)
 brain_activity [rls true, force true]
+brain_activity ai_own_call FOR ALL TO ai_access USING (((session_id IS NULL) AND (reflection_id IS NULL) AND app.is_acting_user((user_id)::uuid))) CHECK (((session_id IS NULL) AND (reflection_id IS NULL) AND app.is_acting_user((user_id)::uuid)))
 brain_activity ai_reflection FOR ALL TO ai_access USING (((session_id IS NULL) AND (reflection_id IS NOT NULL) AND app.owns_reflection((reflection_id)::uuid))) CHECK (((session_id IS NULL) AND (reflection_id IS NOT NULL) AND app.owns_reflection((reflection_id)::uuid)))
 brain_activity ai_session FOR ALL TO ai_access USING ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member))) CHECK ((((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND ( SELECT app.scope_actor_is_member() AS scope_actor_is_member)))
-brain_activity ai_unattributed FOR ALL TO ai_access USING (((session_id IS NULL) AND (reflection_id IS NULL))) CHECK (((session_id IS NULL) AND (reflection_id IS NULL)))
 brain_activity definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 brain_activity diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 brain_activity ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
@@ -353,11 +353,11 @@ column public.ai_memory INSERT: session_id, user_id, kind, doc (ai_access)
 column public.ai_memory SELECT: id, session_id, user_id, kind, doc (ai_access)
 column public.ai_memory SELECT: session_id, user_id (mwf_definer)
 column public.ai_memory UPDATE: doc (ai_access)
-column public.brain_activity INSERT: session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata, status (ai_access)
+column public.brain_activity INSERT: session_id, reflection_id, participant_user_id, user_id, turn_id, activity_type, call_type, model, input, metadata, status (ai_access)
 column public.brain_activity SELECT: id, session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, metadata, token_count_input, token_count_output, duration_ms, cost, status, created_at, completed_at, updated_at (ops_access)
 column public.brain_activity SELECT: id, session_id, turn_id, call_type, metadata, created_at (ai_access)
 column public.brain_activity SELECT: session_id, created_at (worker_access)
-column public.brain_activity SELECT: session_id, reflection_id, participant_user_id (mwf_definer)
+column public.brain_activity SELECT: session_id, reflection_id, participant_user_id, user_id (mwf_definer)
 column public.brain_activity UPDATE: input, output, metadata (worker_access)
 column public.brain_activity UPDATE: output, metadata, token_count_input, token_count_output, duration_ms, cost, status, completed_at (ai_access)
 column public.consent SELECT: session_id, user_id, need_id, decision (mwf_definer)
@@ -491,6 +491,8 @@ routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,te
 routine app.invitation_claim(uuid): EXECUTE (mwf_definer)
 routine app.invitation_peek(uuid): EXECUTE (mwf_definer)
 routine app.invitation_repoint_drafts(uuid): EXECUTE (mwf_definer)
+routine app.is_acting_user(uuid): EXECUTE (ai_access)
+routine app.is_acting_user(uuid): EXECUTE (mwf_definer)
 routine app.is_current_member(uuid): EXECUTE (mwf_definer)
 routine app.is_member(uuid): EXECUTE (mwf_definer)
 routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
@@ -544,8 +546,10 @@ routine app.t_doc_schema(): EXECUTE (mwf_migrator)
 routine app.t_invitation_human_limit(): EXECUTE (mwf_definer)
 routine app.t_live_session_pair(): EXECUTE (mwf_definer)
 routine app.t_live_session_pair_end(): EXECUTE (mwf_definer)
+routine app.t_live_session_pair_leave(): EXECUTE (mwf_definer)
 routine app.t_message_app_delete(): EXECUTE (mwf_migrator)
 routine app.t_message_app_insert(): EXECUTE (mwf_migrator)
+routine app.t_message_given_seq(): EXECUTE (mwf_definer)
 routine app.t_message_immutable(): EXECUTE (mwf_migrator)
 routine app.t_message_seq(): EXECUTE (mwf_definer)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
@@ -679,6 +683,7 @@ routine owner app.invitation_answer(uuid,invitation_status,timestamp with time z
 routine owner app.invitation_claim(uuid): mwf_definer
 routine owner app.invitation_peek(uuid): mwf_definer
 routine owner app.invitation_repoint_drafts(uuid): mwf_definer
+routine owner app.is_acting_user(uuid): mwf_definer
 routine owner app.is_current_member(uuid): mwf_definer
 routine owner app.is_member(uuid): mwf_definer
 routine owner app.json_schema_wellformed(jsonb): mwf_migrator
@@ -719,8 +724,10 @@ routine owner app.t_doc_schema(): mwf_migrator
 routine owner app.t_invitation_human_limit(): mwf_definer
 routine owner app.t_live_session_pair(): mwf_definer
 routine owner app.t_live_session_pair_end(): mwf_definer
+routine owner app.t_live_session_pair_leave(): mwf_definer
 routine owner app.t_message_app_delete(): mwf_migrator
 routine owner app.t_message_app_insert(): mwf_migrator
+routine owner app.t_message_given_seq(): mwf_definer
 routine owner app.t_message_immutable(): mwf_migrator
 routine owner app.t_message_seq(): mwf_definer
 routine owner app.t_need_share_terminal(): mwf_migrator
