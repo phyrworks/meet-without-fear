@@ -330,8 +330,8 @@ describeTarget('live_session_pair under concurrency and on every release path (w
         await join(s, lea, ada);
         await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [s, lea]);
         await join(s, ken, ada);
-        // (ada, lea) stays — a later left_at releases nothing (work-k5fk.18) — but ken never pairs with lea.
-        expect(await pairs(s)).toEqual(sorted(pair(ada, ken), pair(ada, lea)));
+        // Lea's leave released (ada, lea) (t_live_session_pair_leave, work-k5fk.18), and ken never pairs with lea.
+        expect(await pairs(s)).toEqual([pair(ada, ken)]);
         await run.sql(
           `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, left_at) VALUES ($1, $2, 'human', $3, now())`,
           [s, max, ada],
