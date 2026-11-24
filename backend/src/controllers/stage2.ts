@@ -31,6 +31,7 @@ import {
 } from '@meet-without-fear/shared';
 import { notifyPartner, publishSessionEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
+import { getPgSqlState } from '../middleware/errors';
 import { getModelCompletion, getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
 import { extractJsonFromResponse } from '../utils/json-extractor';
 import { embedSessionContent } from '../services/embedding';
@@ -91,6 +92,9 @@ import {
 } from '../services/prejoin-edit-opener';
 import { getPartnerParticipant, type Seat } from '../services/participant-resolver';
 import { withMessageId } from '../services/message-store';
+
+/** app.deliver_message's refusal of a second VALIDATION_FEEDBACK for the same round (trailer.sql). */
+const FEEDBACK_ALREADY_DELIVERED_SQLSTATE = 'MWE01';
 
 // ============================================================================
 // Helpers
@@ -827,15 +831,24 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
       if (partner.mainConversationId) {
         // Guaranteed ordering (100 ms apart): the framing, then the feedback card.
         await aiNote(partner.mainConversationId, framingMessage, new Date(now.getTime()));
-        await deliver({
-          toConversationId: partner.mainConversationId,
-          sessionId,
-          fromUserId: me.userId,
-          kind: 'VALIDATION_FEEDBACK',
-          content: sentFeedback,
-          sourceAttemptId: partnerAttempt.id,
-          createdAt: new Date(now.getTime() + 100),
-        });
+        try {
+          await deliver({
+            toConversationId: partner.mainConversationId,
+            sessionId,
+            fromUserId: me.userId,
+            kind: 'VALIDATION_FEEDBACK',
+            content: sentFeedback,
+            sourceAttemptId: partnerAttempt.id,
+            createdAt: new Date(now.getTime() + 100),
+          });
+        } catch (error) {
+          // A concurrent send delivered this round's card first (app.deliver_message, work-k5fk.10.29).
+          if (getPgSqlState(error) === FEEDBACK_ALREADY_DELIVERED_SQLSTATE) {
+            errorResponse(res, 'CONFLICT', 'Feedback on this empathy statement was already sent', 409);
+            return;
+          }
+          throw error;
+        }
       }
     }
 

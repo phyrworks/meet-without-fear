@@ -248,4 +248,34 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     expect(bobMessages).not.toContain(UNSENT);
     expect((await attempts()).find(a => a.id === bobRound1)!.status).toBe('REFINING');
   });
+
+  it('a second feedback card on the same round is refused by the database (MWE01)', async () => {
+    // work-k5fk.10.29: the controller 409s once the round is REFINING; a send that slips past it (two concurrent
+    // sends both read REVEALED) is refused by app.deliver_message, which locks the attempt.
+    const { deliverMessage } = await import('../message-store');
+    const { getPgSqlState } = await import('../../middleware/errors');
+    const [bobMain] = await rows<{ id: string }>(
+      `SELECT id FROM conversation WHERE user_id = $1 AND kind = 'MAIN'`,
+      [bob.userId],
+    );
+    const err = await as(ada.userId, () =>
+      deliverMessage({
+        toConversationId: bobMain.id,
+        sessionId: ada.sessionId,
+        fromUserId: ada.userId,
+        kind: 'VALIDATION_FEEDBACK',
+        content: 'TS10_SECOND_CARD',
+        sourceAttemptId: bobRound1,
+      }),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(getPgSqlState(err)).toBe('MWE01');
+    const cards = await rows<{ n: number }>(
+      `SELECT count(*)::int AS n FROM message WHERE source_attempt_id = $1 AND kind = 'VALIDATION_FEEDBACK'`,
+      [bobRound1],
+    );
+    expect(cards).toEqual([{ n: 1 }]);
+  });
 });

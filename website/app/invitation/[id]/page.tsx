@@ -29,6 +29,7 @@ type InvitationState =
   | "expired"
   | "accepted"
   | "declined"
+  | "claimed"
   | "signing_out"
   | "needs_auth"
   | "accepting"
@@ -187,10 +188,15 @@ function InvitationPageInner() {
           }
         }
       } catch (err) {
+        if (err instanceof InvitationClaimedError) {
+          // work-k5fk.10.41: the claim notice. Signed out, it offers sign-in: its claimer, signed in, reads past it.
+          console.log("[Invitation] Claimed by another account than this visitor's");
+          setError(err.message);
+          setState("claimed");
+          return;
+        }
         console.error("[Invitation] Error fetching invitation:", err);
-        setError(
-          err instanceof InvitationClaimedError ? err.message : "Failed to load invitation. Please try again."
-        );
+        setError("Failed to load invitation. Please try again.");
         setState("error");
       }
     }
@@ -292,6 +298,10 @@ function InvitationPageInner() {
         invitationId={invitationId}
       />
     );
+  }
+
+  if (state === "claimed") {
+    return <ClaimedState message={error} invitationId={invitationId} canSignIn={!isSignedIn} />;
   }
 
   if (state === "accepting") {
@@ -440,11 +450,6 @@ function AuthRequiredState({
 }) {
   const inviterName = invitation?.invitedBy.name;
 
-  // Store invitation ID before sign-in so we can redirect back after OAuth
-  useEffect(() => {
-    sessionStorage.setItem(PENDING_INVITATION_KEY, invitationId);
-  }, [invitationId]);
-
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-background p-6">
       <div className="text-center max-w-md mb-8">
@@ -462,31 +467,90 @@ function AuthRequiredState({
         </p>
       </div>
 
-      <SignIn
-        routing="hash"
-        appearance={{
-          variables: {
-            colorPrimary: "#10b981",
-          },
-          elements: {
-            card: "bg-card border border-border shadow-xl py-6",
-            // Hide Clerk's header (we have our own above)
-            header: "hidden",
-            socialButtonsBlockButton: "border-border hover:bg-card text-foreground",
-            // Hide email form and divider (social-only login)
-            form: "hidden",
-            dividerRow: "hidden",
-            // Hide sign up link and footer
-            footerAction: "hidden",
-            footer: "hidden",
-          },
-          layout: {
-            socialButtonsPlacement: "top",
-            socialButtonsVariant: "blockButton",
-          },
-        }}
-        forceRedirectUrl={`/invitation/${invitationId}?returning=1`}
-      />
+      <InvitationSignIn invitationId={invitationId} />
+    </main>
+  );
+}
+
+/**
+ * The invitation page's Clerk sign-in (social only, our own header above it). It returns to this invitation with
+ * `?returning=1`, so the page keeps the new session instead of signing it out.
+ */
+function InvitationSignIn({ invitationId }: { invitationId: string }) {
+  // Store invitation ID before sign-in so we can redirect back after OAuth
+  useEffect(() => {
+    sessionStorage.setItem(PENDING_INVITATION_KEY, invitationId);
+  }, [invitationId]);
+
+  return (
+    <SignIn
+      routing="hash"
+      appearance={{
+        variables: {
+          colorPrimary: "#10b981",
+        },
+        elements: {
+          card: "bg-card border border-border shadow-xl py-6",
+          // Hide Clerk's header (we have our own above)
+          header: "hidden",
+          socialButtonsBlockButton: "border-border hover:bg-card text-foreground",
+          // Hide email form and divider (social-only login)
+          form: "hidden",
+          dividerRow: "hidden",
+          // Hide sign up link and footer
+          footerAction: "hidden",
+          footer: "hidden",
+        },
+        layout: {
+          socialButtonsPlacement: "top",
+          socialButtonsVariant: "blockButton",
+        },
+      }}
+      forceRedirectUrl={`/invitation/${invitationId}?returning=1`}
+    />
+  );
+}
+
+/**
+ * work-k5fk.10.41: the invitation was opened by another account than the visitor's (signed out: anyone's). Its
+ * claimer, who opened it in the app, can sign in here: the preview is then fetched with their session
+ * (claimedByYou) and the accept flow follows. Anyone else who signs in sees this notice again, without the offer.
+ */
+function ClaimedState({
+  message,
+  invitationId,
+  canSignIn,
+}: {
+  message: string | null;
+  invitationId: string;
+  canSignIn: boolean;
+}) {
+  const [signingIn, setSigningIn] = useState(false);
+
+  return (
+    <main className="min-h-screen flex flex-col items-center justify-center bg-background p-6">
+      <div className="text-center max-w-md mb-8">
+        <div className="w-20 h-20 rounded-full bg-card flex items-center justify-center mx-auto mb-6">
+          <AlertTriangle className="w-10 h-10 text-warning" />
+        </div>
+        <h1 className="text-2xl font-bold mb-3">Invitation Already Opened</h1>
+        <p className="text-muted-foreground mb-6">
+          {message || "This invitation has already been opened by someone else."}
+        </p>
+        {canSignIn && !signingIn && (
+          <button
+            onClick={() => setSigningIn(true)}
+            className="inline-flex items-center justify-center gap-2 bg-accent text-accent-foreground px-6 py-3 rounded-xl font-semibold hover:bg-accent/90 transition-all"
+          >
+            This was me — sign in
+            <ArrowRight className="w-5 h-5" />
+          </button>
+        )}
+        {canSignIn && signingIn && (
+          <p className="text-muted-foreground text-sm">Sign in with the account you opened it with.</p>
+        )}
+      </div>
+      {canSignIn && signingIn && <InvitationSignIn invitationId={invitationId} />}
     </main>
   );
 }

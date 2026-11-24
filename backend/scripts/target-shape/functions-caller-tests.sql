@@ -1436,6 +1436,12 @@ BEGIN
   SELECT m.sender_user_id INTO v_sender FROM message m WHERE m.conversation_id = conv_b AND m.seq = v_seq;
   IF v_sender IS DISTINCT FROM a THEN RAISE EXCEPTION 'TEST FAILED: the delivery is not A''s'; END IF;
   RAISE NOTICE 'PASS 30a the subject delivers feedback on a revealed round into its author''s conversation (seq %)', v_seq;
+  -- 30a2. work-k5fk.10.29: one card per round: the same delivery again (its control is 30a) is refused with MWE01
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'feedback again', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: a second feedback card on the same round';
+  EXCEPTION WHEN SQLSTATE 'MWE01' THEN RAISE NOTICE 'PASS 30a2 a second feedback card on a round is refused: %', SQLERRM;
+  END;
   -- 30b. the identity is the check that refuses: A cannot deliver as B (B present, B's feedback on att_a into A's
   --      conversation); the same call with B's identity is delivered
   BEGIN
