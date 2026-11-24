@@ -2620,6 +2620,33 @@ GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_message_seq() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
 
+-- work-k5fk.25: an INSERT that supplies seq — only the owner or a superuser can (no runtime role holds INSERT (seq)):
+-- a data move or a hand-written fix copying rows with their numbers — advances the counter past it, under the
+-- same conversation row lock, so the next trigger-numbered line does not collide on the key. Never backwards:
+-- greatest(), so a copied old line leaves the counter where it is. SECURITY DEFINER (mwf_definer) because the
+-- owner is held to RLS on conversation with no policy of its own (work-k5fk.10.31). A missing conversation is
+-- left to the foreign key. Named to sort before t_message_seq: a BEFORE trigger's WHEN sees NEW as the triggers
+-- before it left it, so after t_message_seq every row would carry a seq.
+CREATE FUNCTION app.t_message_given_seq() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    UPDATE public.conversation SET next_seq = greatest(next_seq, NEW.seq + 1)
+    WHERE id = NEW.conversation_id AND next_seq <= NEW.seq;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_message_given_seq() IS 'Trigger (work-k5fk.25): a message inserted with its seq moves its conversation''s next_seq past it (never backwards), so the next numbered line does not collide.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_given_seq() FROM PUBLIC;
+CREATE TRIGGER t_message_given_seq BEFORE INSERT ON public.message
+  FOR EACH ROW WHEN (NEW.seq IS NOT NULL) EXECUTE FUNCTION app.t_message_given_seq();
+COMMENT ON TRIGGER t_message_given_seq ON public.message IS 'Keeps conversation.next_seq past an explicitly numbered line (work-k5fk.25).';
+GRANT CREATE ON SCHEMA app TO mwf_definer;
+ALTER FUNCTION app.t_message_given_seq() OWNER TO mwf_definer;
+REVOKE CREATE ON SCHEMA app FROM mwf_definer;
+
 -- T-conversation-seq-start: a new conversation's counter starts at 1, whatever
 -- the INSERT sent (a Prisma create sends the column's @default; mwf_app holds
 -- INSERT (next_seq) for that, so the trigger, not the grant, is the rule).
