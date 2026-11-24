@@ -66,6 +66,7 @@ GRANT USAGE ON SCHEMA app TO app_access, ai_access, worker_access, ops_access, a
 CREATE FUNCTION app.current_user_id() RETURNS uuid
   LANGUAGE sql STABLE PARALLEL SAFE SECURITY INVOKER
   AS $$ SELECT NULLIF(pg_catalog.current_setting('app.current_user_id', true), '')::uuid $$;
+COMMENT ON FUNCTION app.current_user_id() IS 'The caller''s identity: the transaction-local setting app.current_user_id the request layer binds, NULL when unset or empty, so every policy comparing against it fails closed. (work-k5fk.10.16)';
 
 REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, ops_access, auth_access, mwf_definer;
