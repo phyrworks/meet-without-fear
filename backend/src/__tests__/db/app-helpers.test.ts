@@ -1,202 +1,184 @@
 /**
- * Phase 3 W2 — app.current_user_id() and the identity-bound definer helpers,
- * exercised against a real, migrated database.
+ * app.current_user_id() and the identity-bound definer helpers app.is_member and app.partner_user_id, as the
+ * logins production uses see them (work-k5fk.10.19: ported from the old shape's Phase 3 W2 suite).
  *
- * Runs when DB_TEST_URL is set (locally: the migrated
- * meet_without_fear_test database, see docs/development/local-setup.md) or in
- * CI, which migrates DATABASE_URL before the tests. Elsewhere it is skipped.
- * Connects as a superuser and drops to the role under test with SET ROLE, so
- * every privilege check is real. Everything runs in one transaction that is
- * rolled back: the database is left untouched.
+ * On a clone of the CREATED target fixture, seeded through the target tables ("user", session, participant):
+ * a two-human session (Alice, Bob), a three-human one (Alice, Dave, Erin), and Carol, who is in neither. Every
+ * call runs as a real login (mwf_app, mwf_ai, mwf_worker, mwf_ops, mwf_auth) with the identity bound as
+ * lib/prisma-identity binds it, so every privilege check is the baseline's own. (app.my_participant went with
+ * participant.id in work-k5fk.3: the caller's seat is (session_id, app.current_user_id()), so there is nothing
+ * left to test.)
+ *
+ * Requires the target shape and a built target fixture:
+ *   npx tsx src/testing/golden/cli.ts build CREATED
  */
 import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
+import {
+  appUrlFor,
+  openTargetRun,
+  randomUuidV7,
+  type RunRole,
+  type TargetRun,
+} from '../../services/__tests__/target-roles';
 
-const url = process.env.DB_TEST_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
-// Old shape only ("User", "Relationship", "RelationshipMember", "Session"), so it is
-// skipped on the target shape. That leaves a GAP, not equivalent coverage: no target
-// test asserts app.current_user_id()'s NULL cases, app.partner_user_id(), or that roles
-// without the grant cannot EXECUTE the helpers. Porting it is work-k5fk.10.19, which
-// blocks the cutover.
-const describeDb = url && !isTargetShape() ? describe : describe.skip;
+const describeTarget = isTargetShape() ? describe : describe.skip;
+jest.setTimeout(120_000);
 
-describeDb('app.* helpers (database)', () => {
-  let client: Client;
-  const ids: Record<string, string> = {};
+describeTarget('app.* identity helpers (database, target shape)', () => {
+  let run: TargetRun;
+  const alice = randomUuidV7();
+  const bob = randomUuidV7();
+  const carol = randomUuidV7();
+  const dave = randomUuidV7();
+  const erin = randomUuidV7();
+  let pair: string;
+  let trio: string;
 
-  async function asRole(role: string, userId: string | null): Promise<void> {
-    await client.query('RESET ROLE');
-    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [userId ?? '']);
-    await client.query(`SET LOCAL ROLE ${role}`);
-  }
+  /** The one value `sql` returns, as `role` acting for `user` (null: no identity bound). */
+  const scalar = async (role: RunRole, user: string | null, sql: string, params: unknown[] = []) =>
+    Object.values((await run.as(role, user, sql, params))[0])[0];
 
-  /** Expect a permission error without aborting the fixture transaction. */
-  async function expectDenied(sql: string, params: unknown[] = []): Promise<void> {
-    await client.query('SAVEPOINT denied');
-    await expect(client.query(sql, params)).rejects.toThrow(/permission denied/);
-    await client.query('ROLLBACK TO SAVEPOINT denied');
-  }
-
-  async function scalar<T>(sql: string, params: unknown[] = []): Promise<T> {
-    const { rows } = await client.query(sql, params);
-    return Object.values(rows[0])[0] as T;
-  }
+  /** How a call as `role` ends: 'ok', or its SQLSTATE (42501: permission denied). */
+  const code = async (role: RunRole, sql: string, params: unknown[] = []) => {
+    try {
+      await run.as(role, alice, sql, params);
+      return 'ok';
+    } catch (e) {
+      return (e as { code?: string }).code ?? String(e);
+    }
+  };
 
   beforeAll(async () => {
-    client = new Client({ connectionString: url });
-    await client.connect();
-    await client.query('BEGIN');
-    const user = async (tag: string) =>
-      scalar<string>(`INSERT INTO "User" (email, "updatedAt") VALUES ($1, now()) RETURNING id`, [
-        `ts1-${tag}-${Date.now()}@example.test`,
+    run = await openTargetRun('CREATED', `app_helpers_${process.pid}`);
+    for (const [id, name] of [
+      [alice, 'Alice'],
+      [bob, 'Bob'],
+      [carol, 'Carol'],
+      [dave, 'Dave'],
+      [erin, 'Erin'],
+    ]) {
+      await run.sql(`INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, $3)`, [
+        id,
+        `helpers-${name.toLowerCase()}-${process.pid}@e2e.test`,
+        name,
       ]);
-    ids.alice = await user('alice');
-    ids.bob = await user('bob');
-    ids.carol = await user('carol');
-    ids.dave = await user('dave');
-
-    const relationship = async (members: string[]) => {
-      const rel = await scalar<string>(`INSERT INTO "Relationship" ("updatedAt") VALUES (now()) RETURNING id`);
-      for (const m of members) {
-        await client.query(`INSERT INTO "RelationshipMember" ("relationshipId", "userId") VALUES ($1, $2)`, [rel, m]);
+    }
+    /** A session started by the first user, every other one added by them. */
+    const session = async (initiator: string, ...others: string[]) => {
+      const [{ id }] = await run.sql<{ id: string }>(
+        `INSERT INTO session (status) VALUES ('ACTIVE') RETURNING id::text`,
+      );
+      await run.sql(`INSERT INTO participant (session_id, user_id) VALUES ($1, $2)`, [id, initiator]);
+      for (const o of others) {
+        await run.sql(`INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3)`, [
+          id,
+          o,
+          initiator,
+        ]);
       }
-      return scalar<string>(`INSERT INTO "Session" ("relationshipId", "updatedAt") VALUES ($1, now()) RETURNING id`, [
-        rel,
-      ]);
+      return id;
     };
-    ids.pairSession = await relationship([ids.alice, ids.bob]);
-    ids.trioSession = await relationship([ids.alice, ids.bob, ids.dave]);
+    pair = await session(alice, bob);
+    trio = await session(alice, dave, erin);
   });
-
   afterAll(async () => {
-    if (!client) return;
-    await client.query('ROLLBACK');
-    await client.end();
+    await run?.drop();
   });
 
   describe('app.current_user_id()', () => {
-    it('is NULL when the setting was never set in this session', async () => {
-      const fresh = new Client({ connectionString: url });
-      await fresh.connect();
+    it('is NULL when the setting was never set, and the bound id when it is', async () => {
+      expect(await scalar('mwf_app', null, 'SELECT app.current_user_id()')).toBeNull();
+      expect(await scalar('mwf_app', alice, 'SELECT app.current_user_id()')).toBe(alice);
+    });
+
+    it('is NULL when the setting is the empty string (fail-closed, not a cast error)', async () => {
+      const c = new Client({ connectionString: appUrlFor(run.fx.target, run.fx.database) });
+      await c.connect();
       try {
-        const { rows } = await fresh.query('SELECT app.current_user_id() AS id');
-        expect(rows[0].id).toBeNull();
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.current_user_id', '', true)`);
+        expect((await c.query('SELECT app.current_user_id() AS id')).rows[0].id).toBeNull();
+        await c.query('ROLLBACK');
       } finally {
-        await fresh.end();
+        await c.end();
       }
     });
 
-    it('is NULL when set to the empty string, and the uuid when set', async () => {
-      await asRole('mwf_app', null);
-      expect(await scalar('SELECT app.current_user_id()')).toBeNull();
-      await asRole('mwf_app', ids.alice);
-      expect(await scalar('SELECT app.current_user_id()')).toBe(ids.alice);
-    });
-
-    it('is callable by mwf_job (the owner of the definer helpers)', async () => {
-      await asRole('mwf_job', ids.bob);
-      expect(await scalar('SELECT app.current_user_id()')).toBe(ids.bob);
-    });
-
-    it('is SECURITY INVOKER and STABLE', async () => {
-      await client.query('RESET ROLE');
-      const { rows } = await client.query(
-        `SELECT prosecdef, provolatile FROM pg_proc WHERE oid = 'app.current_user_id()'::regprocedure`,
-      );
-      expect(rows[0]).toEqual({ prosecdef: false, provolatile: 's' });
+    it('is callable by the request, dashboard and auth logins, and by no other', async () => {
+      expect(await code('mwf_app', 'SELECT app.current_user_id()')).toBe('ok');
+      expect(await code('mwf_ops', 'SELECT app.current_user_id()')).toBe('ok');
+      expect(await code('mwf_auth', 'SELECT app.current_user_id()')).toBe('ok');
+      expect(await code('mwf_ai', 'SELECT app.current_user_id()')).toBe('42501');
+      expect(await code('mwf_worker', 'SELECT app.current_user_id()')).toBe('42501');
     });
   });
 
-  describe('app.is_member(session uuid)', () => {
-    it('is true for a member, as mwf_app (which cannot read the tables itself)', async () => {
-      await asRole('mwf_app', ids.alice);
-      expect(await scalar('SELECT app.is_member($1)', [ids.pairSession])).toBe(true);
-      await expectDenied('SELECT 1 FROM "RelationshipMember" LIMIT 1');
+  describe('app.is_member(session)', () => {
+    it('is true for each member and false for a non-member', async () => {
+      expect(await scalar('mwf_app', alice, 'SELECT app.is_member($1)', [pair])).toBe(true);
+      expect(await scalar('mwf_app', bob, 'SELECT app.is_member($1)', [pair])).toBe(true);
+      expect(await scalar('mwf_app', carol, 'SELECT app.is_member($1)', [pair])).toBe(false);
+      expect(await scalar('mwf_app', dave, 'SELECT app.is_member($1)', [pair])).toBe(false);
     });
 
-    it('is false for a non-member', async () => {
-      await asRole('mwf_app', ids.carol);
-      expect(await scalar('SELECT app.is_member($1)', [ids.pairSession])).toBe(false);
-    });
-
-    it('is false (never an error) with no identity set', async () => {
-      await asRole('mwf_app', null);
-      expect(await scalar('SELECT app.is_member($1)', [ids.pairSession])).toBe(false);
-    });
-
-    it('is false for an unknown session', async () => {
-      await asRole('mwf_app', ids.alice);
-      expect(await scalar('SELECT app.is_member($1)', ['00000000-0000-7000-8000-000000000000'])).toBe(false);
-    });
-
-    it('is not executable by roles it was not granted to', async () => {
-      await asRole('mwf_ops', ids.alice);
-      await expectDenied('SELECT app.is_member($1)', [ids.pairSession]);
-      await asRole('mwf_ops', ids.alice);
-      await expectDenied('SELECT app.partner_user_id($1)', [ids.pairSession]);
+    it('is false (never an error) with no identity, and for an unknown session', async () => {
+      expect(await scalar('mwf_app', null, 'SELECT app.is_member($1)', [pair])).toBe(false);
+      expect(await scalar('mwf_app', alice, 'SELECT app.is_member($1)', [randomUuidV7()])).toBe(false);
     });
   });
 
-  describe('app.partner_user_id(session uuid)', () => {
-    it("returns the other member's id to each member of a two-member relationship", async () => {
-      await asRole('mwf_app', ids.alice);
-      expect(await scalar('SELECT app.partner_user_id($1)', [ids.pairSession])).toBe(ids.bob);
-      await asRole('mwf_app', ids.bob);
-      expect(await scalar('SELECT app.partner_user_id($1)', [ids.pairSession])).toBe(ids.alice);
+  describe('app.partner_user_id(session)', () => {
+    it("returns the other member's id to each member of a two-human session", async () => {
+      expect(await scalar('mwf_app', alice, 'SELECT app.partner_user_id($1)', [pair])).toBe(bob);
+      expect(await scalar('mwf_app', bob, 'SELECT app.partner_user_id($1)', [pair])).toBe(alice);
     });
 
     it('is NULL for a non-member and with no identity', async () => {
-      await asRole('mwf_app', ids.carol);
-      expect(await scalar('SELECT app.partner_user_id($1)', [ids.pairSession])).toBeNull();
-      await asRole('mwf_app', null);
-      expect(await scalar('SELECT app.partner_user_id($1)', [ids.pairSession])).toBeNull();
+      expect(await scalar('mwf_app', carol, 'SELECT app.partner_user_id($1)', [pair])).toBeNull();
+      expect(await scalar('mwf_app', null, 'SELECT app.partner_user_id($1)', [pair])).toBeNull();
     });
 
-    it('is NULL when the relationship does not have exactly two members', async () => {
-      await asRole('mwf_app', ids.alice);
-      expect(await scalar('SELECT app.is_member($1)', [ids.trioSession])).toBe(true);
-      expect(await scalar('SELECT app.partner_user_id($1)', [ids.trioSession])).toBeNull();
+    it('is NULL when the session does not have exactly two human members', async () => {
+      expect(await scalar('mwf_app', alice, 'SELECT app.is_member($1)', [trio])).toBe(true);
+      expect(await scalar('mwf_app', alice, 'SELECT app.partner_user_id($1)', [trio])).toBeNull();
+      expect(await scalar('mwf_app', dave, 'SELECT app.partner_user_id($1)', [trio])).toBeNull();
     });
   });
 
-  describe('definer helper shape', () => {
-    it('both helpers are SECURITY DEFINER, owned by mwf_job, search_path pinned, not executable by PUBLIC', async () => {
-      await client.query('RESET ROLE');
-      const { rows } = await client.query(`
+  describe('who may call the definer helpers', () => {
+    it.each<RunRole>(['mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth'])(
+      '%s, which holds no grant on them, cannot EXECUTE either',
+      async role => {
+        expect(await code(role, 'SELECT app.is_member($1)', [pair])).toBe('42501');
+        expect(await code(role, 'SELECT app.partner_user_id($1)', [pair])).toBe('42501');
+      },
+    );
+
+    it('they run as mwf_definer with a pinned search_path, PUBLIC holds no EXECUTE, and current_user_id is an invoker', async () => {
+      const rows = await run.sql(`
         SELECT p.proname, p.prosecdef, pg_get_userbyid(p.proowner) AS owner, p.proconfig,
-               has_function_privilege('public', p.oid, 'EXECUTE') AS public_exec,
-               has_function_privilege('mwf_app', p.oid, 'EXECUTE') AS app_exec
+               has_function_privilege('public', p.oid, 'EXECUTE') AS public_exec
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'app' AND p.proname IN ('is_member', 'partner_user_id')
+        WHERE n.nspname = 'app' AND p.proname IN ('current_user_id', 'is_member', 'partner_user_id')
         ORDER BY p.proname`);
+      const definer = {
+        prosecdef: true,
+        owner: 'mwf_definer',
+        proconfig: ['search_path=pg_catalog, public, pg_temp'],
+        public_exec: false,
+      };
       expect(rows).toEqual([
         {
-          proname: 'is_member',
-          prosecdef: true,
-          owner: 'mwf_job',
-          proconfig: ['search_path=pg_catalog, public'],
+          proname: 'current_user_id',
+          prosecdef: false,
+          owner: expect.any(String),
+          proconfig: null,
           public_exec: false,
-          app_exec: true,
         },
-        {
-          proname: 'partner_user_id',
-          prosecdef: true,
-          owner: 'mwf_job',
-          proconfig: ['search_path=pg_catalog, public'],
-          public_exec: false,
-          app_exec: true,
-        },
+        { proname: 'is_member', ...definer },
+        { proname: 'partner_user_id', ...definer },
       ]);
-    });
-
-    it('mwf_job holds exactly the grants the helpers need: SELECT on Session and RelationshipMember', async () => {
-      await client.query('RESET ROLE');
-      const { rows } = await client.query(`
-        SELECT has_table_privilege('mwf_job', '"Session"', 'SELECT') AS session,
-               has_table_privilege('mwf_job', '"RelationshipMember"', 'SELECT') AS member,
-               has_table_privilege('mwf_job', '"Message"', 'SELECT') AS message,
-               has_function_privilege('mwf_job', 'app.current_user_id()', 'EXECUTE') AS cuid`);
-      expect(rows[0]).toEqual({ session: true, member: true, message: false, cuid: true });
     });
   });
 });
