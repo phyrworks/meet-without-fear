@@ -14,6 +14,7 @@ import winston from 'winston';
 import Transport from 'winston-transport';
 import * as Sentry from '@sentry/node';
 import { getRequestContext } from './request-context';
+import { redactLogInfo } from './log-redact';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -22,6 +23,9 @@ const isTest = process.env.NODE_ENV === 'test';
  * Custom format that injects request context (turnId, sessionId, userId, requestId)
  * into every log entry when available.
  */
+/** work-k5fk.30: no line carries what a Postgres error quotes from a row (lib/log-redact.ts). */
+const redactFormat = winston.format(info => redactLogInfo(info));
+
 const contextFormat = winston.format(info => {
   const ctx = getRequestContext();
   if (ctx) {
@@ -73,6 +77,7 @@ export const logger = winston.createLogger({
     contextFormat(),
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
+    redactFormat(),
     isDev
       ? winston.format.combine(
           winston.format.colorize(),
