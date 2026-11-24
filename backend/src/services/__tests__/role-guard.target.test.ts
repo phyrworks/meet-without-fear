@@ -106,6 +106,12 @@ describeTarget('runtime role guard (target)', () => {
       await admin(`CREATE ROLE ${login} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${pw}'`);
       await admin(`CREATE ROLE ${empty} NOLOGIN`);
     });
+    // T7a: PUBLIC has no CONNECT, and since work-k5fk.10.37 the run clone keeps that ACL — the scratch login is
+    // let in by name (production's logins connect through their capability), or it never reaches the guard. Before
+    // each test: handing the database to the login and back (the owner tests) folds its own entry into the owner's.
+    beforeEach(async () => {
+      await admin(`GRANT CONNECT ON DATABASE "${fx.database}" TO ${login}`);
+    });
     afterAll(async () => {
       // Undo every cluster- or database-level change a failed test may have left, each tolerant
       // of "already gone", before the roles go: a parameter ACL (cluster-wide) would otherwise
@@ -114,7 +120,7 @@ describeTarget('runtime role guard (target)', () => {
       await tolerant(`REVOKE SET ON PARAMETER session_replication_role FROM ${login}`, 'postgres');
       await tolerant(`ALTER DATABASE "${fx.database}" OWNER TO mwf_migrator`, 'postgres');
       await tolerant(`ALTER SCHEMA public OWNER TO pg_database_owner`);
-      await tolerant(`REVOKE CREATE ON DATABASE "${fx.database}" FROM ${login}`);
+      await tolerant(`REVOKE CREATE, CONNECT ON DATABASE "${fx.database}" FROM ${login}`);
       await tolerant(`REVOKE ${empty}, mwf_ai, mwf_user FROM ${login}`, 'postgres');
       await tolerant(`REVOKE mwf_ai FROM ${empty}`, 'postgres');
       await admin(`DROP OWNED BY ${login}`).catch(() => undefined);
