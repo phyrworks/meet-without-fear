@@ -151,12 +151,31 @@ export async function createDatabase(t: DbTarget, database: string, owner?: stri
  * template, which is why callers must not hold one. The clone's objects keep
  * the template's owners; `owner` sets the database's own (which also owns
  * schema public, through pg_database_owner).
+ *
+ * CREATE DATABASE … TEMPLATE does not copy the database's own ACL: the clone
+ * starts at PostgreSQL's default (PUBLIC CONNECT and TEMPORARY), so a test on
+ * it would never see the baseline's T7a (trailer.sql: PUBLIC revoked, CONNECT
+ * per capability). The template's grants are re-applied to the clone — every
+ * entry but its owner's, which ownership of the clone stands in for
+ * (work-k5fk.10.37). A template with the default ACL leaves the clone default.
  */
 export async function cloneDatabase(t: DbTarget, template: string, target: string, owner?: string): Promise<void> {
   await dropDatabase(t, target);
   await disconnectAll(t, template);
   await withAdmin(t, async c => {
     await c.query(`CREATE DATABASE "${target}" TEMPLATE "${template}"${ownerClause(owner)}`);
+    const { rows } = await c.query<{ sql: string }>(
+      `SELECT 0 AS ord, format('REVOKE ALL ON DATABASE %I FROM PUBLIC', $2::text) AS sql
+       FROM pg_database d WHERE d.datname = $1 AND d.datacl IS NOT NULL
+       UNION ALL
+       SELECT 1, format('GRANT %s ON DATABASE %I TO %s', a.privilege_type, $2::text,
+                     CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END)
+       FROM pg_database d, aclexplode(d.datacl) a
+       WHERE d.datname = $1 AND a.grantee <> d.datdba
+       ORDER BY 1, 2`,
+      [template, target],
+    );
+    for (const { sql } of rows) await c.query(sql);
   });
 }
 
