@@ -29,6 +29,23 @@ async function waitForAIResponse(page: Page, textPattern: RegExp, timeout = 1500
   await page.waitForTimeout(100);
 }
 
+/**
+ * Type a chat line and send it once the app will take it (work-k5fk.10.42).
+ *
+ * The send button is disabled (aria-disabled) while the previous turn is still sending or streaming, so the click
+ * waits for the app rather than racing it: before the fix, a click landing between the reply's first chunk and its
+ * text_complete cleared the input and was dropped, and the next reply never came. ChatInput also ignores input for
+ * 500 ms after a send (its autocorrect guard), so the fill is checked and retried until the field holds the text.
+ */
+async function sendChat(page: Page, text: string) {
+  const chatInput = page.getByTestId('chat-input');
+  await expect(async () => {
+    await chatInput.fill(text);
+    await expect(chatInput).toHaveValue(text, { timeout: 1000 });
+  }).toPass({ timeout: 10000 });
+  await page.getByTestId('send-button').click();
+}
+
 async function createUserContext(
   browser: import('@playwright/test').Browser,
   userEmail: string,
@@ -127,23 +144,18 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
 
     const chatInput = userBPage.getByTestId('chat-input');
     await expect(chatInput).toBeVisible({ timeout: 10000 });
-    const sendButton = userBPage.getByTestId('send-button');
 
     // Chat using no-gaps fixture responses (different from gaps-detected fixture)
-    await chatInput.fill('Things have been tense lately');
-    await sendButton.click();
+    await sendChat(userBPage, 'Things have been tense lately');
     await waitForAIResponse(userBPage, /tension can be really draining/i);
 
-    await chatInput.fill("I feel like we've just been miscommunicating");
-    await sendButton.click();
+    await sendChat(userBPage, "I feel like we've just been miscommunicating");
     await waitForAIResponse(userBPage, /Miscommunication can be really frustrating/i);
 
-    await chatInput.fill("I want them to know I still care, even when I'm stressed");
-    await sendButton.click();
+    await sendChat(userBPage, "I want them to know I still care, even when I'm stressed");
     await waitForAIResponse(userBPage, /underneath the stress and tension/i);
 
-    await chatInput.fill("Exactly. I just want us to be on the same page again");
-    await sendButton.click();
+    await sendChat(userBPage, "Exactly. I just want us to be on the same page again");
     await waitForAIResponse(userBPage, /Do you feel like I understand/i);
 
     const feelHeardYes = userBPage.getByTestId('feel-heard-yes');
@@ -218,20 +230,16 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
       // STAGE 2: User B writes empathy about User A
       // ========================================
       console.log(`${elapsed()} User B starting Stage 2: Writing empathy about User A...`);
-      const sendButton = userBPage.getByTestId('send-button');
-
+  
       // User B writes empathy about User A using fixture responses 4-6
-      await chatInput.fill('Yes, I feel understood');
-      await sendButton.click();
+      await sendChat(userBPage, 'Yes, I feel understood');
       await waitForAIResponse(userBPage, /consider.*perspective|Shantam.*perspective/i);
       console.log(`${elapsed()} User B transitioned to empathy building`);
 
-      await chatInput.fill('I think they might be feeling frustrated too');
-      await sendButton.click();
+      await sendChat(userBPage, 'I think they might be feeling frustrated too');
       await waitForAIResponse(userBPage, /imagine what.*might be frustrating/i);
 
-      await chatInput.fill('Maybe they feel like I pull away when stressed and they want to connect');
-      await sendButton.click();
+      await sendChat(userBPage, 'Maybe they feel like I pull away when stressed and they want to connect');
       await waitForAIResponse(userBPage, /insightful observation/i);
       console.log(`${elapsed()} User B received empathy draft suggestion`);
 

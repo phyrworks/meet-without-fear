@@ -13,7 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 
 // Import mocked API
-import { get, ApiClientError } from '@/src/lib/api';
+import { get, post, ApiClientError } from '@/src/lib/api';
 import { ErrorCode } from '@meet-without-fear/shared';
 
 // Mock AsyncStorage
@@ -504,5 +504,52 @@ describe('useInvitationDetails', () => {
 
     expect(result.current.invitation?.status).toBe('DECLINED');
     expect(result.current.isExpired).toBe(false);
+  });
+  // work-k5fk.10.40: the first signed-in opener claims an invitation; anyone else gets a 403.
+  const claimedError = () => {
+    const err = new (ApiClientError as unknown as new (error: { code: string; message: string }, status: number) => Error)(
+      { code: ErrorCode.FORBIDDEN, message: 'This invitation has already been opened by someone else' },
+      403
+    );
+    return err;
+  };
+
+  it('shows the claimed state when someone else opened the invitation first (GET 403)', async () => {
+    mockGet.mockRejectedValue(claimedError());
+
+    const { result } = renderHook(() => useInvitationDetails('claimed-id'));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isClaimedByOther).toBe(true);
+    expect(result.current.error?.type).toBe('claimed');
+    expect(result.current.isNotFound).toBe(false);
+  });
+
+  it('shows the claimed state when someone else claims it between the fetch and the acknowledge', async () => {
+    mockGet.mockResolvedValue({ invitation: mockInvitation });
+    (post as jest.Mock).mockRejectedValueOnce(claimedError());
+
+    const { result } = renderHook(() => useInvitationDetails('raced-id'));
+
+    await waitFor(() => {
+      expect(result.current.isClaimedByOther).toBe(true);
+    });
+    expect(post).toHaveBeenCalledWith('/v1/invitations/raced-id/acknowledge', {});
+  });
+
+  it('a failed acknowledge for another reason stays silent', async () => {
+    mockGet.mockResolvedValue({ invitation: mockInvitation });
+    (post as jest.Mock).mockRejectedValueOnce(new Error('network'));
+
+    const { result } = renderHook(() => useInvitationDetails('flaky-id'));
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalled();
+    });
+    expect(result.current.isClaimedByOther).toBe(false);
+    expect(result.current.error).toBeNull();
   });
 });

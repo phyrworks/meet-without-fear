@@ -14,6 +14,8 @@ export interface InvitationDetails {
     id: string;
     status: string;
   };
+  /** The signed-in caller is the one who claimed it (work-k5fk.10.41); false signed out or unclaimed. */
+  claimedByYou?: boolean;
 }
 
 export interface ApiResponse<T> {
@@ -41,14 +43,16 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export class InvitationClaimedError extends Error {}
 
 /**
- * Fetch invitation details from the backend
+ * Fetch invitation details from the backend. With `token` (a signed-in visitor) the preview is the
+ * caller's: its claimer reads past the claim notice (work-k5fk.10.41); without it, a stranger's.
  */
-export async function getInvitation(invitationId: string): Promise<InvitationDetails | null> {
+export async function getInvitation(invitationId: string, token?: string | null): Promise<InvitationDetails | null> {
   try {
     const response = await fetch(`${API_URL}/api/invitations/${invitationId}`, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
 

@@ -513,6 +513,8 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
           id: invitation.sessionId,
           status: invitation.sessionStatus,
         },
+        // work-k5fk.10.41: a signed-in caller learns whether they are its claimer (the website keeps their session).
+        claimedByYou: !!req.user && invitation.claimedBy?.userId === req.user.id,
       },
     });
   } catch (error) {
@@ -555,7 +557,12 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Check if already processed
+    // Check if already processed. EXPIRED (past expires_at, or withdrawn by archiving the session,
+    // work-k5fk.10.15) answers as the expired path below does.
+    if (invitation.status === 'EXPIRED') {
+      errorResponse(res, 'EXPIRED', 'Invitation has expired', 410);
+      return;
+    }
     if (invitation.status !== 'PENDING') {
       errorResponse(res, 'VALIDATION_ERROR', `Invitation has already been ${invitation.status.toLowerCase()}`, 400);
       return;
@@ -985,6 +992,9 @@ export async function updateNickname(req: Request, res: Response): Promise<void>
  * signed-in non-inviter to open it becomes its invitee; app.invitation_claim).
  * Anyone else gets 403.
  */
+/** check_violation: app.invitation_claim's refusal of an invitation no longer PENDING or past its expiry. */
+const CHECK_VIOLATION_SQLSTATE = '23514';
+
 export async function acknowledgeInvitation(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
@@ -1018,19 +1028,22 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
       return;
     }
 
-    // Check if expired
-    const isExpired = new Date() > invitation.expiresAt;
-    if (isExpired || invitation.status !== 'PENDING') {
-      // Return the invitation status but don't create notification
+    // Return the invitation status but don't create notification
+    const notAcknowledged = (status: string, expired: boolean) =>
       successResponse(res, {
         acknowledged: false,
-        reason: isExpired ? 'expired' : invitation.status.toLowerCase(),
+        reason: expired ? 'expired' : status.toLowerCase(),
         invitation: {
           id: invitation.id,
-          status: isExpired ? 'EXPIRED' : invitation.status,
+          status: expired ? 'EXPIRED' : status,
           invitedBy,
         },
       });
+
+    // Check if expired
+    const isExpired = new Date() > invitation.expiresAt;
+    if (isExpired || invitation.status !== 'PENDING') {
+      notAcknowledged(invitation.status, isExpired);
       return;
     }
 
@@ -1038,8 +1051,18 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
     try {
       await claimInvitation(id);
     } catch (error) {
-      if (getPgSqlState(error) === INVITATION_CLAIMED_SQLSTATE) {
+      const sqlState = getPgSqlState(error);
+      if (sqlState === INVITATION_CLAIMED_SQLSTATE) {
         errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+        return;
+      }
+      // work-k5fk.10.39: the claim judges expiry by the database's clock and the status under its own update, so an
+      // invitation that expired (or was answered, or withdrawn by an archive) after the check above is refused with
+      // check_violation. Answer as the check above would have: not acknowledged, with the status now read.
+      if (sqlState === CHECK_VIOLATION_SQLSTATE) {
+        const now = await peekInvitation(id);
+        const status = now && !isClaimNotice(now) ? now.status : 'EXPIRED';
+        notAcknowledged(status, status === 'PENDING' || status === 'EXPIRED');
         return;
       }
       throw error;

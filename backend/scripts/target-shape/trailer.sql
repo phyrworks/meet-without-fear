@@ -72,6 +72,7 @@ CREATE OR REPLACE FUNCTION app.touch_updated_at() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
   AS $$ BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
+COMMENT ON FUNCTION app.touch_updated_at() IS 'Trigger function: stamps updated_at on every UPDATE of the table it is attached to (owner decision 2026-10-21). (work-k5fk.10.16)';
 
 -- Invoker helpers: the JSON-schema subset validator (work-k5fk.8; owner
 -- decision Q11: PL/pgSQL, no extension). The subset and why it is enough:
@@ -196,6 +197,7 @@ CREATE FUNCTION app.is_member(session uuid) RETURNS boolean
       WHERE p.session_id = is_member.session AND p.user_id = app.current_user_id()
     )
   $$;
+COMMENT ON FUNCTION app.is_member(uuid) IS 'Whether the caller has a participant row in the session, a leaver included (a leaver keeps reading the shared vessel). Definer, so the RLS policies can ask it. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.touch_updated_at() FROM PUBLIC;
 -- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app.
@@ -234,6 +236,7 @@ CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
       AND me.user_id = app.current_user_id()
       AND (SELECT count(*) FROM public.participant c WHERE c.session_id = me.session_id AND c.kind = 'human') = 2
   $$;
+COMMENT ON FUNCTION app.partner_user_id(uuid) IS 'The caller''s co-participant''s user id: NULL unless the caller is a participant and the session seats exactly two humans. Kept for the two-party paths; v_co_participant is the N-safe read. (work-k5fk.10.16)';
 -- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app.
 REVOKE EXECUTE ON FUNCTION app.partner_user_id(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO app_access;
@@ -829,6 +832,7 @@ CREATE FUNCTION app.empathy_direction_status()
                   WHERE me.session_id = a.session_id AND me.user_id = app.current_user_id())
     ORDER BY a.session_id, a.author_user_id, a.subject_user_id, a.round DESC
   $$;
+COMMENT ON FUNCTION app.empathy_direction_status() IS 'Content-free status of every empathy direction (latest round per direction) in the caller''s sessions: what both parties may see while neither may read an unrevealed row (P0-2). Behind v_empathy_direction_status. (work-k5fk.10.16)';
 -- mwf_app (app_access): the identity-bound read behind v_empathy_direction_status.
 REVOKE EXECUTE ON FUNCTION app.empathy_direction_status() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO app_access;
@@ -888,6 +892,7 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     WHERE s.id = session_set_status.session;
   END
   $$;
+COMMENT ON FUNCTION app.session_set_status(uuid, public.session_status) IS 'The writer of session.status (spec §1.1 transition set) but for a participant''s archive (app.session_archive): a current participant''s move on the app capability, or a worker task scoped to the session (the Stage 4 closure; retention''s RESOLVED / ABANDONED -> ARCHIVED, archived_at stamped with no archiver). Locks the session row FOR NO KEY UPDATE (lock order: session, then attempt). A caller with no arm is refused as not found (P0002). (work-k5fk.10.16)';
 -- mwf_app (app_access): invitations.ts accept, topic-frame / invitation confirm (→ INVITED), messages / stage0 (→ ACTIVE),
 -- sessions.ts resolve and tending's closure / new process (→ RESOLVED), as a current participant. mwf_worker
 -- (worker_access): session-retention (→ ABANDONED → ARCHIVED) and the Stage 4 closure (→ RESOLVED), scoped to the session.
@@ -914,6 +919,13 @@ GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO
 -- Locks the session row FOR NO KEY UPDATE, as session_set_status does, so of
 -- two concurrent archives the second sees ARCHIVED (MWA03) and the first
 -- archiver stays recorded.
+-- Archiving a CREATED or INVITED session withdraws its PENDING invitation: it
+-- becomes EXPIRED in the same statement, so the link no longer claims, previews
+-- as open, or holds a seat (work-k5fk.10.15). The invitations are locked FOR
+-- UPDATE before the session — the accept's lock order, invitation then session
+-- (app.invitation_answer, t_human_limit) — so an archive and a concurrent
+-- accept serialise instead of deadlocking: an accept that commits first leaves
+-- the session ACTIVE (MWA03); one that waits finds the invitation EXPIRED.
 CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -932,9 +944,13 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     IF v_me IS NULL THEN
       RAISE EXCEPTION 'session_archive: no identity bound' USING ERRCODE = 'MWA00';
     END IF;
-    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_archive.session FOR NO KEY UPDATE;
     SELECT true, p.left_at INTO v_part, v_left FROM public.participant p
     WHERE p.session_id = session_archive.session AND p.user_id = v_me;
+    IF v_part AND v_left IS NULL THEN
+      PERFORM 1 FROM public.invitation i
+      WHERE i.session_id = session_archive.session AND i.status = 'PENDING' ORDER BY i.id FOR UPDATE;
+    END IF;
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_archive.session FOR NO KEY UPDATE;
     IF v_from IS NULL OR v_part IS NULL THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'MWA01';
     END IF;
@@ -944,6 +960,10 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     IF v_from NOT IN ('CREATED', 'INVITED', 'RESOLVED', 'ABANDONED') THEN
       RAISE EXCEPTION 'a session in status % cannot be archived', v_from USING ERRCODE = 'MWA03';
     END IF;
+    IF v_from IN ('CREATED', 'INVITED') THEN
+      UPDATE public.invitation i SET status = 'EXPIRED'
+      WHERE i.session_id = session_archive.session AND i.status = 'PENDING';
+    END IF;
     UPDATE public.session s
     SET status = 'ARCHIVED', archived_at = now(), archived_by_user_id = v_me
     WHERE s.id = session_archive.session
@@ -951,7 +971,7 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     RETURN v_at;
   END
   $$;
-COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound; logins without app_access, and the migrator, refused): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id; returns archived_at. Refusals: MWA00 no identity, MWA01 not found / not a participant, MWA02 participant left, MWA03 not archivable. The only way mwf_app archives (no UPDATE of session.status).';
+COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound; logins without app_access, and the migrator, refused): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id, and from CREATED or INVITED withdrawing the PENDING invitation (EXPIRED; work-k5fk.10.15); returns archived_at. Refusals: MWA00 no identity, MWA01 not found / not a participant, MWA02 participant left, MWA03 not archivable. The only way mwf_app archives (no UPDATE of session.status).';
 -- mwf_app (app_access): invitations.ts archiveSession, identity-bound. No other grant (the function itself refuses a login
 -- without app_access as well); retention archives through session_set_status.
 REVOKE EXECUTE ON FUNCTION app.session_archive(uuid) FROM PUBLIC;
@@ -1100,6 +1120,7 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     RETURN a.id;
   END
   $$;
+COMMENT ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) IS 'The only writer of empathy_attempt.status (spec §1.2 transition table): locks the session, then the attempt; on REVEALED stamps revealed_at once and delivers the EMPATHY_STATEMENT into the subject''s conversation; on SUPERSEDED inserts round n+1 (HELD) with the content and returns its id (a retry returns the same id). (work-k5fk.10.16)';
 -- mwf_app (app_access): the request-path writer (work-k5fk.10.2). mwf_ai (ai_access): the reconciler's moves and the reveal
 -- (empathy-store jobMoveIfUnchanged, reconciler/state.ts), scoped to the session.
 REVOKE EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) FROM PUBLIC;
@@ -1140,6 +1161,7 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
     ON CONFLICT (need_id) DO NOTHING;
   END
   $$;
+COMMENT ON FUNCTION app.need_share(uuid, text) IS 'Share a need, by its owner (identity-bound, app_access) after their GRANTED consent, for a need neither deleted nor superseded; session_id and user_id come from the need. The text arrives sealed by the application. Idempotent (spec §1.4, N-1, N-7). (work-k5fk.10.16)';
 -- mwf_app (app_access): consent.ts (a GRANTED need consent with its text) and needs-share.ts shareNeeds, as the owner.
 REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO app_access;
@@ -1164,6 +1186,7 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
     WHERE need_id = need_revoke_share.need AND decision = 'GRANTED';
   END
   $$;
+COMMENT ON FUNCTION app.need_revoke_share(uuid) IS 'Revoke a shared need, by its owner who is a present participant: need_share.revoked_at and the consent''s REVOKED in one transaction (spec §1.4). (work-k5fk.10.16)';
 -- mwf_app (app_access): the request-path writer (work-k5fk.10.2).
 REVOKE EXECUTE ON FUNCTION app.need_revoke_share(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO app_access;
@@ -1221,6 +1244,7 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS
     UPDATE public.participant_key SET destroyed_at = now() WHERE session_id = sid AND user_id = uid AND destroyed_at IS NULL;
   END
   $$;
+COMMENT ON FUNCTION app.anonymize_user_in_session(uuid, uuid) IS 'The account walk for one session (spec §4 steps 1-4 and 7), by the user themself (identity-bound): a live session ends ABANDONED (decided on the locked status), the participant is tombstoned, and their private-only rows, unrevealed rounds and prompts are deleted. (work-k5fk.10.16)';
 -- mwf_app (app_access): session-deletion.ts deleteSessionForUser, the leaver's own request.
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) TO app_access;
@@ -1277,6 +1301,7 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     UPDATE public.user_key SET destroyed_at = now() WHERE user_id = v_uid AND destroyed_at IS NULL;
   END
   $$;
+COMMENT ON FUNCTION app.anonymize_user_account(uuid) IS 'The complete account-deletion walk (spec §4, P1-13), by the user themself (identity-bound, app_access): app.anonymize_user_in_session for each of their sessions, then the account''s own rows, and the user row is tombstoned. (work-k5fk.10.16)';
 -- mwf_app (app_access): account-deletion.ts deleteAccountWithNotifications, the user's own request.
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid) TO app_access;
@@ -1799,6 +1824,7 @@ CREATE FUNCTION app.t_session_cardinality() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_session_cardinality() IS 'T-cardinality-1 (trigger t_cardinality_1 on session): a move to ACTIVE needs at least two participants with at least one present human (D1). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_session_cardinality() FROM PUBLIC;
 CREATE TRIGGER t_cardinality_1 BEFORE UPDATE OF status ON public.session
@@ -1817,6 +1843,7 @@ CREATE FUNCTION app.t_participant_cardinality() RETURNS trigger
     RETURN NULL;
   END
   $$;
+COMMENT ON FUNCTION app.t_participant_cardinality() IS 'T-cardinality-2 (deferred constraint trigger t_cardinality_2 on participant): a session not RESOLVED, ABANDONED or ARCHIVED never loses its last present human. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_participant_cardinality() FROM PUBLIC;
 CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_id, left_at ON public.participant
@@ -1848,6 +1875,7 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_message_immutable() IS 'T-message-immutable: a message''s routing columns, its key (conversation_id, seq) and its once-only dedupe_key never change; nor does the content of an AI or SYSTEM row or of a delivered kind, except by the migrator. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_message_immutable() FROM PUBLIC;
 CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
@@ -1910,6 +1938,7 @@ CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_message_app_insert() IS 'Trigger on message INSERT by app_access writers: the request path writes only the shapes it owns (the participant''s own USER CHAT turn, its own EMPATHY_STATEMENT copy) into the identity''s conversation; other writers and cascades pass. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_message_app_insert() FROM PUBLIC;
 CREATE TRIGGER t_message_app_insert BEFORE INSERT ON public.message
@@ -1940,6 +1969,7 @@ CREATE FUNCTION app.t_message_app_delete() RETURNS trigger
     RETURN OLD;
   END
   $$;
+COMMENT ON FUNCTION app.t_message_app_delete() IS 'Trigger on message DELETE by app_access writers: only the identity''s own USER CHAT turn (a failed stream turn) or a SHARE_SUGGESTION; cascades (run as the table''s owner) and other writers pass. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_message_app_delete() FROM PUBLIC;
 CREATE TRIGGER t_message_app_delete BEFORE DELETE ON public.message
@@ -2202,6 +2232,7 @@ CREATE FUNCTION app.t_consent_owner() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_consent_owner() IS 'T-consent-owner: the decider owns the consent''s arc target. Invoker rights, so a partner''s row and a missing one look the same; one fixed message with no ids (N-4). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_consent_owner() FROM PUBLIC;
 CREATE TRIGGER t_consent_owner BEFORE INSERT OR UPDATE ON public.consent
@@ -2239,6 +2270,7 @@ CREATE FUNCTION app.t_consent_transitions() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_consent_transitions() IS 'T-consent-transitions: decision moves only NULL -> GRANTED or DENIED and GRANTED -> REVOKED; decided_at moves only with the first decision and revoked_at only with the revocation. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_consent_transitions() FROM PUBLIC;
 CREATE TRIGGER t_consent_transitions BEFORE INSERT OR UPDATE ON public.consent
@@ -2260,6 +2292,7 @@ CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_need_share_terminal() IS 'T-need-share-terminal: a delivered need_share''s text and pins never change; revoked_at moves only NULL -> value (P3 §4). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_need_share_terminal() FROM PUBLIC;
 CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
@@ -2283,6 +2316,7 @@ CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
     RETURN NEW;
   END
   $$;
+COMMENT ON FUNCTION app.t_result_live_attempt() IS 'T-result-live-attempt: no reconciler_result on a SUPERSEDED round. Definer, so the existence check reads the table, not the writer''s RLS view of it (work-k5fk.10.33). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_result_live_attempt() FROM PUBLIC;
 CREATE TRIGGER t_result_live_attempt BEFORE INSERT ON public.reconciler_result
@@ -2316,6 +2350,7 @@ CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
                                                    AND c.decision = 'WILLING'))
             FROM public.agreement ag WHERE ag.id = agreement_parties_ok.agreement)
   $$;
+COMMENT ON FUNCTION app.agreement_parties_ok(uuid) IS 'Whether an agreement''s parties are exactly the session''s human participants present at its creation, each WILLING on the proposal (D4): the predicate of T-agreement-parties, callable for operators and tests. (work-k5fk.10.16)';
 -- No caller needs EXECUTE on the predicate of T-agreement-parties.
 REVOKE EXECUTE ON FUNCTION app.agreement_parties_ok(uuid) FROM PUBLIC;
 -- SECURITY DEFINER (owned by mwf_definer; work-k5fk.10.33): its EXCEPT and NOT EXISTS terms ask what rows exist,
@@ -2360,6 +2395,7 @@ CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
     RETURN NULL;
   END
   $$;
+COMMENT ON FUNCTION app.t_agreement_parties() IS 'T-agreement-parties (deferred constraint triggers on agreement and agreement_party): at commit the agreement''s parties satisfy app.agreement_parties_ok. Definer, so the check reads the tables, not the writer''s RLS view of them (work-k5fk.10.33). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_agreement_parties() FROM PUBLIC;
 CREATE CONSTRAINT TRIGGER t_agreement_parties AFTER INSERT OR UPDATE OR DELETE ON public.agreement_party
@@ -4167,13 +4203,17 @@ BEGIN
         SELECT 1 FROM pg_trigger tg
         WHERE tg.tgrelid = w.reloid AND NOT tg.tgisinternal AND tg.tgfoid = 'app.t_session_scope()'::regprocedure
           AND (tg.tgtype & w.bit) <> 0
+          -- enabled (an ALTER TABLE … DISABLE TRIGGER, or ENABLE REPLICA, would leave it in the catalog unfired),
+          -- FOR EACH ROW (bit 1) and BEFORE (bit 2): a statement or AFTER trigger cannot refuse the row (work-k5fk.10.29)
+          AND tg.tgenabled IN ('O', 'A') AND (tg.tgtype & 3) = 3
           AND position(quote_literal(w.cap) IN pg_get_triggerdef(tg.oid)) > 0);
     IF bad IS NOT NULL THEN
-      RAISE EXCEPTION 'step 20: AI / worker write(s) with no t_session_scope trigger for the event (capability:table:event): %', bad;
+      RAISE EXCEPTION 'step 20: AI / worker write(s) with no enabled BEFORE … FOR EACH ROW t_session_scope trigger for the event (capability:table:event): %', bad;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.session'::regclass
-                   AND tg.tgfoid = 'app.t_session_purge()'::regprocedure AND (tg.tgtype & 8) <> 0) THEN
-      RAISE EXCEPTION 'step 20: the worker''s DELETE of session is not bound to ARCHIVED sessions (t_session_purge)';
+                   AND tg.tgfoid = 'app.t_session_purge()'::regprocedure AND (tg.tgtype & 8) <> 0
+                   AND tg.tgenabled IN ('O', 'A') AND (tg.tgtype & 3) = 3) THEN
+      RAISE EXCEPTION 'step 20: the worker''s DELETE of session is not bound to ARCHIVED sessions (t_session_purge: enabled, BEFORE, FOR EACH ROW)';
     END IF;
   END;
 
@@ -4239,6 +4279,14 @@ BEGIN
                 WHERE x.oid = 0 OR pg_get_userbyid(x.oid) NOT IN (SELECT unnest(v_caps) UNION ALL SELECT 'mwf_definer'));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: policy(ies) for a role other than a capability or mwf_definer: %', bad; END IF;
   END;
+
+  -- Owner DDL style: COMMENT ON everything. Every function of schema app or public carries a comment (work-k5fk.10.16);
+  -- an extension's own functions (pg_depend 'e') are the extension's to describe.
+  SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO bad
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname IN ('app', 'public') AND obj_description(p.oid, 'pg_proc') IS NULL
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: function(s) with no COMMENT ON FUNCTION: %', bad; END IF;
 
   -- work-k5fk.4 (k5fk.21, .23): the column-list SET NULL keys, which Prisma reads as plain SetNull — so the
   -- drift gate passes a full SET NULL (that would null session_id, NOT NULL) and only this catches it.

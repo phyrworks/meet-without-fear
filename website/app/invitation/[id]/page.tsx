@@ -88,6 +88,15 @@ function InvitationPageInner() {
       }
 
       if (isSignedIn) {
+        // work-k5fk.10.41: the visitor who already claimed this invitation (opened it in the app, signed in
+        // as this account) keeps their session: signed out, the preview is a stranger's — the claim notice.
+        const token = await getToken().catch(() => null);
+        const mine = token ? await getInvitation(invitationId, token).catch(() => null) : null;
+        if (mine?.claimedByYou) {
+          console.log("[Invitation] Signed in as the claimer, keeping the session");
+          setHasSignedOut(true);
+          return;
+        }
         console.log("[Invitation] User is signed in, signing out for fresh auth...");
         setState("signing_out");
         try {
@@ -105,7 +114,7 @@ function InvitationPageInner() {
     }
 
     ensureSignedOut();
-  }, [isAuthLoaded, isSignedIn, signOut, hasSignedOut, invitationId, isReturningFromOAuth]);
+  }, [isAuthLoaded, isSignedIn, signOut, hasSignedOut, invitationId, isReturningFromOAuth, getToken]);
 
   // Fetch invitation details (only after we've handled sign-out)
   useEffect(() => {
@@ -130,7 +139,9 @@ function InvitationPageInner() {
 
       console.log("[Invitation] Fetching invitation details...");
       try {
-        const data = await getInvitation(invitationId);
+        // Signed in (the claimer, or back from OAuth): the caller's own preview (work-k5fk.10.41).
+        const token = isSignedIn ? await getToken().catch(() => null) : null;
+        const data = await getInvitation(invitationId, token);
         console.log("[Invitation] API response:", data);
 
         if (!data) {
@@ -185,7 +196,7 @@ function InvitationPageInner() {
     }
 
     fetchInvitation();
-  }, [invitationId, hasSignedOut]);
+  }, [invitationId, hasSignedOut, isSignedIn, getToken]);
 
   // Handle accepting invitation after auth
   useEffect(() => {
