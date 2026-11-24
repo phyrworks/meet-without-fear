@@ -13,7 +13,8 @@
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  */
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, openTargetRun, randomUuidV7, type RunRole, type TargetRun } from './target-roles';
+import { Client } from 'pg';
+import { adaAndBob, appUrlFor, openTargetRun, randomUuidV7, type RunRole, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
@@ -149,6 +150,24 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           session,
         ]),
       ).toBe('rls');
+    });
+
+    it('session: a new session starts CREATED — mwf_app cannot insert one in any later status (work-k5fk.10.14)', async () => {
+      for (const status of ['INVITED', 'ACTIVE', 'RESOLVED', 'ABANDONED']) {
+        expect(await code('mwf_app', carol, `INSERT INTO session (status) VALUES ($1)`, [status])).toBe('rls');
+      }
+      // createSession's own insert still works (rolled back: an unseated CREATED session is visible to every caller)
+      const c = new Client({ connectionString: appUrlFor(run.fx.target, run.fx.database) });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.current_user_id', $1, true)`, [carol]);
+        const { rows } = await c.query(`INSERT INTO session (status) VALUES ('CREATED') RETURNING status::text`);
+        expect(rows).toEqual([{ status: 'CREATED' }]);
+      } finally {
+        await c.query('ROLLBACK').catch(() => undefined);
+        await c.end();
+      }
     });
 
     it('participant: Carol sees no seat of their session and cannot seat herself in it (as added by Ada)', async () => {
