@@ -140,8 +140,8 @@ COMMENT ON FUNCTION app.jsonb_schema_violation(jsonb, jsonb, text) IS 'The first
 
 -- The violation of doc against the seeded schema (name, version). An unknown
 -- schema is refused with SQLSTATE MWJ01 (class MW is this app's: MWA0x the
--- session archive, MWF0x sign-in, MWI0x invitations, MWJ0x the jsonb validators,
--- MWS0x the session's seats; the codes are
+-- session archive, MWE0x the empathy rounds' feedback, MWF0x sign-in, MWI0x invitations,
+-- MWJ0x the jsonb validators, MWS0x the session's seats; the codes are
 -- listed in docs/backend/data-model/jsonb-shapes-2026-11.md §2). Not 23503:
 -- Prisma would report that as P2003 "Foreign key constraint failed". Reads
 -- app.json_schema with the caller's rights (SELECT: app_access, ai_access —
@@ -1416,7 +1416,10 @@ REVOKE EXECUTE ON FUNCTION app.next_message_seq(uuid) FROM PUBLIC;
 -- share (sharing.ts deliverAcceptedShare, mwf_ai). The app arm: the author is
 -- the identity and a current participant; the AI arm: the conversation's
 -- session is the scope. Never a CHAT line, never into the author's own
--- conversation. Returns the row's key and instant.
+-- conversation. At most one VALIDATION_FEEDBACK per source attempt, in every
+-- arm (work-k5fk.10.29): the attempt row is locked FOR NO KEY UPDATE and a
+-- second card is refused with SQLSTATE MWE01 (the controller answers 409).
+-- Returns the row's key and instant.
 CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind public.message_kind, content text,
                                     source_attempt uuid DEFAULT NULL, instant timestamptz DEFAULT NULL)
   RETURNS TABLE (seq integer, created_at timestamptz)
@@ -1473,6 +1476,15 @@ CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind publ
           USING ERRCODE = 'insufficient_privilege';
       END IF;
     END IF;
+    -- work-k5fk.10.29: one feedback card per round. The source attempt is locked, so of two concurrent sends the
+    -- second waits and then finds the first's card (each statement reads a fresh snapshot); MWE01, not 23505.
+    IF deliver_message.kind = 'VALIDATION_FEEDBACK' AND deliver_message.source_attempt IS NOT NULL THEN
+      PERFORM 1 FROM public.empathy_attempt e WHERE e.id = deliver_message.source_attempt FOR NO KEY UPDATE;
+      IF EXISTS (SELECT 1 FROM public.message m
+                 WHERE m.source_attempt_id = deliver_message.source_attempt AND m.kind = 'VALIDATION_FEEDBACK') THEN
+        RAISE EXCEPTION 'feedback on this round was already delivered' USING ERRCODE = 'MWE01';
+      END IF;
+    END IF;
     RETURN QUERY
       INSERT INTO public.message AS m (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at)
       VALUES (deliver_message.conversation, v_session, deliver_message.from_user, 'USER', deliver_message.kind,
@@ -1480,7 +1492,7 @@ CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind publ
       RETURNING m.seq::integer, m.created_at::timestamptz;
   END
   $$;
-COMMENT ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) IS 'Deliver a participant''s item (role USER, content sealed by the application) into another participant''s conversation of the same session, stamped now (bounded): the subject''s VALIDATION_FEEDBACK on a revealed round into its author''s conversation (identity-bound, app_access), or the SHARED_CONTEXT of the sender''s ACCEPTED, undelivered offer (the AI within app.session_scope). Returns (seq, created_at). work-k5fk.10.5.';
+COMMENT ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) IS 'Deliver a participant''s item (role USER, content sealed by the application) into another participant''s conversation of the same session, stamped now (bounded): the subject''s VALIDATION_FEEDBACK on a revealed round into its author''s conversation (identity-bound, app_access), or the SHARED_CONTEXT of the sender''s ACCEPTED, undelivered offer (the AI within app.session_scope). At most one VALIDATION_FEEDBACK per source attempt: the attempt is locked and a second is refused with SQLSTATE MWE01 (work-k5fk.10.29). Returns (seq, created_at). work-k5fk.10.5.';
 -- mwf_app (app_access): message-store deliverMessage on the request path. mwf_ai (ai_access): sharing.ts deliverAcceptedShare.
 REVOKE EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) TO app_access;

@@ -73,6 +73,7 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
   (from `app.jsonb_violation`, so from `t_doc_schema` and `app.jsonb_matches`). Not `23503`: Prisma
   reports that as P2003 "Foreign key constraint failed". A refused document is `23514`
   (`check_violation`). The other `MW` codes: `MWA0x` session archive (`app.session_archive`),
+  `MWE01` a second VALIDATION_FEEDBACK for the same source attempt (`app.deliver_message`; work-k5fk.10.29),
   `MWF0x` sign-in (`app.create_user`), `MWI01` an invitation claimed by someone else
   (`app.invitation_claim`, `app.invitation_answer`), `MWS01` no seat left for another human
   (the `t_human_limit` triggers on participant and invitation; work-k5fk.10.38).
