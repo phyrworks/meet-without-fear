@@ -14,7 +14,7 @@ import {
   ArrowRight,
   Download,
 } from "lucide-react";
-import { getInvitation, acceptInvitation, InvitationDetails } from "@/lib/api";
+import { getInvitation, acceptInvitation, InvitationDetails, InvitationClaimedError } from "@/lib/api";
 import {
   trackInvitationViewed,
   trackInvitationAccepted,
@@ -177,7 +177,9 @@ function InvitationPageInner() {
         }
       } catch (err) {
         console.error("[Invitation] Error fetching invitation:", err);
-        setError("Failed to load invitation. Please try again.");
+        setError(
+          err instanceof InvitationClaimedError ? err.message : "Failed to load invitation. Please try again."
+        );
         setState("error");
       }
     }

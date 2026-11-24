@@ -37,6 +37,9 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Someone else opened the invitation first and so is its invitee (backend 403, work-k5fk.10.8). */
+export class InvitationClaimedError extends Error {}
+
 /**
  * Fetch invitation details from the backend
  */
@@ -53,12 +56,19 @@ export async function getInvitation(invitationId: string): Promise<InvitationDet
       if (response.status === 404) {
         return null;
       }
+      if (response.status === 403) {
+        const body: ApiResponse<never> = await response.json().catch(() => ({ success: false }));
+        throw new InvitationClaimedError(
+          getErrorMessage(body.error, "This invitation has already been opened by someone else")
+        );
+      }
       throw new Error("Failed to fetch invitation");
     }
 
     const data: ApiResponse<{ invitation: InvitationDetails }> = await response.json();
     return data.data?.invitation || null;
   } catch (error) {
+    if (error instanceof InvitationClaimedError) throw error;
     console.error("Error fetching invitation:", error);
     return null;
   }

@@ -164,10 +164,40 @@ type RawProposal = Omit<ProposalRow, 'needIds'> & { needs: Array<{ needId: strin
 
 const toProposal = ({ needs, ...p }: RawProposal): ProposalRow => ({ ...p, needIds: needs.map(n => n.needId) });
 
+type ProposalAccessFacts = Pick<ProposalRow, 'kind' | 'createdByUserId' | 'sharedAt'>;
+
+/**
+ * May `viewer` see the proposal (loadProposals' rule, spec §1.4): every
+ * SHARED_PROPOSAL — shared with every member from birth — and an
+ * INDIVIDUAL_COMMITMENT only to its creator, or once shared (shared_at).
+ */
+export function proposalVisibleTo(p: ProposalAccessFacts, viewer: Seat): boolean {
+  return (
+    p.kind === 'SHARED_PROPOSAL' ||
+    p.createdByUserId === viewer.userId ||
+    p.createdByUserId === null ||
+    p.sharedAt !== null
+  );
+}
+
+/**
+ * May `editor` edit or revise the proposal: creator-only until shared (owner
+ * decision 2026-11-23, work-k5fk.10.10 / 10.11). Their own, or a
+ * SHARED_PROPOSAL visible to them — never the partner's INDIVIDUAL_COMMITMENT,
+ * even once shared_at makes it visible. The app's side of the proposal
+ * app_update / proposal_revision app_insert policies, checked first so a
+ * request is refused cleanly instead of by the database. (A converted
+ * proposal is refused by the policy as well; callers that may meet one check
+ * status themselves.)
+ */
+export function proposalEditableBy(p: ProposalAccessFacts, editor: Seat): boolean {
+  return p.createdByUserId === editor.userId || (p.kind === 'SHARED_PROPOSAL' && proposalVisibleTo(p, editor));
+}
+
 /**
  * The session's proposals a viewer may see, newest update first: every
  * SHARED_PROPOSAL, and an INDIVIDUAL_COMMITMENT only to its creator or once
- * shared (spec §1.4 proposal RLS).
+ * shared (spec §1.4 proposal RLS; proposalVisibleTo).
  */
 export async function loadProposals(sessionId: string, viewer?: Seat): Promise<ProposalRow[]> {
   const rows = (await prisma.proposal.findMany({

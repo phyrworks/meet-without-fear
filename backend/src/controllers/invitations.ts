@@ -14,7 +14,14 @@ import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/
 import { createInvitationUrl } from '../utils/urls';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { repointInvitationDrafts } from '../services/empathy-store';
-import { answerInvitation, peekInvitation } from '../services/invitation-peek';
+import {
+  answerInvitation,
+  claimInvitation,
+  INVITATION_CLAIMED_MESSAGE,
+  INVITATION_CLAIMED_SQLSTATE,
+  isClaimNotice,
+  peekInvitation,
+} from '../services/invitation-peek';
 import { lastSeenMessageIdOf } from '../services/message-store';
 import {
   LIVE_SESSION_EXISTS_MESSAGE,
@@ -475,6 +482,11 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
       return;
     }
+    // work-k5fk.10.8: someone else opened it first; past the claim notice it is theirs alone.
+    if (isClaimNotice(invitation)) {
+      errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+      return;
+    }
 
     // Check if expired
     const isExpired = new Date() > invitation.expiresAt;
@@ -521,6 +533,11 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
+      return;
+    }
+    // work-k5fk.10.8: only its claimer accepts it (app.invitation_answer claims an unclaimed one).
+    if (isClaimNotice(invitation)) {
+      errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
       return;
     }
     const inviterUserId = invitation.invitedByUserId;
@@ -650,6 +667,11 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       errorResponse(res, 'CONFLICT', LIVE_SESSION_EXISTS_MESSAGE, 409);
       return;
     }
+    if (getPgSqlState(error) === INVITATION_CLAIMED_SQLSTATE) {
+      // Someone else claimed it between the peek and the answer (work-k5fk.10.8).
+      errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+      return;
+    }
     logger.error('[acceptInvitation] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to accept invitation', 500);
   }
@@ -684,6 +706,11 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
       return;
     }
+    // work-k5fk.10.8: only its claimer declines it — a stranger with the link cannot end the session.
+    if (isClaimNotice(invitation)) {
+      errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+      return;
+    }
     const inviterUserId = invitation.invitedByUserId;
 
     // The inviter cannot decline their own invitation
@@ -715,6 +742,10 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
 
     successResponse(res, { declined: true });
   } catch (error) {
+    if (getPgSqlState(error) === INVITATION_CLAIMED_SQLSTATE) {
+      errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+      return;
+    }
     logger.error('[declineInvitation] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to decline invitation', 500);
   }
@@ -936,6 +967,11 @@ export async function updateNickname(req: Request, res: Response): Promise<void>
  * Called when a user views a pending invitation (e.g., from home screen).
  * Creates a notification for the user so they can see the invitation in their inbox.
  * Idempotent - won't create duplicate notifications.
+ *
+ * This is what the app calls when the invitation link opens, so it is where the
+ * invitation is claimed (work-k5fk.10.8, owner decision 2026-11-23: the first
+ * signed-in non-inviter to open it becomes its invitee; app.invitation_claim).
+ * Anyone else gets 403.
  */
 export async function acknowledgeInvitation(req: Request, res: Response): Promise<void> {
   try {
@@ -952,6 +988,10 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
+      return;
+    }
+    if (isClaimNotice(invitation)) {
+      errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
       return;
     }
     // The inviter as the invitee sees them (participant display name, spec §7)
@@ -980,6 +1020,17 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
         },
       });
       return;
+    }
+
+    // First opener claims (atomic in the database: a concurrent opener loses with MWI01).
+    try {
+      await claimInvitation(id);
+    } catch (error) {
+      if (getPgSqlState(error) === INVITATION_CLAIMED_SQLSTATE) {
+        errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+        return;
+      }
+      throw error;
     }
 
     successResponse(res, {

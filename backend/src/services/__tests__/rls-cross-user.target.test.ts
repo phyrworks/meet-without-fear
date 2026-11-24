@@ -197,7 +197,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await count('mwf_app', carol, 'live_session_pair')).toBe(0);
     });
 
-    it('invitation: Carol cannot read or confirm it; app.invitation_peek shows her its status only', async () => {
+    it('invitation: Carol cannot read, confirm, claim or answer it; app.invitation_peek shows her the claim notice only', async () => {
       expect(await count('mwf_app', ada, 'invitation', 'session_id = $1', [session])).toBe(1);
       expect(await count('mwf_app', carol, 'invitation')).toBe(0);
       const [{ id }] = await run.sql<{ id: string }>(`SELECT id::text FROM invitation WHERE session_id = $1`, [
@@ -208,15 +208,21 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           id,
         ]),
       ).toEqual([]);
-      const peek = await as<{ status: string; session_id: string }>(
+      // Bob claimed it (work-k5fk.10.8: first opener claims): Carol gets the claim notice — its status, nothing else
+      const peek = await as<{ status: string; session_id: string | null; withheld: boolean }>(
         'mwf_app',
         carol,
-        `SELECT status::text, session_id::text FROM app.invitation_peek($1)`,
+        `SELECT status::text, session_id::text, withheld FROM app.invitation_peek($1)`,
         [id],
       );
-      expect(peek).toEqual([{ status: 'ACCEPTED', session_id: session }]);
-      // the answer is the invitee's, once: an accepted invitation is not Carol's to re-answer
-      expect(await code('mwf_app', carol, `SELECT app.invitation_answer($1, 'DECLINED')`, [id])).toBe('23514');
+      expect(peek).toEqual([{ status: 'ACCEPTED', session_id: null, withheld: true }]);
+      expect(await as('mwf_app', bob, `SELECT session_id::text, withheld FROM app.invitation_peek($1)`, [id])).toEqual([
+        { session_id: session, withheld: false },
+      ]);
+      // the answer is the claimer's: never Carol's (MWI01), and an accepted one not even Bob's to re-answer
+      expect(await code('mwf_app', carol, `SELECT app.invitation_answer($1, 'DECLINED')`, [id])).toBe('MWI01');
+      expect(await code('mwf_app', carol, `SELECT app.invitation_claim($1)`, [id])).toBe('MWI01');
+      expect(await code('mwf_app', bob, `SELECT app.invitation_answer($1, 'DECLINED')`, [id])).toBe('23514');
     });
 
     it('participant_milestone: Ada cannot reach a milestone for Bob, nor a system one for herself (work-k5fk.10.28)', async () => {
@@ -761,6 +767,33 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           [commitment, session, bob],
         ),
       ).toBe('rls');
+      // Creator-only until shared (work-k5fk.10.10 / 10.11, owner decision 2026-11-23): shared_at makes Ada's
+      // commitment visible to Bob, never his to edit or revise; her SHARED_PROPOSAL is shared from birth, so Bob may;
+      // Ada always may.
+      await run.sql(`UPDATE proposal SET shared_at = now() WHERE id = $1`, [commitment]);
+      expect(
+        await as('mwf_app', bob, `UPDATE proposal SET description = 'rewritten' WHERE id = $1 RETURNING id`, [
+          commitment,
+        ]),
+      ).toEqual([]);
+      expect(
+        await code(
+          'mwf_app',
+          bob,
+          `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action) VALUES ($1, $2, $3, 'REVISED')`,
+          [commitment, session, bob],
+        ),
+      ).toBe('rls');
+      expect(
+        await as('mwf_app', ada, `UPDATE proposal SET description = 'PROBE_COMMITMENT' WHERE id = $1 RETURNING id`, [
+          commitment,
+        ]),
+      ).toEqual([{ id: commitment }]);
+      expect(
+        await as('mwf_app', bob, `UPDATE proposal SET description = 'PROBE_PROPOSAL' WHERE id = $1 RETURNING id`, [
+          proposal,
+        ]),
+      ).toEqual([{ id: proposal }]);
       // Nobody creates a proposal in another's name, nor a revision by another, nor outside their session
       expect(
         await code(
@@ -1036,8 +1069,9 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('23514'); // t_participant_added_by (a BEFORE trigger, ahead of the policy's adder arm)
       // an outsider holding the leaver's invitation is not seated by them either (t_participant_added_by)
       await run.sql(
-        `INSERT INTO invitation (session_id, invited_by_user_id, expires_at, status, accepted_by_user_id, accepted_at)
-         VALUES ($1, $2, now() + interval '1 day', 'ACCEPTED', $3, now())`,
+        `INSERT INTO invitation (session_id, invited_by_user_id, expires_at, status, accepted_by_user_id, accepted_at,
+                                 claimed_by_user_id, claimed_at)
+         VALUES ($1, $2, now() + interval '1 day', 'ACCEPTED', $3, now(), $3, now())`,
         [other, erin, carol],
       );
       expect(

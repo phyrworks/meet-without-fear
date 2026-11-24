@@ -84,6 +84,11 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
         where: { acceptedByUserId: { in: e2eUserIds } },
         data: { acceptedByUserId: null },
       }),
+      // work-k5fk.10.8: a claim (the first opener) also points at the user (RESTRICT)
+      getE2EToolingPrisma().invitation.updateMany({
+        where: { claimedByUserId: { in: e2eUserIds } },
+        data: { claimedByUserId: null, claimedAt: null },
+      }),
     ]);
     const userResult = await getE2EToolingPrisma().user.deleteMany({
       where: { email: { endsWith: '@e2e.test' } },

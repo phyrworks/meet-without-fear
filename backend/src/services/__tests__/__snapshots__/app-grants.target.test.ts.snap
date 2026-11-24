@@ -384,9 +384,9 @@ column public.follow_up SELECT: id, session_id, agreement_id, type, scope, owner
 column public.follow_up UPDATE: status, response_deadline_at, opened_at, completed_at (worker_access)
 column public.follow_up_checkin SELECT: follow_up_id, session_id, user_id (mwf_definer)
 column public.follow_up_note SELECT: session_id, user_id (mwf_definer)
-column public.invitation SELECT: id, session_id, invited_by_user_id, accepted_by_user_id, invitee_name, status, message_confirmed_at, expires_at, created_at (mwf_definer)
+column public.invitation SELECT: id, session_id, invited_by_user_id, accepted_by_user_id, claimed_by_user_id, invitee_name, status, message_confirmed_at, expires_at, claimed_at, created_at (mwf_definer)
 column public.invitation SELECT: session_id, invited_by_user_id (ops_access)
-column public.invitation UPDATE: accepted_by_user_id, status, accepted_at, declined_at, decline_reason (mwf_definer)
+column public.invitation UPDATE: accepted_by_user_id, claimed_by_user_id, status, accepted_at, declined_at, decline_reason, claimed_at (mwf_definer)
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, dedupe_key, refining_need_id, source_attempt_id, created_at (ai_access)
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (mwf_definer)
 column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind (ops_access)
@@ -488,6 +488,7 @@ routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (ai_access)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_definer)
 routine app.identity_subject(identity_provider): EXECUTE (mwf_definer)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (mwf_definer)
+routine app.invitation_claim(uuid): EXECUTE (mwf_definer)
 routine app.invitation_peek(uuid): EXECUTE (mwf_definer)
 routine app.invitation_repoint_drafts(uuid): EXECUTE (mwf_definer)
 routine app.is_current_member(uuid): EXECUTE (mwf_definer)
@@ -671,6 +672,7 @@ routine owner app.empathy_mark_delivery(uuid,delivery_status,timestamp with time
 routine owner app.empathy_set_status(uuid,empathy_status,text): mwf_definer
 routine owner app.identity_subject(identity_provider): mwf_definer
 routine owner app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): mwf_definer
+routine owner app.invitation_claim(uuid): mwf_definer
 routine owner app.invitation_peek(uuid): mwf_definer
 routine owner app.invitation_repoint_drafts(uuid): mwf_definer
 routine owner app.is_current_member(uuid): mwf_definer
@@ -803,6 +805,7 @@ routine app.empathy_mark_delivery(uuid,delivery_status,timestamp with time zone)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (app_access)
 routine app.identity_subject(identity_provider): EXECUTE (app_access)
 routine app.invitation_answer(uuid,invitation_status,timestamp with time zone,text): EXECUTE (app_access)
+routine app.invitation_claim(uuid): EXECUTE (app_access)
 routine app.invitation_peek(uuid): EXECUTE (app_access)
 routine app.invitation_repoint_drafts(uuid): EXECUTE (app_access)
 routine app.is_current_member(uuid): EXECUTE (app_access)
