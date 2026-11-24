@@ -1348,7 +1348,7 @@ CREATE TABLE live_session_pair (
 );
 CREATE INDEX ON live_session_pair (session_id, user_a);
 CREATE INDEX ON live_session_pair (session_id, user_b);
-COMMENT ON TABLE live_session_pair IS 'The rule "at most one live session per pair of humans" (A-Q3, work-k5fk.2) as a key, not a trigger search: one row per unordered pair of human participants of a live session, maintained by triggers only (app.t_live_session_pair on participant INSERT, app.t_live_session_pair_end when the session goes RESOLVED, ABANDONED or ARCHIVED). A second live session for the same pair fails with unique_violation (23505, live_session_pair_pkey) at the moment its second human joins. The AI and personas are not human participants and never appear.';
+COMMENT ON TABLE live_session_pair IS 'The rule "at most one live session per pair of humans" (A-Q3, work-k5fk.2) as a key, not a trigger search: one row per unordered pair of human participants of a live session, maintained by triggers only (app.t_live_session_pair on participant INSERT, app.t_live_session_pair_leave when a participant leaves (left_at set; work-k5fk.18), app.t_live_session_pair_end when the session goes RESOLVED, ABANDONED or ARCHIVED). A second live session for the same pair fails with unique_violation (23505, live_session_pair_pkey) at the moment its second human joins. The AI and personas are not human participants and never appear.';
 COMMENT ON COLUMN live_session_pair.user_a IS 'The lesser of the two human user ids (CHECK user_a < user_b), so the pair is unordered.';
 COMMENT ON COLUMN live_session_pair.user_b IS 'The greater of the two human user ids.';
 COMMENT ON COLUMN live_session_pair.session_id IS 'The live session the pair shares; both users are its participants (two FKs to participant).';
@@ -5752,8 +5752,8 @@ COMMENT ON TRIGGER t_human_limit ON public.invitation IS 'No invitation beyond t
 -- transaction (the accept) rolls back. Lock order is the accept's: invitation
 -- (lockInvitationForAccept), then session. INSERT only: a participant's user
 -- and kind never change once seated (they are the primary key and its kind pin;
--- the pair's FKs hold a paired user_id in place); a later left_at does not
--- release a pair (work-k5fk follow-up for N-party leave).
+-- the pair's FKs hold a paired user_id in place); a later left_at releases the
+-- leaver's pairs (t_live_session_pair_leave, below; work-k5fk.18).
 CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -5797,6 +5797,34 @@ CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
   FOR EACH ROW WHEN (NEW.status IN ('RESOLVED', 'ABANDONED', 'ARCHIVED') AND OLD.status IS DISTINCT FROM NEW.status)
   EXECUTE FUNCTION app.t_live_session_pair_end();
 
+-- T-live-session-pair-leave (work-k5fk.18): a human who leaves (left_at set) releases their pairs of that session.
+-- With two humans per session (app.session_human_limit(), work-k5fk.10.38) the one writer of left_at today is the
+-- anonymize walk, which ends a live session first (t_live_session_pair_end has already released the pair), so this
+-- is defense in depth for every other route: a hand fix, a future "leave session" that keeps the session live (as
+-- T-cardinality-2 allows while one human stays), or more seats. Without it the leaver and the one who stays would
+-- hold a pair to a session neither can finish together — a leaver's seat is never refilled — and could never start
+-- another. Same lock as t_live_session_pair (the session row, FOR NO KEY UPDATE), so a leave and a join or a status
+-- move of the session serialise. left_at is never cleared (no grant to clear it, and a released pair is not
+-- re-written by a return).
+CREATE FUNCTION app.t_live_session_pair_leave() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    PERFORM 1 FROM public.session s WHERE s.id = NEW.session_id FOR NO KEY UPDATE;
+    DELETE FROM public.live_session_pair p
+    WHERE p.session_id = NEW.session_id AND NEW.user_id IN (p.user_a, p.user_b);
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_live_session_pair_leave() IS 'Trigger (work-k5fk.18): a human participant whose left_at is set releases their live_session_pair rows of that session, so neither user of the pair stays bound to a session one of them left.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_live_session_pair_leave() FROM PUBLIC;
+CREATE TRIGGER t_live_session_pair_leave AFTER UPDATE OF left_at ON public.participant
+  FOR EACH ROW WHEN (OLD.left_at IS NULL AND NEW.left_at IS NOT NULL AND NEW.kind = 'human')
+  EXECUTE FUNCTION app.t_live_session_pair_leave();
+COMMENT ON TRIGGER t_live_session_pair_leave ON public.participant IS 'A leaver releases their pairs (work-k5fk.18).';
+
 -- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
@@ -5804,6 +5832,7 @@ ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_agreement_parties() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_live_session_pair_leave() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_participant_human_limit() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_invitation_human_limit() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;

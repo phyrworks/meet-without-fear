@@ -139,6 +139,32 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect(await pairsOf(second.sessionId)).toEqual([sorted(ada.id, ken.id)]);
   });
 
+  it('a human who leaves a session that stays live releases the pair, so the two may start again (work-k5fk.18)', async () => {
+    const noa = person('noa');
+    expect((await http(noa, 'get', '/sessions')).status).toBe(200);
+    const first = await invite('Noa');
+    expect((await http(noa, 'post', `/invitations/${first.invitationId}/accept`)).status).toBe(200);
+    expect(await pairsOf(first.sessionId)).toEqual([sorted(ada.id, noa.id)]);
+
+    // Noa leaves; Ada stays, so the session stays live (T-cardinality-2 allows it). No runtime route does this
+    // today — the account-deletion walk ends a live session first — so it is written as the superuser, the route a
+    // hand fix or a future "leave session" would take.
+    await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [
+      first.sessionId,
+      noa.id,
+    ]);
+    const [{ status }] = await run.sql<{ status: string }>(`SELECT status::text FROM session WHERE id = $1`, [
+      first.sessionId,
+    ]);
+    expect(status).not.toMatch(/RESOLVED|ABANDONED|ARCHIVED/);
+    expect(await pairsOf(first.sessionId)).toEqual([]);
+
+    // The pair is free: Ada's next session with Noa seats her.
+    const second = await invite('Noa again');
+    expect((await http(noa, 'post', `/invitations/${second.invitationId}/accept`)).status).toBe(200);
+    expect(await pairsOf(second.sessionId)).toEqual([sorted(ada.id, noa.id)]);
+  });
+
   it('the AI and a persona are non-human seats: they make and block no pair, and never count toward readiness', async () => {
     const s = await invite('Lea');
     expect((await http(lea, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
