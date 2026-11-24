@@ -9,6 +9,9 @@
  *       releases the pair);
  *     - two humans joining one session at once keep their mutual pair (both
  *       orders).
+ *   work-k5fk.10.38 — under today's two-human cap, two humans joining a
+ *     one-human session at once: the waiting second is refused (MWS01); the
+ *     three-human cases run with the cap's trigger off (`uncapped`).
  *   F3 — the trigger arms a mutant could drop:
  *     - archive, abandon and account deletion each release the pair, and a new
  *       session for the same pair then pairs;
@@ -174,26 +177,60 @@ describeTarget('live_session_pair under concurrency and on every release path (w
     });
   });
 
-  describe('F1: two humans joining one session at once keep their mutual pair', () => {
+  /**
+   * Two humans per session is today's cap (work-k5fk.10.38, app.session_human_limit); the pair trigger is N-party
+   * for when it lifts, so its three-human cases run with the cap's trigger off in this run's own database.
+   */
+  const uncapped = async (fn: () => Promise<void>) => {
+    await run.sql(`ALTER TABLE participant DISABLE TRIGGER t_human_limit`);
+    try {
+      await fn();
+    } finally {
+      await run.sql(`ALTER TABLE participant ENABLE TRIGGER t_human_limit`);
+    }
+  };
+
+  // work-k5fk.10.38: under the cap, the same race seats one of them; the other waits on the session row and is refused.
+  it('two humans joining a one-human session at once: the first seats, the waiting second is refused (MWS01)', async () => {
+    const ken = await human('Ken');
+    const lea = await human('Lea');
+    const s = await session(ada);
+    await accepted(s, ken);
+    await accepted(s, lea);
+    const c1 = await conn(ken);
+    await c1.query(JOIN, [s, ken, ada]);
+    const c2 = await conn(lea);
+    const probe = await waitsOnLock(c2);
+    const joined = failure(c2.query(JOIN, [s, lea, ada]));
+    expect(await probe()).toBe(true);
+    await c1.query('COMMIT');
+    expect(await joined).toEqual({ code: 'MWS01', message: 'the session seats no more humans' });
+    await c2.query('ROLLBACK');
+    expect(await pairs(s)).toEqual([pair(ada, ken)]);
+  });
+
+  describe('F1: two humans joining one session at once keep their mutual pair (cap lifted)', () => {
     for (const order of ['ken first', 'lea first'] as const) {
-      it(order, async () => {
-        const ken = await human('Ken');
-        const lea = await human('Lea');
-        const s = await session(ada);
-        const [first, second] = order === 'ken first' ? [ken, lea] : [lea, ken];
-        const c1 = await conn(first);
-        await accepted(s, first);
-        await accepted(s, second);
-        await c1.query(JOIN, [s, first, ada]);
-        const c2 = await conn(second);
-        const probe = await waitsOnLock(c2);
-        const joined = c2.query(JOIN, [s, second, ada]);
-        expect(await probe()).toBe(true);
-        await c1.query('COMMIT');
-        await joined;
-        await c2.query('COMMIT');
-        expect(await pairs(s)).toEqual(sorted(pair(ada, ken), pair(ada, lea), pair(ken, lea)));
-      });
+      it(order, () =>
+        uncapped(async () => {
+          const ken = await human('Ken');
+          const lea = await human('Lea');
+          const s = await session(ada);
+          const [first, second] = order === 'ken first' ? [ken, lea] : [lea, ken];
+          const c1 = await conn(first);
+          await accepted(s, first);
+          await accepted(s, second);
+          await c1.query(JOIN, [s, first, ada]);
+          const c2 = await conn(second);
+          const probe = await waitsOnLock(c2);
+          const joined = c2.query(JOIN, [s, second, ada]);
+          expect(await probe()).toBe(true);
+          await c1.query('COMMIT');
+          await joined;
+          await c2.query('COMMIT');
+          expect(await pairs(s)).toEqual(sorted(pair(ada, ken), pair(ada, lea), pair(ken, lea)));
+        }),
+      );
     }
   });
 
@@ -284,22 +321,23 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       expect(await pairs(s)).toEqual([pair(ada, ken)]);
     });
 
-    it('a participant who left is never paired with; a row inserted already left pairs nothing', async () => {
-      const ken = await human('Ken');
-      const lea = await human('Lea');
-      const max = await human('Max');
-      const s = await session(ada);
-      await join(s, lea, ada);
-      await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [s, lea]);
-      await join(s, ken, ada);
-      // (ada, lea) stays — a later left_at releases nothing (work-k5fk.18) — but ken never pairs with lea.
-      expect(await pairs(s)).toEqual(sorted(pair(ada, ken), pair(ada, lea)));
-      await run.sql(
-        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, left_at) VALUES ($1, $2, 'human', $3, now())`,
-        [s, max, ada],
-      );
-      expect((await pairs(s)).some(p => p.a === max || p.b === max)).toBe(false);
-    });
+    it('a participant who left is never paired with; a row inserted already left pairs nothing (cap lifted)', () =>
+      uncapped(async () => {
+        const ken = await human('Ken');
+        const lea = await human('Lea');
+        const max = await human('Max');
+        const s = await session(ada);
+        await join(s, lea, ada);
+        await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [s, lea]);
+        await join(s, ken, ada);
+        // (ada, lea) stays — a later left_at releases nothing (work-k5fk.18) — but ken never pairs with lea.
+        expect(await pairs(s)).toEqual(sorted(pair(ada, ken), pair(ada, lea)));
+        await run.sql(
+          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, left_at) VALUES ($1, $2, 'human', $3, now())`,
+          [s, max, ada],
+        );
+        expect((await pairs(s)).some(p => p.a === max || p.b === max)).toBe(false);
+      }));
   });
 
   describe('F3: who may add whom, on INSERT and on UPDATE (one generic refusal)', () => {

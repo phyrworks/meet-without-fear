@@ -704,6 +704,9 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
           carol,
           `carol-${carol}@e2e.test`,
         ]);
+        // Two humans per session is today's cap (work-k5fk.10.38); the key must hold for N parties, so the cap's
+        // trigger is off for this rolled-back transaction.
+        await c.query(`ALTER TABLE participant DISABLE TRIGGER t_human_limit`);
         await c.query(`INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3)`, [
           ids.session,
           carol,

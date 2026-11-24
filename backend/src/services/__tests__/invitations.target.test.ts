@@ -22,7 +22,8 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { Client } from 'pg';
+import { adaAndInvitee, appUrlFor, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -228,6 +229,103 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
     expect(
       await run.sql(`SELECT accepted_by_user_id, claimed_by_user_id FROM invitation WHERE id = $1`, [invitationId]),
     ).toEqual([{ accepted_by_user_id: fay.id, claimed_by_user_id: fay.id }]);
+  });
+
+  // work-k5fk.10.38 (owner decision 2026-11-24): two humans per session, for now (app.session_human_limit).
+  describe('two humans per session', () => {
+    const invite = `INSERT INTO invitation (session_id, invited_by_user_id, expires_at)
+                    VALUES ($1, $2, now() + interval '7 days')`;
+    const sqlCode = (userId: string, text: string, params: unknown[]) =>
+      run.as('mwf_app', userId, text, params).then(
+        () => 'ok',
+        (e: { code?: string }) => e.code ?? String(e),
+      );
+    /** A session of Ada's with her one invitation, plus `extra` more PENDING ones that got past the invite check. */
+    const sessionWith = async (extra: number) => {
+      const created = await http(ada, 'post', '/sessions', { inviteName: 'Someone' });
+      expect(created.status).toBe(201);
+      const sessionId: string = created.body.data.session.id;
+      const ids: string[] = [created.body.data.invitationId];
+      for (let n = 0; n < extra; n++) {
+        // Written EXPIRED, then made PENDING: the cap checks the INSERT, so this stands in for any route around it.
+        const [{ id }] = await run.sql<{ id: string }>(
+          `INSERT INTO invitation (session_id, invited_by_user_id, status, expires_at)
+           VALUES ($1, $2, 'EXPIRED', now() + interval '7 days') RETURNING id::text`,
+          [sessionId, ada.id],
+        );
+        await run.sql(`UPDATE invitation SET status = 'PENDING' WHERE id = $1`, [id]);
+        ids.push(id);
+      }
+      await ready(sessionId);
+      return { sessionId, ids };
+    };
+    const humans = async (sessionId: string) =>
+      (
+        await run.sql<{ n: number }>(
+          `SELECT count(*)::int AS n FROM participant WHERE session_id = $1 AND kind = 'human'`,
+          [sessionId],
+        )
+      )[0].n;
+    const newUser = async (name: string) => {
+      const u = { id: randomUuidV7(), email: `${name}-${process.pid}@e2e.test` };
+      await http(u, 'get', '/sessions'); // the E2E bypass creates the user
+      return u;
+    };
+
+    it('the invite and accept of the second human works; then nobody invites a third, and no accept seats one', async () => {
+      const jo = await newUser('jo');
+      const kim = await newUser('kim');
+      const { sessionId, ids } = await sessionWith(1);
+      // A second pending invitation beside Ada's first would promise a third seat.
+      expect(await sqlCode(ada.id, invite, [sessionId, ada.id])).toBe('MWS01');
+
+      expect((await http(jo, 'post', `/invitations/${ids[0]}/accept`)).status).toBe(200);
+      expect(await humans(sessionId)).toBe(2);
+      // A member of the full session invites no one.
+      expect(await sqlCode(ada.id, invite, [sessionId, ada.id])).toBe('MWS01');
+      expect(await sqlCode(jo.id, invite, [sessionId, jo.id])).toBe('MWS01');
+
+      // The invitation that got past the check seats no one. The app refuses first (the session is ACTIVE, no
+      // longer INVITED); the database refuses the accept's seat itself, whatever the app checked.
+      expect((await http(kim, 'post', `/invitations/${ids[1]}/accept`)).status).toBe(400);
+      const c = new Client({ connectionString: appUrlFor(run.fx.target, run.fx.database) });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.current_user_id', $1, true)`, [kim.id]);
+        await c.query(`SELECT app.invitation_answer($1::uuid, 'ACCEPTED')`, [ids[1]]);
+        const seat = await c
+          .query(`INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`, [
+            sessionId,
+            kim.id,
+            ada.id,
+          ])
+          .then(
+            () => 'ok',
+            (e: { code?: string }) => e.code,
+          );
+        expect(seat).toBe('MWS01');
+      } finally {
+        await c.query('ROLLBACK');
+        await c.end();
+      }
+      expect(await humans(sessionId)).toBe(2);
+      expect(await run.sql(`SELECT status::text AS status FROM invitation WHERE id = $1`, [ids[1]])).toEqual([
+        { status: 'PENDING' },
+      ]);
+    });
+
+    it('two accepts at once: one seats, the other is refused', async () => {
+      const lee = await newUser('lee');
+      const max = await newUser('max');
+      const { sessionId, ids } = await sessionWith(1);
+      const results = await Promise.all([
+        http(lee, 'post', `/invitations/${ids[0]}/accept`),
+        http(max, 'post', `/invitations/${ids[1]}/accept`),
+      ]);
+      expect(results.map(r => r.status).sort()).toEqual([200, 409]);
+      expect(await humans(sessionId)).toBe(2);
+    });
   });
 
   it('the database: one claim wins, the answer is the claimer’s, accepted_by is the claimer', async () => {

@@ -243,10 +243,14 @@ describeTarget('participant resolution and the single context entry point (targe
     const [carol] = await sql<{ id: string }>(
       `INSERT INTO "user" (email, first_name) VALUES ('carol@e2e.test', 'Carol') RETURNING id`,
     );
+    // Two humans per session is today's cap (work-k5fk.10.38); the resolver must stay N-safe for when it lifts, so
+    // Carol is seated with the cap's trigger off in this run's own database.
+    await sql(`ALTER TABLE participant DISABLE TRIGGER t_human_limit`);
     await sql(
       `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Carol')`,
       [ids.session, carol.id, ids.adaUser],
     );
+    await sql(`ALTER TABLE participant ENABLE TRIGGER t_human_limit`);
     try {
       expect((await actingAs(ids.adaUser, () => resolver.getCoParticipants(ids.ada))).length).toBe(3);
       expect(await actingAs(ids.adaUser, () => resolver.getPartnerParticipant(ids.ada))).toBeNull();

@@ -18,6 +18,10 @@ Invitations are valid for **7 days** from creation; after that the `GET /invitat
 
 Until someone opens it, the link is the credential: anyone holding it sees the preview. The **first signed-in person other than the inviter to open it** (the app calls `POST /invitations/:id/acknowledge` when the link opens; an accept or decline of an unclaimed invitation claims it too) becomes its invitee — `invitation.claimed_by_user_id` / `claimed_at`, written atomically by `app.invitation_claim`. From then on only the claimer reads its details, accepts or declines it; anyone else gets **403 `FORBIDDEN`** ("This invitation has already been opened by someone else") from `GET`, `acknowledge`, `accept` and `decline`. The database enforces the same: `app.invitation_peek` returns only the claim notice (`withheld`), `app.invitation_answer` refuses ACCEPTED / DECLINED by anyone but the claimer (SQLSTATE `MWI01`), and `accepted_by_user_id` must equal `claimed_by_user_id` (CHECK). The inviter sees who claimed it as `invitation.claimedBy` (`{ id, name, claimedAt }`) in `GET /sessions/:id/invitation` and `GET /sessions/:id/state`.
 
+### Two humans per session (work-k5fk.10.38)
+
+A session seats **two humans, for now** (owner decision 2026-11-24; the number is `app.session_human_limit()`, the one place to change it). The database refuses, with SQLSTATE `MWS01`: a PENDING invitation once the session's human seats plus its outstanding (PENDING, unexpired) invitations reach the limit — so a full session takes no invitation, and a session with its one pending invitation takes no second; and a human seat beyond the limit by any route (the accept included). Both checks lock the session row, so concurrent invitations or accepts serialise. `POST /sessions` and `POST /invitations/:id/accept` answer such a refusal with **409 `CONFLICT`** ("This session has no room for anyone else").
+
 ## Get Invitation Details
 
 Get details about an invitation (can be accessed without auth for preview; auth is optional, and once the invitation is claimed only the claimer and the inviter get past the 403).

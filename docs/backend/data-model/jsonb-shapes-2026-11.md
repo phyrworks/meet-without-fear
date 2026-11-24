@@ -73,7 +73,9 @@ string — a shape no writer produces and `factsOf` drops — and is now a `{ ca
   (from `app.jsonb_violation`, so from `t_doc_schema` and `app.jsonb_matches`). Not `23503`: Prisma
   reports that as P2003 "Foreign key constraint failed". A refused document is `23514`
   (`check_violation`). The other `MW` codes: `MWA0x` session archive (`app.session_archive`),
-  `MWF0x` sign-in (`app.create_user`).
+  `MWF0x` sign-in (`app.create_user`), `MWI01` an invitation claimed by someone else
+  (`app.invitation_claim`, `app.invitation_answer`), `MWS01` no seat left for another human
+  (the `t_human_limit` triggers on participant and invitation; work-k5fk.10.38).
 - **The plaintext documents' domains** hold only what a domain can see: `preferences_json_schema` (an object with
   `memory`, `notifications`, `privacy`) and `ai_memory_json_schema` (an object). The versioned schema stays in the
   `t_doc_schema` trigger: a domain CHECK cannot see `doc_schema_version` or `kind`, and must not read a

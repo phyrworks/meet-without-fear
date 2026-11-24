@@ -21,6 +21,8 @@ import {
   INVITATION_CLAIMED_SQLSTATE,
   isClaimNotice,
   peekInvitation,
+  SESSION_FULL_MESSAGE,
+  SESSION_FULL_SQLSTATE,
 } from '../services/invitation-peek';
 import { lastSeenMessageIdOf } from '../services/message-store';
 import {
@@ -461,6 +463,11 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       201,
     );
   } catch (error) {
+    if (getPgSqlState(error) === SESSION_FULL_SQLSTATE) {
+      // The seat cap (work-k5fk.10.38): no invitation beyond the session's seats left.
+      errorResponse(res, 'CONFLICT', SESSION_FULL_MESSAGE, 409);
+      return;
+    }
     logger.error('[createSession] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to create session', 500);
   }
@@ -670,6 +677,11 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
     if (getPgSqlState(error) === INVITATION_CLAIMED_SQLSTATE) {
       // Someone else claimed it between the peek and the answer (work-k5fk.10.8).
       errorResponse(res, 'FORBIDDEN', INVITATION_CLAIMED_MESSAGE, 403);
+      return;
+    }
+    if (getPgSqlState(error) === SESSION_FULL_SQLSTATE) {
+      // The seat cap (work-k5fk.10.38): the session already seats all the humans it may.
+      errorResponse(res, 'CONFLICT', SESSION_FULL_MESSAGE, 409);
       return;
     }
     logger.error('[acceptInvitation] Error:', error);
