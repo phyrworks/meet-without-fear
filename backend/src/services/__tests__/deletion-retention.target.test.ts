@@ -380,9 +380,10 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
       ['ancient', ids.session, 91],
     ] as const) {
       await run.sql(
-        `INSERT INTO brain_activity (session_id, turn_id, activity_type, model, input, output, created_at)
-         VALUES ($1, $2, 'LLM_CALL', 'm', '{"prompt": "PROBE"}', '{"text": "PROBE"}', $3)`,
-        [sessionId, label, at(days)],
+        // a sessionless call of no reflection is its acting user's (brain_activity.user_id, work-k5fk.10.35)
+        `INSERT INTO brain_activity (session_id, user_id, turn_id, activity_type, model, input, output, created_at)
+         VALUES ($1, $2, $3, 'LLM_CALL', 'm', '{"prompt": "PROBE"}', '{"text": "PROBE"}', $4)`,
+        [sessionId, sessionId ? null : ids.adaUser, label, at(days)],
       );
     }
     const result = await enforceDataRetention();

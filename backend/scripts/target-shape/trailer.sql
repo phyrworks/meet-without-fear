@@ -324,6 +324,18 @@ COMMENT ON FUNCTION app.owns_reflection(uuid) IS 'True when the reflection is th
 REVOKE EXECUTE ON FUNCTION app.owns_reflection(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.owns_reflection(uuid) TO ai_access;
 
+-- Is this the acting user? The AI's telemetry of a call of neither a session nor a reflection (brain_activity with
+-- user_id) is that user's only (work-k5fk.10.35). A definer, as owns_reflection: ai_access holds no EXECUTE on
+-- app.current_user_id() itself.
+CREATE FUNCTION app.is_acting_user("user" uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$ SELECT coalesce(is_acting_user."user" = app.current_user_id(), false) $$;
+COMMENT ON FUNCTION app.is_acting_user(uuid) IS 'True when the user is the acting user (app.current_user_id); false when either is NULL. RLS predicate of the AI''s brain_activity rows of neither a session nor a reflection (work-k5fk.10.35).';
+-- mwf_ai (ai_access): the brain_activity policy ai_own_call.
+REVOKE EXECUTE ON FUNCTION app.is_acting_user(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.is_acting_user(uuid) TO ai_access;
+
 -- An invitation as someone who is not (yet) a participant may see it (design note §6 invitation: "pre-membership
 -- accept read via definer app.invitation_peek(id)"). Until it is claimed, the invitation's link is the credential: a
 -- caller who names the id reads this much — never the session's content, only whether it is ready to join. No identity
@@ -1725,6 +1737,7 @@ ALTER FUNCTION app.shares_session_with(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_persona(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.scope_actor_is_member() OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.is_acting_user(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_claim(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
@@ -3060,8 +3073,8 @@ CREATE POLICY ai_reflection ON brain_activity TO ai_access
   WITH CHECK (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id));
 COMMENT ON POLICY ai_reflection ON brain_activity IS 'An inner-work call''s telemetry: the acting user''s own reflection only (work-k5fk.10.33).';
 CREATE POLICY ai_own_call ON brain_activity TO ai_access
-  USING (session_id IS NULL AND reflection_id IS NULL AND user_id = (SELECT app.current_user_id()))
-  WITH CHECK (session_id IS NULL AND reflection_id IS NULL AND user_id = (SELECT app.current_user_id()));
+  USING (session_id IS NULL AND reflection_id IS NULL AND app.is_acting_user(user_id))
+  WITH CHECK (session_id IS NULL AND reflection_id IS NULL AND app.is_acting_user(user_id));
 COMMENT ON POLICY ai_own_call ON brain_activity IS 'A call of neither a session nor a reflection (gratitude, meditation, memory, people extraction): the acting user''s own rows only, by brain_activity.user_id; an AI transaction with no acting user reads and writes none (work-k5fk.10.35, closing the 10.33 finding).';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)

@@ -348,6 +348,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('rls');
       expect(
         await code('mwf_ai', bob, `INSERT INTO brain_activity (activity_type, model) VALUES ('LLM_CALL', 'm')`),
+      ).toBe('rls');
+      // (and the CHECK refuses an ownerless one from any writer, the superuser included)
+      expect(
+        await run.sql(`INSERT INTO brain_activity (activity_type, model) VALUES ('LLM_CALL', 'm')`).catch(
+          (e: { code?: string }) => e.code,
+        ),
       ).toBe('23514');
       // a session's row has no user owner
       expect(

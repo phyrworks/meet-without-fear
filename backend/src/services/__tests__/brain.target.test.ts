@@ -180,7 +180,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       { status: 'COMPLETED' },
     ]);
     // account deletion removes it
-    await run.as('mwf_migrator', null, `SELECT app.anonymize_user_account($1)`, [dee]);
+    await run.as('mwf_app', dee, `SELECT app.anonymize_user_account($1)`, [dee]);
     expect(await run.sql(`SELECT id FROM brain_activity WHERE id = $1`, [a.id])).toEqual([]);
   });
 
