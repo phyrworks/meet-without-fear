@@ -31,6 +31,7 @@ import { createFacilitatorMessage, createParticipantMessage } from './message-st
 import { resolveParticipant, type Seat } from './participant-resolver';
 import {
   loadProposals,
+  proposalEditableBy,
   loadStage4Needs,
   loadVisibleChoices,
   resolveNeedLabels,
@@ -163,7 +164,14 @@ type SubchatConversation = {
   resolvedAt: Date | null;
   createdAt: Date;
   participant: { sessionId: string; userId: string | null };
-  messages: Array<{ conversationId: string; seq: number; role: string; content: string; createdAt: Date; refiningNeedId: string | null }>;
+  messages: Array<{
+    conversationId: string;
+    seq: number;
+    role: string;
+    content: string;
+    createdAt: Date;
+    refiningNeedId: string | null;
+  }>;
 };
 
 const SUBCHAT_SELECT = {
@@ -529,7 +537,14 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
   const anchorNeedId = record.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM ? record.anchorId : null;
 
   const links: Array<{ proposalId: string; labels: string[] | undefined; extraNeedIds: string[] }> = [];
-  const editable = new Set((await loadProposals(sessionId, me)).map(p => p.id));
+  // Creator-only until shared (work-k5fk.10.10): of the ids in the request, only proposals the
+  // participant may change — their own, or a SHARED_PROPOSAL they see — and never a converted one
+  // (the proposal app_update policy's rule; anything else is skipped, never sent to the database).
+  const editable = new Set(
+    (await loadProposals(sessionId, me))
+      .filter(p => p.status !== 'CONVERTED_TO_AGREEMENT' && proposalEditableBy(p, me))
+      .map(p => p.id),
+  );
   await prisma.$transaction(async tx => {
     for (const draft of accepted) {
       const created = await tx.proposal.create({
@@ -555,8 +570,11 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
 
     for (const draft of updated) {
       if (!draft.proposalId) continue;
-      // Only a proposal of this session the participant may see.
-      if (!editable.has(draft.proposalId)) continue;
+      // Only a proposal of this session the participant may change.
+      if (!editable.has(draft.proposalId)) {
+        logger.warn('[stage4-subchat] resolve skipped a proposal the participant may not change');
+        continue;
+      }
       const row = await tx.proposal.update({
         where: { id: draft.proposalId },
         data: {

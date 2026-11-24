@@ -139,4 +139,75 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
         .description,
     ).not.toBe('PROBE_TS12_SECOND_RESOLVE');
   });
+
+  // work-k5fk.10.10 / 10.11 (owner decision 2026-11-23): creator-only until shared. A SHARED_PROPOSAL is shared with
+  // every member from birth, so either edits it; the partner's INDIVIDUAL_COMMITMENT is its creator's alone, even once
+  // shared_at shows it to them. The request path only touches what the caller may change.
+  describe('creator-only until shared', () => {
+    let checkin = '';
+    let individual = '';
+    beforeAll(async () => {
+      [{ id: checkin }] = await run.sql<{ id: string }>(
+        `SELECT id FROM proposal WHERE description LIKE 'Try a Sunday%'`,
+      );
+      [{ id: individual }] = await run.sql<{ id: string }>(
+        `SELECT id FROM proposal WHERE description LIKE 'I will name when I am overloaded%'`,
+      );
+    });
+    const description = (id: string) =>
+      run
+        .sql<{ description: string }>(`SELECT description FROM proposal WHERE id = $1`, [id])
+        .then(r => r[0].description);
+
+    it('sub-chat resolve: Bob refines Ada’s shared proposal, never her shared commitment (skipped, not a DB error)', async () => {
+      await run.sql(`UPDATE proposal SET shared_at = now() WHERE id = $1`, [individual]); // visible to Bob now
+      const opened = await http(bob, 'post', `/sessions/${ids.session}/stage4/subchat`, {
+        anchorKind: 'PROPOSAL_REFINEMENT',
+        anchorId: checkin,
+      });
+      expect(opened.status).toBe(200);
+      const before = await description(individual);
+      const res = await http(
+        bob,
+        'post',
+        `/sessions/${ids.session}/stage4/subchat/${opened.body.data.subChat.id}/resolve`,
+        {
+          updatedProposals: [
+            { proposalId: individual, description: 'PROBE_BOB_REWRITES_ADA_COMMITMENT' },
+            { proposalId: checkin, description: 'Try a Sunday evening check-in, twenty minutes, for two weeks' },
+          ],
+        },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.data.updatedProposalIds).toEqual([checkin]);
+      expect(await description(individual)).toBe(before);
+      expect(await description(checkin)).toBe('Try a Sunday evening check-in, twenty minutes, for two weeks');
+      expect(
+        await run.sql(
+          `SELECT count(*)::int AS n FROM proposal_revision WHERE proposal_id = $1 AND actor_user_id = $2`,
+          [individual, ids.bobUser],
+        ),
+      ).toEqual([{ n: 0 }]);
+    });
+
+    it('createAgreement with strategyId: 404 for an unseen commitment, 403 for a seen one, the creator may', async () => {
+      const agree = (user: { id: string; email: string }, strategyId: string) =>
+        http(user, 'post', `/sessions/${ids.session}/agreements`, {
+          strategyId,
+          description: 'probe',
+          type: 'MICRO_EXPERIMENT',
+        });
+      await run.sql(`UPDATE proposal SET shared_at = NULL WHERE id = $1`, [individual]);
+      expect((await agree(bob, individual)).status).toBe(404); // not shared: Bob does not see it
+      await run.sql(`UPDATE proposal SET shared_at = now() WHERE id = $1`, [individual]);
+      expect((await agree(bob, individual)).status).toBe(403); // shared: seen, still Ada's alone
+      expect(
+        await run.sql(
+          `SELECT count(*)::int AS n FROM proposal_revision WHERE proposal_id = $1 AND actor_user_id = $2`,
+          [individual, ids.bobUser],
+        ),
+      ).toEqual([{ n: 0 }]);
+      expect((await agree(ada, individual)).status).toBeLessThan(300); // the creator always may
+    });
+  });
 });

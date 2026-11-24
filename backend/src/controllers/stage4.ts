@@ -67,6 +67,8 @@ import {
   loadClosure,
   loadProposal,
   loadProposals,
+  proposalEditableBy,
+  proposalVisibleTo,
   loadStage4Needs,
   loadVisibleCoverage,
   resolveNeedLabels,
@@ -935,9 +937,18 @@ export async function createAgreement(req: Request, res: Response): Promise<void
         errorResponse(res, 'CONFLICT', 'An agreement already exists for this strategy', 409);
         return;
       }
-      const proposal = await prisma.proposal.findFirst({ where: { id: proposalId, sessionId }, select: { id: true } });
-      if (!proposal) {
+      const proposal = await prisma.proposal.findFirst({
+        where: { id: proposalId, sessionId },
+        select: { id: true, kind: true, createdByUserId: true, sharedAt: true },
+      });
+      if (!proposal || !proposalVisibleTo(proposal, me)) {
         errorResponse(res, 'NOT_FOUND', 'Strategy not found', 404);
+        return;
+      }
+      // Creator-only until shared (work-k5fk.10.11): the revision below is the caller's edit of the
+      // proposal — their own, or a SHARED_PROPOSAL they see; never the partner's individual commitment.
+      if (!proposalEditableBy(proposal, me)) {
+        errorResponse(res, 'FORBIDDEN', 'Only its creator can make an agreement of this strategy', 403);
         return;
       }
     } else {
