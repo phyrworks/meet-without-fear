@@ -21,7 +21,9 @@ describe production.
   `_prisma_migrations` (granted to nobody). The owner `mwf_migrator` is held to the policies too
   and has none, so by default it reads no row — a default, not a control: as owner it can lift FORCE
   or `SET ROLE mwf_definer`. What holds it is `pg_hba.conf` (deploy step only) and pgaudit (every
-  statement logged). Superusers bypass RLS (break-glass only).
+  statement logged). Superusers bypass RLS (break-glass only). A migration that must read or change
+  rows opens a `migration_*` policy for itself inside its own transaction and drops it again
+  ([Data migrations after the baseline](../data-model/data-migrations.md), work-k5fk.10.31).
 - `diag_access` (the bot, `slam_bot_readonly`) — `diag_read`: every row, but SELECT only on id,
   status, kind, stage, count, flag and timestamp columns (T7c). No content, names, emails, keys or
   push tokens (work-k5fk.10.30).

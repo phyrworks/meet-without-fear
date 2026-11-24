@@ -16,6 +16,9 @@ Two private AI conversations, consented sharing, and asynchronous reconciler res
 ### [jsonb documents — shapes and validation](./jsonb-shapes-2026-11.md)
 Every jsonb column of the target shape: its writer, its actual shape, and the envelope CHECK / JSON-schema trigger / typeof CHECK that validates it.
 
+### [Data migrations after the baseline](./data-migrations.md)
+How a migration that reads or rewrites rows gets past FORCE ROW LEVEL SECURITY: a `migration_*` policy for the deploying role, created and dropped inside the migration's one transaction (work-k5fk.10.31).
+
 ### [Prisma Schema](./prisma-schema.md)
 Complete database schema: stage/session tables, consent semantics, Inner Work subsystem, Fact-Ledger memory architecture, Reconciler models, and Needs / People catalogs.
 
