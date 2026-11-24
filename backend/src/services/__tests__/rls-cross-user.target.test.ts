@@ -225,6 +225,16 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await code('mwf_app', bob, `SELECT app.invitation_answer($1, 'DECLINED')`, [id])).toBe('23514');
     });
 
+    // work-k5fk.10.38 (owner decision 2026-11-24): two humans per session, for now. Ada and Bob fill theirs.
+    it('invitation: neither member of a two-human session can invite a third (MWS01); Carol is refused by RLS', async () => {
+      const invite = `INSERT INTO invitation (session_id, invited_by_user_id, expires_at)
+                      VALUES ($1, $2, now() + interval '7 days') RETURNING id`;
+      expect(await code('mwf_app', ada, invite, [session, ada])).toBe('MWS01');
+      expect(await code('mwf_app', bob, invite, [session, bob])).toBe('MWS01');
+      expect(await code('mwf_app', carol, invite, [session, ada])).toBe('rls');
+      expect(await count('mwf_app', ada, 'invitation', 'session_id = $1', [session])).toBe(1);
+    });
+
     it('participant_milestone: Ada cannot reach a milestone for Bob, nor a system one for herself (work-k5fk.10.28)', async () => {
       const insert = `INSERT INTO participant_milestone (session_id, user_id, milestone_key) VALUES ($1, $2, $3)`;
       // choices_shared for Bob would un-hide his Stage 4 choices

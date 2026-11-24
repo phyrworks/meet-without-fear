@@ -53,6 +53,13 @@ export interface InvitationPeek {
 export const INVITATION_CLAIMED_SQLSTATE = 'MWI01';
 export const INVITATION_CLAIMED_MESSAGE = 'This invitation has already been opened by someone else';
 
+/**
+ * The SQLSTATE the seat cap raises (work-k5fk.10.38: two humans per session, for now — app.session_human_limit):
+ * the t_human_limit triggers refuse an invitation beyond the seats left (invitation) and a third human’s seat (participant).
+ */
+export const SESSION_FULL_SQLSTATE = 'MWS01';
+export const SESSION_FULL_MESSAGE = 'This session has no room for anyone else';
+
 /** A claim notice rather than the invitation (claimed by someone other than the caller and the inviter). */
 export function isClaimNotice(p: InvitationPeek | InvitationClaimNotice): p is InvitationClaimNotice {
   return p.withheld;

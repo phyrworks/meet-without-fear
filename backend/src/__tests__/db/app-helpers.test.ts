@@ -80,7 +80,11 @@ describeTarget('app.* identity helpers (database, target shape)', () => {
       return id;
     };
     pair = await session(alice, bob);
+    // Two humans per session is today's cap (work-k5fk.10.38, app.session_human_limit), not these helpers': they are
+    // N-safe for when it lifts, so the trio is seated with the cap's trigger off in this run's own database.
+    await run.sql(`ALTER TABLE participant DISABLE TRIGGER t_human_limit`);
     trio = await session(alice, dave, erin);
+    await run.sql(`ALTER TABLE participant ENABLE TRIGGER t_human_limit`);
   });
   afterAll(async () => {
     await run?.drop();

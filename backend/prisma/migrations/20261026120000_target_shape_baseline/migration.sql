@@ -3358,7 +3358,8 @@ COMMENT ON FUNCTION app.jsonb_schema_violation(jsonb, jsonb, text) IS 'The first
 
 -- The violation of doc against the seeded schema (name, version). An unknown
 -- schema is refused with SQLSTATE MWJ01 (class MW is this app's: MWA0x the
--- session archive, MWF0x sign-in, MWJ0x the jsonb validators; the codes are
+-- session archive, MWF0x sign-in, MWI0x invitations, MWJ0x the jsonb validators,
+-- MWS0x the session's seats; the codes are
 -- listed in docs/backend/data-model/jsonb-shapes-2026-11.md §2). Not 23503:
 -- Prisma would report that as P2003 "Foreign key constraint failed". Reads
 -- app.json_schema with the caller's rights (SELECT: app_access, ai_access —
@@ -5653,6 +5654,78 @@ REVOKE EXECUTE ON FUNCTION app.t_participant_added_by() FROM PUBLIC;
 CREATE TRIGGER t_participant_added_by BEFORE INSERT OR UPDATE OF added_by_user_id, user_id ON public.participant
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_added_by();
 
+-- Two humans per session, for now (work-k5fk.10.38, owner decision 2026-11-24: more participants may come later).
+-- app.session_human_limit() is the one place the number lives; the two triggers below read it.
+--   * t_human_limit on participant (app.t_participant_human_limit): a human seat (any route: createSession, the accept, the linked process, a fixture)
+--     is refused once the session already seats the limit's worth of humans. Every human seat counts, a leaver's
+--     too: a seat is never freed, so nobody takes a leaver's place (as app.partner_user_id counts them).
+--   * t_human_limit on invitation (app.t_invitation_human_limit): a PENDING invitation is refused once the session's human seats plus its other
+--     outstanding invitations (PENDING, unexpired: each still able to seat someone) reach the limit. So in a
+--     two-human session nobody may invite at all, and beside the one pending invitation of a session's initiator a
+--     second invitation is refused: two acceptances would seat a third human. (An expired one seats no one —
+--     app.invitation_answer refuses its accept — so it holds no seat, and one written already expired is let be.)
+-- The participant trigger is the guarantee; the invitation trigger refuses earlier, so no one is invited to a seat
+-- that is not there. Both are AFTER INSERT, so row-level security has passed the row first (a non-member's attempt
+-- stays a plain RLS refusal, no oracle for how full a session is) and the count includes it; on participant,
+-- t_human_limit sorts before t_live_session_pair, so a third human is refused here, not by the pair key. Both take the session row FOR NO KEY UPDATE — the lock t_live_session_pair,
+-- session_set_status and session_archive take — so two concurrent seats, invitations, or one of each in one session
+-- serialise, and the later counts the earlier's committed row with its own. Lock order stays the accept's: invitation, then
+-- session. Both refuse with MWS01, which the app maps to 409 (invitations.ts). Definer: an invitee is no member
+-- yet, so RLS would hide the seats it must count.
+CREATE FUNCTION app.session_human_limit() RETURNS integer
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$ SELECT 2 $$;
+COMMENT ON FUNCTION app.session_human_limit() IS 'How many humans a session may seat: two, for now (owner decision 2026-11-24, work-k5fk.10.38). The one place to change when sessions take more people; app.t_participant_human_limit and app.t_invitation_human_limit read it. (The two-party helpers — app.partner_user_id, the stage shim — would need their N-party forms first.)';
+REVOKE EXECUTE ON FUNCTION app.session_human_limit() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_human_limit() TO mwf_definer;
+
+CREATE FUNCTION app.t_participant_human_limit() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    PERFORM 1 FROM public.session s WHERE s.id = NEW.session_id FOR NO KEY UPDATE;
+    IF (SELECT count(*) FROM public.participant p WHERE p.session_id = NEW.session_id AND p.kind = 'human')
+       > app.session_human_limit() THEN
+      RAISE EXCEPTION 'the session seats no more humans' USING ERRCODE = 'MWS01';
+    END IF;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_participant_human_limit() IS 'Trigger (work-k5fk.10.38): a human seat is refused (MWS01) once the session seats app.session_human_limit() humans, leavers included; serialised on the session row.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_participant_human_limit() FROM PUBLIC;
+CREATE TRIGGER t_human_limit AFTER INSERT ON public.participant
+  FOR EACH ROW WHEN (NEW.kind = 'human') EXECUTE FUNCTION app.t_participant_human_limit();
+COMMENT ON TRIGGER t_human_limit ON public.participant IS 'At most app.session_human_limit() human seats per session (work-k5fk.10.38).';
+
+CREATE FUNCTION app.t_invitation_human_limit() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NEW.expires_at <= CURRENT_TIMESTAMP THEN
+      RETURN NULL;  -- born expired: it seats no one (app.invitation_answer refuses its accept)
+    END IF;
+    PERFORM 1 FROM public.session s WHERE s.id = NEW.session_id FOR NO KEY UPDATE;
+    IF (SELECT count(*) FROM public.participant p WHERE p.session_id = NEW.session_id AND p.kind = 'human')
+       + (SELECT count(*) FROM public.invitation i
+          WHERE i.session_id = NEW.session_id AND i.status = 'PENDING' AND i.expires_at > CURRENT_TIMESTAMP
+            AND i.id <> NEW.id)
+       >= app.session_human_limit() THEN
+      RAISE EXCEPTION 'the session has no seat left to invite anyone to' USING ERRCODE = 'MWS01';
+    END IF;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_invitation_human_limit() IS 'Trigger (work-k5fk.10.38): a PENDING unexpired invitation is refused (MWS01) once the session''s human seats plus its outstanding (PENDING, unexpired) invitations reach app.session_human_limit(); serialised on the session row.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_invitation_human_limit() FROM PUBLIC;
+CREATE TRIGGER t_human_limit AFTER INSERT ON public.invitation
+  FOR EACH ROW WHEN (NEW.status = 'PENDING') EXECUTE FUNCTION app.t_invitation_human_limit();
+COMMENT ON TRIGGER t_human_limit ON public.invitation IS 'No invitation beyond the seats left: human seats plus outstanding invitations stay within app.session_human_limit() (work-k5fk.10.38).';
+
 -- T-live-session-pair (A-Q3, owner decision Q3: DB-enforced at the second
 -- human's join): a human joining a live session pairs with every other
 -- present human of it. It first takes the session row FOR NO KEY UPDATE —
@@ -5722,6 +5795,8 @@ ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_agreement_parties() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_participant_human_limit() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_invitation_human_limit() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
 
 -- ---------------------------------------------------------------------------
