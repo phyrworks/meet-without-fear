@@ -914,6 +914,13 @@ GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO
 -- Locks the session row FOR NO KEY UPDATE, as session_set_status does, so of
 -- two concurrent archives the second sees ARCHIVED (MWA03) and the first
 -- archiver stays recorded.
+-- Archiving a CREATED or INVITED session withdraws its PENDING invitation: it
+-- becomes EXPIRED in the same statement, so the link no longer claims, previews
+-- as open, or holds a seat (work-k5fk.10.15). The invitations are locked FOR
+-- UPDATE before the session — the accept's lock order, invitation then session
+-- (app.invitation_answer, t_human_limit) — so an archive and a concurrent
+-- accept serialise instead of deadlocking: an accept that commits first leaves
+-- the session ACTIVE (MWA03); one that waits finds the invitation EXPIRED.
 CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -932,9 +939,13 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     IF v_me IS NULL THEN
       RAISE EXCEPTION 'session_archive: no identity bound' USING ERRCODE = 'MWA00';
     END IF;
-    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_archive.session FOR NO KEY UPDATE;
     SELECT true, p.left_at INTO v_part, v_left FROM public.participant p
     WHERE p.session_id = session_archive.session AND p.user_id = v_me;
+    IF v_part AND v_left IS NULL THEN
+      PERFORM 1 FROM public.invitation i
+      WHERE i.session_id = session_archive.session AND i.status = 'PENDING' ORDER BY i.id FOR UPDATE;
+    END IF;
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_archive.session FOR NO KEY UPDATE;
     IF v_from IS NULL OR v_part IS NULL THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'MWA01';
     END IF;
@@ -944,6 +955,10 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     IF v_from NOT IN ('CREATED', 'INVITED', 'RESOLVED', 'ABANDONED') THEN
       RAISE EXCEPTION 'a session in status % cannot be archived', v_from USING ERRCODE = 'MWA03';
     END IF;
+    IF v_from IN ('CREATED', 'INVITED') THEN
+      UPDATE public.invitation i SET status = 'EXPIRED'
+      WHERE i.session_id = session_archive.session AND i.status = 'PENDING';
+    END IF;
     UPDATE public.session s
     SET status = 'ARCHIVED', archived_at = now(), archived_by_user_id = v_me
     WHERE s.id = session_archive.session
@@ -951,7 +966,7 @@ CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
     RETURN v_at;
   END
   $$;
-COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound; logins without app_access, and the migrator, refused): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id; returns archived_at. Refusals: MWA00 no identity, MWA01 not found / not a participant, MWA02 participant left, MWA03 not archivable. The only way mwf_app archives (no UPDATE of session.status).';
+COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound; logins without app_access, and the migrator, refused): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id, and from CREATED or INVITED withdrawing the PENDING invitation (EXPIRED; work-k5fk.10.15); returns archived_at. Refusals: MWA00 no identity, MWA01 not found / not a participant, MWA02 participant left, MWA03 not archivable. The only way mwf_app archives (no UPDATE of session.status).';
 -- mwf_app (app_access): invitations.ts archiveSession, identity-bound. No other grant (the function itself refuses a login
 -- without app_access as well); retention archives through session_set_status.
 REVOKE EXECUTE ON FUNCTION app.session_archive(uuid) FROM PUBLIC;

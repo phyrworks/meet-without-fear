@@ -555,7 +555,12 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Check if already processed
+    // Check if already processed. EXPIRED (past expires_at, or withdrawn by archiving the session,
+    // work-k5fk.10.15) answers as the expired path below does.
+    if (invitation.status === 'EXPIRED') {
+      errorResponse(res, 'EXPIRED', 'Invitation has expired', 410);
+      return;
+    }
     if (invitation.status !== 'PENDING') {
       errorResponse(res, 'VALIDATION_ERROR', `Invitation has already been ${invitation.status.toLowerCase()}`, 400);
       return;

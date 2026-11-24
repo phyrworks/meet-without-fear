@@ -797,7 +797,7 @@ COMMENT ON TYPE ai_memory_kind IS 'SUMMARY and NOTABLE_FACTS belong to a partici
 CREATE TYPE regulation_type AS ENUM ('BREATHING_EXERCISE', 'BODY_SCAN', 'GROUNDING', 'PAUSE_SESSION');
 COMMENT ON TYPE regulation_type IS 'The emotional-regulation exercise a participant completed.';
 CREATE TYPE invitation_status AS ENUM ('PENDING', 'ACCEPTED', 'DECLINED', 'EXPIRED');
-COMMENT ON TYPE invitation_status IS 'Lifecycle of an invitation: PENDING until accepted, declined or past expires_at.';
+COMMENT ON TYPE invitation_status IS 'Lifecycle of an invitation: PENDING until accepted, declined, past expires_at, or withdrawn by archiving its session before anyone joined (EXPIRED either way; app.session_archive).';
 CREATE TYPE empathy_status AS ENUM ('HELD', 'AWAITING_SHARING', 'REFINING', 'READY', 'REVEALED', 'VALIDATED', 'SUPERSEDED');
 COMMENT ON TYPE empathy_status IS 'Lifecycle of an empathy attempt, written only by the app''s transition function: HELD -> (AWAITING_SHARING | REFINING) -> READY -> REVEALED -> VALIDATED, or SUPERSEDED by a newer round.';
 CREATE TYPE delivery_status AS ENUM ('PENDING', 'DELIVERED', 'SEEN');

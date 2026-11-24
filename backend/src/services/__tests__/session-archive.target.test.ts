@@ -186,6 +186,15 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(row.archived_by).toBe(ada.id);
     expect(new Date(r.body.data.archivedAt).toISOString()).toBe(row.archived_at.toISOString());
 
+    // work-k5fk.10.15: archiving the CREATED session withdrew its PENDING invitation (EXPIRED), so Bob's link
+    // no longer claims or accepts: the accept answers as expired (410), not with a database error.
+    expect(
+      await run.sql(`SELECT status::text AS status FROM invitation WHERE session_id = $1`, [ids.session]),
+    ).toEqual([{ status: 'EXPIRED' }]);
+    const accept = await http(bob, 'post', `/invitations/${ids.invitation}/accept`);
+    expect(accept.status).toBe(410);
+    expect(accept.body.error.code).toBe('EXPIRED');
+
     // the ABANDONED session by its remaining participant, through the function as mwf_app
     const [{ at }] = await run.as<{ at: Date }>('mwf_app', ada.id, `SELECT app.session_archive($1::uuid) AS at`, [
       left,
