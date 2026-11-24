@@ -519,6 +519,8 @@ routine app.scope_actor_is_member(): EXECUTE (ai_access)
 routine app.scope_actor_is_member(): EXECUTE (mwf_definer)
 routine app.session_abandon_declined(uuid): EXECUTE (mwf_definer)
 routine app.session_archive(uuid): EXECUTE (mwf_definer)
+routine app.session_human_limit(): EXECUTE (mwf_definer)
+routine app.session_human_limit(): EXECUTE (mwf_migrator)
 routine app.session_invitee_access(uuid): EXECUTE (mwf_definer)
 routine app.session_parties(uuid[]): EXECUTE (mwf_definer)
 routine app.session_resume(uuid): EXECUTE (mwf_definer)
@@ -539,6 +541,7 @@ routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
 routine app.t_conversation_seq_start(): EXECUTE (mwf_migrator)
 routine app.t_doc_schema(): EXECUTE (mwf_migrator)
+routine app.t_invitation_human_limit(): EXECUTE (mwf_definer)
 routine app.t_live_session_pair(): EXECUTE (mwf_definer)
 routine app.t_live_session_pair_end(): EXECUTE (mwf_definer)
 routine app.t_message_app_delete(): EXECUTE (mwf_migrator)
@@ -548,6 +551,7 @@ routine app.t_message_seq(): EXECUTE (mwf_definer)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_definer)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
+routine app.t_participant_human_limit(): EXECUTE (mwf_definer)
 routine app.t_proposal_app_moves(): EXECUTE (mwf_migrator)
 routine app.t_reflection_unlink(): EXECUTE (mwf_migrator)
 routine app.t_result_live_attempt(): EXECUTE (mwf_definer)
@@ -695,6 +699,7 @@ routine owner app.result_facts(uuid[]): mwf_definer
 routine owner app.scope_actor_is_member(): mwf_definer
 routine owner app.session_abandon_declined(uuid): mwf_definer
 routine owner app.session_archive(uuid): mwf_definer
+routine owner app.session_human_limit(): mwf_migrator
 routine owner app.session_invitee_access(uuid): mwf_definer
 routine owner app.session_parties(uuid[]): mwf_definer
 routine owner app.session_resume(uuid): mwf_definer
@@ -711,6 +716,7 @@ routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
 routine owner app.t_conversation_seq_start(): mwf_migrator
 routine owner app.t_doc_schema(): mwf_migrator
+routine owner app.t_invitation_human_limit(): mwf_definer
 routine owner app.t_live_session_pair(): mwf_definer
 routine owner app.t_live_session_pair_end(): mwf_definer
 routine owner app.t_message_app_delete(): mwf_migrator
@@ -720,6 +726,7 @@ routine owner app.t_message_seq(): mwf_definer
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_definer
 routine owner app.t_participant_cardinality(): mwf_migrator
+routine owner app.t_participant_human_limit(): mwf_definer
 routine owner app.t_proposal_app_moves(): mwf_migrator
 routine owner app.t_reflection_unlink(): mwf_migrator
 routine owner app.t_result_live_attempt(): mwf_definer
