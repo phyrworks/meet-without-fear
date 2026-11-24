@@ -57,8 +57,11 @@ describe production.
 - `ai_access` — `ai_session`: rows of the session in `app.session_scope` only, and only while the acting
   user (`app.current_user_id()`, bound on the AI connection too) is a participant of it
   (`app.scope_actor_is_member`); with no scope or no such actor, none. `"user"`: that session's
-  participants; `brain_activity`: also the acting user's own reflection's sessionless rows, and (open
-  FINDING, work-k5fk.10.33) unattributed ones.
+  participants; `brain_activity`: also the acting user's own reflection's sessionless rows
+  (`ai_reflection`), and their own calls of neither a session nor a reflection — gratitude, meditation,
+  memory formatting/validation, people extraction — by `brain_activity.user_id` (`ai_own_call`,
+  work-k5fk.10.35; a CHECK sets `user_id` on exactly those rows, so an AI transaction with no acting user
+  can neither write nor read one, and account deletion removes them).
 - `worker_access` — `worker_session` (scoped) on the Stage 4 closure's tables and on the follow-ups it
   schedules; `worker_all` elsewhere (retention, due follow-ups / reminders, push tokens cross sessions).
 - `ops_access` — `ops_read`: SELECT on every row of its tables, but only on column lists: exactly the columns the

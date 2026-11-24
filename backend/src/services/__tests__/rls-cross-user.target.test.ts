@@ -317,6 +317,50 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('rls');
     });
 
+    it('brain_activity: a call of neither a session nor a reflection is its acting user’s alone (work-k5fk.10.35)', async () => {
+      // Ada's gratitude/meditation/memory call: written by the AI acting for her, owned by her (user_id)
+      const [{ id }] = await as<{ id: string }>(
+        'mwf_ai',
+        ada,
+        `INSERT INTO brain_activity (user_id, activity_type, model) VALUES ($1, 'LLM_CALL', 'm') RETURNING id::text`,
+        [ada],
+      );
+      expect(await count('mwf_ai', ada, 'brain_activity', 'id = $1', [id])).toBe(1);
+      expect(
+        await as('mwf_ai', ada, `UPDATE brain_activity SET status = 'COMPLETED' WHERE id = $1 RETURNING id::text`, [id]),
+      ).toEqual([{ id }]);
+      // the AI acting for Bob, or for no one, neither reads nor completes it
+      expect(await count('mwf_ai', bob, 'brain_activity', 'id = $1', [id])).toBe(0);
+      expect(await count('mwf_ai', null, 'brain_activity', 'id = $1', [id])).toBe(0);
+      expect(
+        await as('mwf_ai', bob, `UPDATE brain_activity SET output = '{"forged": true}' WHERE id = $1 RETURNING id`, [
+          id,
+        ]),
+      ).toEqual([]);
+      // …nor writes one in her name, nor one with no owner
+      expect(
+        await code(
+          'mwf_ai',
+          bob,
+          `INSERT INTO brain_activity (user_id, activity_type, model) VALUES ($1, 'LLM_CALL', 'm')`,
+          [ada],
+        ),
+      ).toBe('rls');
+      expect(
+        await code('mwf_ai', bob, `INSERT INTO brain_activity (activity_type, model) VALUES ('LLM_CALL', 'm')`),
+      ).toBe('23514');
+      // a session's row has no user owner
+      expect(
+        await code(
+          'mwf_ai',
+          ada,
+          `INSERT INTO brain_activity (session_id, user_id, activity_type, model) VALUES ($1, $2, 'LLM_CALL', 'm')`,
+          [session, ada],
+          session,
+        ),
+      ).toBe('23514');
+    });
+
     it('the worker clears a push token but never sets one, and never writes a telemetry blob (work-k5fk.10.29 R1, R2)', async () => {
       await run.sql(
         `INSERT INTO user_device (user_id, push_token, push_provider) VALUES ($1, 'ExponentPushToken[w]', 'expo')`,

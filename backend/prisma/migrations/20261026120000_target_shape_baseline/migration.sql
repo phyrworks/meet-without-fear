@@ -149,7 +149,7 @@ REVOKE EXECUTE ON FUNCTION app.session_scope() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_scope() TO ai_access, worker_access, mwf_definer;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 167 named objects, all lower-case; 158 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 168 named objects, all lower-case; 159 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -3026,6 +3026,7 @@ CREATE TABLE brain_activity (
     session_id uuid7 REFERENCES session ON DELETE CASCADE,
     reflection_id uuid7 REFERENCES reflection ON DELETE CASCADE,
     participant_user_id uuid7,
+    user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     turn_id turn_id,
     activity_type activity_type NOT NULL,
     call_type brain_call_type,
@@ -3048,15 +3049,21 @@ CREATE TABLE brain_activity (
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
     FOREIGN KEY (session_id, participant_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
-    CHECK (participant_user_id IS NULL OR session_id IS NOT NULL)
+    CHECK (participant_user_id IS NULL OR session_id IS NOT NULL),
+    -- work-k5fk.10.35: a call of neither a session nor a reflection is owned by its acting user, and only such a call
+    -- (a session's or a reflection's row is owned through them)
+    CHECK ((user_id IS NOT NULL) = (session_id IS NULL AND reflection_id IS NULL))
 );
 CREATE INDEX ON brain_activity (session_id);
 CREATE INDEX ON brain_activity (reflection_id);
+CREATE INDEX ON brain_activity (user_id);
+COMMENT ON CONSTRAINT brain_activity_check1 ON brain_activity IS 'work-k5fk.10.35: user_id is set exactly on a call of neither a session nor a reflection — every row has an owner its RLS can name.';
 CREATE INDEX ON brain_activity (session_id, participant_user_id);
 CREATE INDEX ON brain_activity (turn_id);
 CREATE INDEX ON brain_activity (created_at);
 COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retrieval or tool call, with its prompt, output, tokens, cost and timing.';
 COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, participant_user_id) references participant (session_id, user_id).';
+COMMENT ON COLUMN brain_activity.user_id IS 'The acting user of a call of neither a session nor a reflection (gratitude, meditation, memory formatting and validation, people extraction): the row''s owner, the only user whose AI transaction reads or completes it (policy ai_own_call), and whose account deletion removes it. NULL on a session''s or a reflection''s row (work-k5fk.10.35).';
 COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn (a turn_id: bounded, no format).';
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a model_id: a Bedrock model id, the embedding model, or an app pseudo-model such as system-retrieval).';
 COMMENT ON COLUMN brain_activity.input IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: what the call was given — sizes and options, a retrieval''s search queries and detected references; the same key as output (owner decision, work-k5fk.9 follow-up). Timings, tokens, cost, status and call type are plain columns.';
@@ -3065,12 +3072,12 @@ COMMENT ON COLUMN brain_activity.metadata IS 'Ops-readable telemetry (the Neural
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, participant_user_id, reflection_id) ON brain_activity TO mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
+GRANT SELECT (session_id, participant_user_id, reflection_id, user_id) ON brain_activity TO mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
 GRANT DELETE ON brain_activity TO mwf_definer;
 -- mwf_ai: brain-service startActivity: the telemetry row of an AI call, attributed at capture (participant_user_id,
 -- reflection_id; a sessionless row is an inner-work call's, which t_session_scope lets through); id / created_at are
--- column defaults returned by RETURNING
-GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
+-- column defaults returned by RETURNING; user_id: the acting user of a call of neither (work-k5fk.10.35)
+GRANT INSERT (session_id, reflection_id, participant_user_id, user_id, turn_id, activity_type, call_type, model, input, metadata,
               status)
   ON brain_activity TO ai_access;
 -- mwf_ai: startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …; mergeTurnTrace
@@ -4456,6 +4463,8 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     END LOOP;
     -- 4. reflection telemetry (participant telemetry went per session)
     DELETE FROM public.brain_activity b USING public.reflection x WHERE b.reflection_id = x.id AND x.user_id = v_uid;
+    -- and their calls of neither a session nor a reflection (work-k5fk.10.35)
+    DELETE FROM public.brain_activity WHERE user_id = v_uid;
     -- 5. U-class material
     DELETE FROM public.reflection WHERE user_id = v_uid;          -- cascades messages, takeaways, links
     DELETE FROM public.feature_state WHERE user_id = v_uid;
@@ -6174,8 +6183,8 @@ $$;
 --                 participant of it (app.scope_actor_is_member(), rows 9d–9g). Required: unset is NULL, which
 --                 matches no row, so an unscoped or actorless AI statement reads and writes nothing (t_session_scope
 --                 already refused its writes). session: its id; "user": the participants of that session;
---                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and,
---                 FINDING, the unattributed ones (ai_unattributed; work-k5fk.10.33); app.json_schema: reference
+--                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and
+--                 their own calls of neither (ai_own_call, by user_id; work-k5fk.10.35); app.json_schema: reference
 --                 data (ai_reference).
 --   worker_access worker_session on the Stage 4 closure's tables (agreement, agreement_party, session_closure,
 --                 proposal, proposal_choice, proposal_revision) and on the follow-ups it schedules (INSERT): the
@@ -6220,9 +6229,10 @@ CREATE POLICY ai_reflection ON brain_activity TO ai_access
   USING (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id))
   WITH CHECK (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id));
 COMMENT ON POLICY ai_reflection ON brain_activity IS 'An inner-work call''s telemetry: the acting user''s own reflection only (work-k5fk.10.33).';
-CREATE POLICY ai_unattributed ON brain_activity TO ai_access
-  USING (session_id IS NULL AND reflection_id IS NULL) WITH CHECK (session_id IS NULL AND reflection_id IS NULL);
-COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
+CREATE POLICY ai_own_call ON brain_activity TO ai_access
+  USING (session_id IS NULL AND reflection_id IS NULL AND user_id = (SELECT app.current_user_id()))
+  WITH CHECK (session_id IS NULL AND reflection_id IS NULL AND user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY ai_own_call ON brain_activity IS 'A call of neither a session nor a reflection (gratitude, meditation, memory, people extraction): the acting user''s own rows only, by brain_activity.user_id; an AI transaction with no acting user reads and writes none (work-k5fk.10.35, closing the 10.33 finding).';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
   WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL);
@@ -6984,7 +6994,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
-  IF n <> 158 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 158', n; END IF;
+  IF n <> 159 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 159', n; END IF;
 
   -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 41 text
   -- columns typed ciphertext and 5 text[] columns typed

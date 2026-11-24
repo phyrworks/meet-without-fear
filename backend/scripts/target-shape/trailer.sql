@@ -1237,6 +1237,8 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     END LOOP;
     -- 4. reflection telemetry (participant telemetry went per session)
     DELETE FROM public.brain_activity b USING public.reflection x WHERE b.reflection_id = x.id AND x.user_id = v_uid;
+    -- and their calls of neither a session nor a reflection (work-k5fk.10.35)
+    DELETE FROM public.brain_activity WHERE user_id = v_uid;
     -- 5. U-class material
     DELETE FROM public.reflection WHERE user_id = v_uid;          -- cascades messages, takeaways, links
     DELETE FROM public.feature_state WHERE user_id = v_uid;
@@ -2955,8 +2957,8 @@ $$;
 --                 participant of it (app.scope_actor_is_member(), rows 9d–9g). Required: unset is NULL, which
 --                 matches no row, so an unscoped or actorless AI statement reads and writes nothing (t_session_scope
 --                 already refused its writes). session: its id; "user": the participants of that session;
---                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and,
---                 FINDING, the unattributed ones (ai_unattributed; work-k5fk.10.33); app.json_schema: reference
+--                 brain_activity: also the sessionless rows of the acting user's own reflection (ai_reflection) and
+--                 their own calls of neither (ai_own_call, by user_id; work-k5fk.10.35); app.json_schema: reference
 --                 data (ai_reference).
 --   worker_access worker_session on the Stage 4 closure's tables (agreement, agreement_party, session_closure,
 --                 proposal, proposal_choice, proposal_revision) and on the follow-ups it schedules (INSERT): the
@@ -3001,9 +3003,10 @@ CREATE POLICY ai_reflection ON brain_activity TO ai_access
   USING (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id))
   WITH CHECK (session_id IS NULL AND reflection_id IS NOT NULL AND app.owns_reflection(reflection_id));
 COMMENT ON POLICY ai_reflection ON brain_activity IS 'An inner-work call''s telemetry: the acting user''s own reflection only (work-k5fk.10.33).';
-CREATE POLICY ai_unattributed ON brain_activity TO ai_access
-  USING (session_id IS NULL AND reflection_id IS NULL) WITH CHECK (session_id IS NULL AND reflection_id IS NULL);
-COMMENT ON POLICY ai_unattributed ON brain_activity IS 'FINDING (work-k5fk.10.33, left open): a call of neither a session nor a reflection carries no owner, so any AI transaction still reads and completes such a row.';
+CREATE POLICY ai_own_call ON brain_activity TO ai_access
+  USING (session_id IS NULL AND reflection_id IS NULL AND user_id = (SELECT app.current_user_id()))
+  WITH CHECK (session_id IS NULL AND reflection_id IS NULL AND user_id = (SELECT app.current_user_id()));
+COMMENT ON POLICY ai_own_call ON brain_activity IS 'A call of neither a session nor a reflection (gratitude, meditation, memory, people extraction): the acting user''s own rows only, by brain_activity.user_id; an AI transaction with no acting user reads and writes none (work-k5fk.10.35, closing the 10.33 finding).';
 CREATE POLICY worker_read ON brain_activity FOR SELECT TO worker_access USING (true);
 CREATE POLICY worker_purge_blobs ON brain_activity FOR UPDATE TO worker_access USING (true)
   WITH CHECK (input IS NULL AND output IS NULL AND metadata IS NULL);

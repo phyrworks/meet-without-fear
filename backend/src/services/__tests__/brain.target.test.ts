@@ -152,6 +152,38 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     ).toEqual([{ session_id: null, reflection_id: reflectionId, status: 'FAILED' }]);
   });
 
+  it('a call of neither a session nor a reflection (gratitude, meditation, memory) is owned by the acting user, completed by them, and goes with their account (work-k5fk.10.35)', async () => {
+    const { brainService } = await import('../brain-service');
+    const { randomUuidV7 } = await import('./target-roles');
+    const dee = randomUuidV7();
+    await run.sql(`INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, 'Dee')`, [dee, `dee-${process.pid}@e2e.test`]);
+    const a = await actingAs(dee, async () => {
+      const started = await brainService.startActivity({
+        sessionId: `gratitude-${dee}`, // a synthetic id, as gratitude.ts passes: not a session
+        activityType: 'LLM_CALL',
+        model: 'claude-haiku',
+        input: {},
+      });
+      await brainService.completeActivity(started.id, { output: { text: 'ok' }, tokenCountInput: 3 });
+      return started;
+    });
+    expect(a.id).not.toBe('');
+    expect(
+      await run.sql(
+        `SELECT session_id, reflection_id, user_id, status::text AS status FROM brain_activity WHERE id = $1`,
+        [a.id],
+      ),
+    ).toEqual([{ session_id: null, reflection_id: null, user_id: dee, status: 'COMPLETED' }]);
+    // another user's AI transaction cannot complete it: the row stays as Dee's call left it
+    await actingAs(ids.bobUser, () => brainService.failActivity(a.id, new Error('x')));
+    expect(await run.sql(`SELECT status::text AS status FROM brain_activity WHERE id = $1`, [a.id])).toEqual([
+      { status: 'COMPLETED' },
+    ]);
+    // account deletion removes it
+    await run.as('mwf_migrator', null, `SELECT app.anonymize_user_account($1)`, [dee]);
+    expect(await run.sql(`SELECT id FROM brain_activity WHERE id = $1`, [a.id])).toEqual([]);
+  });
+
   // Review r1 F1/F2 (work-k5fk.9): metadata is ops-readable, so the stored trace and error are telemetry only. The
   // trace here is what the orchestrator wrote before the fix — a crisis classification and a model's free dispatch
   // text — and the writer's guard keeps neither.

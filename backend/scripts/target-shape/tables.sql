@@ -2872,6 +2872,7 @@ CREATE TABLE brain_activity (
     session_id uuid7 REFERENCES session ON DELETE CASCADE,
     reflection_id uuid7 REFERENCES reflection ON DELETE CASCADE,
     participant_user_id uuid7,
+    user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     turn_id turn_id,
     activity_type activity_type NOT NULL,
     call_type brain_call_type,
@@ -2894,15 +2895,21 @@ CREATE TABLE brain_activity (
     -- work-k5fk.3: an attributed row's participant is of its session. MATCH SIMPLE skips a key with a NULL in it,
     -- so the CHECK refuses a participant_user_id without a session_id.
     FOREIGN KEY (session_id, participant_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
-    CHECK (participant_user_id IS NULL OR session_id IS NOT NULL)
+    CHECK (participant_user_id IS NULL OR session_id IS NOT NULL),
+    -- work-k5fk.10.35: a call of neither a session nor a reflection is owned by its acting user, and only such a call
+    -- (a session's or a reflection's row is owned through them)
+    CHECK ((user_id IS NOT NULL) = (session_id IS NULL AND reflection_id IS NULL))
 );
 CREATE INDEX ON brain_activity (session_id);
 CREATE INDEX ON brain_activity (reflection_id);
+CREATE INDEX ON brain_activity (user_id);
+COMMENT ON CONSTRAINT brain_activity_check1 ON brain_activity IS 'work-k5fk.10.35: user_id is set exactly on a call of neither a session nor a reflection — every row has an owner its RLS can name.';
 CREATE INDEX ON brain_activity (session_id, participant_user_id);
 CREATE INDEX ON brain_activity (turn_id);
 CREATE INDEX ON brain_activity (created_at);
 COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retrieval or tool call, with its prompt, output, tokens, cost and timing.';
 COMMENT ON COLUMN brain_activity.participant_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, participant_user_id) references participant (session_id, user_id).';
+COMMENT ON COLUMN brain_activity.user_id IS 'The acting user of a call of neither a session nor a reflection (gratitude, meditation, memory formatting and validation, people extraction): the row''s owner, the only user whose AI transaction reads or completes it (policy ai_own_call), and whose account deletion removes it. NULL on a session''s or a reflection''s row (work-k5fk.10.35).';
 COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn (a turn_id: bounded, no format).';
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a model_id: a Bedrock model id, the embedding model, or an app pseudo-model such as system-retrieval).';
 COMMENT ON COLUMN brain_activity.input IS 'encrypted (per-row): jsonb envelope {"$enc": ...}: what the call was given — sizes and options, a retrieval''s search queries and detected references; the same key as output (owner decision, work-k5fk.9 follow-up). Timings, tokens, cost, status and call type are plain columns.';
@@ -2911,12 +2918,12 @@ COMMENT ON COLUMN brain_activity.metadata IS 'Ops-readable telemetry (the Neural
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, participant_user_id, reflection_id) ON brain_activity TO mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
+GRANT SELECT (session_id, participant_user_id, reflection_id, user_id) ON brain_activity TO mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
 GRANT DELETE ON brain_activity TO mwf_definer;
 -- mwf_ai: brain-service startActivity: the telemetry row of an AI call, attributed at capture (participant_user_id,
 -- reflection_id; a sessionless row is an inner-work call's, which t_session_scope lets through); id / created_at are
--- column defaults returned by RETURNING
-GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
+-- column defaults returned by RETURNING; user_id: the acting user of a call of neither (work-k5fk.10.35)
+GRANT INSERT (session_id, reflection_id, participant_user_id, user_id, turn_id, activity_type, call_type, model, input, metadata,
               status)
   ON brain_activity TO ai_access;
 -- mwf_ai: startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …; mergeTurnTrace

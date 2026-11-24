@@ -1103,6 +1103,7 @@ model User {
   featureStates       FeatureState[]
   keys                UserKey[]
   sessionsArchived    Session[]
+  brainActivities     BrainActivity[]
 
   @@unique([id, kind])
   @@map("user")
@@ -1247,6 +1248,7 @@ model BrainActivity {
   sessionId         String?        @map("session_id") @db.Uuid
   reflectionId      String?        @map("reflection_id") @db.Uuid
   participantUserId String?        @map("participant_user_id") @db.Uuid
+  userId            String?        @map("user_id") @db.Uuid
   turnId            String?        @map("turn_id")
   activityType      ActivityType   @map("activity_type")
   callType          BrainCallType? @map("call_type")
@@ -1266,9 +1268,11 @@ model BrainActivity {
   session     Session?     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   reflection  Reflection?  @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   participant Participant? @relation(fields: [sessionId, participantUserId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  user        User?        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([sessionId])
   @@index([reflectionId])
+  @@index([userId])
   @@index([turnId])
   @@index([createdAt])
   @@index([sessionId, participantUserId])

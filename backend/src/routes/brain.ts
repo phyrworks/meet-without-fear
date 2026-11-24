@@ -204,7 +204,7 @@ const OPS_ACTIVITY_SELECT = {
   updatedAt: true,
 } as const satisfies Prisma.BrainActivitySelect;
 
-function activityDTO(a: Omit<BrainActivity, 'input' | 'output'>) {
+function activityDTO(a: Omit<BrainActivity, 'input' | 'output' | 'userId'>) {
   return { ...a, cost: num(a.cost) };
 }
 
