@@ -7410,5 +7410,33 @@ BEGIN
         WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass) <> 1;
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: expected exactly one key: %', bad; END IF;
 
+  -- work-k5fk.23: same session is a key, everywhere. Every foreign key from one session-scoped table (it has a
+  -- session_id) to another pairs session_id with session_id, or its columns lie inside such a key of the same
+  -- table (the single-column key Prisma's relation reads, shadowed by the composite one) — so a new
+  -- single-column intra-session reference fails here instead of accepting another session's row. The one
+  -- exemption: context_share_offer (result_id, attempt_id) → reconciler_result (id, attempt_id) pins the
+  -- result to the offer's own attempt, and both rows pin that attempt with their session_id, so it is one
+  -- session through the attempt (work-k5fk.9, C10).
+  WITH f AS (
+    SELECT c.oid, c.conrelid, c.confrelid, c.conkey,
+           EXISTS (SELECT 1 FROM unnest(c.conkey, c.confkey) k(a, b)
+                   JOIN pg_attribute x ON x.attrelid = c.conrelid AND x.attnum = k.a
+                   JOIN pg_attribute y ON y.attrelid = c.confrelid AND y.attnum = k.b
+                   WHERE x.attname = 'session_id' AND y.attname = 'session_id')
+           OR (c.conrelid = 'public.context_share_offer'::regclass AND c.confrelid = 'public.reconciler_result'::regclass
+               AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM unnest(c.conkey) s(attnum)
+                      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = s.attnum) = '{attempt_id,result_id}')
+             AS pinned
+    FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
+    WHERE c.contype = 'f' AND n.nspname = 'public'
+      AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.conrelid AND attname = 'session_id' AND NOT attisdropped)
+      AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = c.confrelid AND attname = 'session_id' AND NOT attisdropped))
+  SELECT string_agg(f.conrelid::regclass || ': ' || pg_get_constraintdef(f.oid), '; ' ORDER BY 1) INTO bad
+  FROM f
+  WHERE NOT f.pinned
+    AND NOT EXISTS (SELECT 1 FROM f g WHERE g.pinned AND g.conrelid = f.conrelid AND g.confrelid = f.confrelid
+                    AND g.conkey @> f.conkey);
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: intra-session reference(s) not keyed on session_id: %', bad; END IF;
+
 END
 $$;
