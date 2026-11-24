@@ -43,6 +43,13 @@ export interface PrismaClientOptions {
  *     worker arms refuse a NULL one — so an AI write without one fails there, closed;
  *   - app.request_id, riding along whenever one of the two is set (audit only; a statement that
  *     binds nothing else is not wrapped for it).
+ *
+ * Why request_id alone does not wrap a statement (work-k5fk.10.27, decided to leave): with binding on
+ * (required at startup) the statements left without it are the request's before an identity exists —
+ * the auth middleware's sign-in lookup on every request, the signed-out invitation preview, webhooks.
+ * Wrapping them for request_id alone turns each one round trip into four (BEGIN, set_config, the
+ * statement, COMMIT) on the hot path of every request, for a setting nothing reads yet: the fork has
+ * no pgaudit. Revisit when pgaudit lands; until then the API log's requestId is the correlation.
  */
 export function boundSettingsFor(
   role: DatabaseRole,
