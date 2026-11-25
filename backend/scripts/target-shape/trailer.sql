@@ -2603,11 +2603,18 @@ CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
     INSERT INTO public.live_session_pair (user_a, user_b, session_id)
     SELECT least(NEW.user_id, o.user_id), greatest(NEW.user_id, o.user_id), NEW.session_id
     FROM public.participant o
-    WHERE o.session_id = NEW.session_id AND o.kind = 'human' AND o.left_at IS NULL AND o.user_id <> NEW.user_id;
+    WHERE o.session_id = NEW.session_id AND o.kind = 'human' AND o.left_at IS NULL AND o.user_id <> NEW.user_id
+      -- A multi-row INSERT fires this once per row after all rows are written, so each row sees the others:
+      -- skip a pair an earlier row already wrote for THIS session (work-k5fk.31). A pair live in another
+      -- session is not skipped and still fails on the key.
+      AND NOT EXISTS (
+        SELECT 1 FROM public.live_session_pair p
+        WHERE p.user_a = least(NEW.user_id, o.user_id) AND p.user_b = greatest(NEW.user_id, o.user_id)
+          AND p.session_id = NEW.session_id);
     RETURN NULL;
   END
   $$;
-COMMENT ON FUNCTION app.t_live_session_pair() IS 'Trigger (work-k5fk.2): a human joining a live session inserts one live_session_pair row per other present human of it; a second live session for the same pair fails there with unique_violation (live_session_pair_pkey).';
+COMMENT ON FUNCTION app.t_live_session_pair() IS 'Trigger (work-k5fk.2): a human joining a live session inserts one live_session_pair row per other present human of it (once per pair when one INSERT seats several, work-k5fk.31); a second live session for the same pair fails there with unique_violation (live_session_pair_pkey).';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_live_session_pair() FROM PUBLIC;
 CREATE TRIGGER t_live_session_pair AFTER INSERT ON public.participant
