@@ -1162,7 +1162,7 @@ COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted t
 -- app.anonymize_user_in_session.
 GRANT SELECT ON participant TO app_access;
 GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at) ON participant TO app_access;
--- mwf_definer: is_member, partner_user_id, every self/membership test, T-cardinality-*, reveal gate
+-- mwf_definer: is_member, every self/membership test, T-cardinality-*, reveal gate
 GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_definer;
 -- mwf_definer: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
 GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
@@ -1239,24 +1239,26 @@ CREATE INDEX ON proposal (session_id, removed_by_user_id);
 COMMENT ON TABLE proposal IS 'A Stage-4 repair idea: a shared proposal for the needs both see, or one participant''s individual commitment.';
 COMMENT ON COLUMN proposal.created_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, created_by_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN proposal.removed_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, removed_by_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when it was made visible to co-participants.';
+COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when its creator shared it with the co-participants (until then it is the creator''s alone: proposal app_select). Written once, by app.proposal_share only; never cleared (work-k5fk.32 S1).';
 COMMENT ON COLUMN proposal.description IS 'encrypted (session): what the proposal is, AI-proposed or typed (POST /strategies: 10 to 1000).';
 COMMENT ON COLUMN proposal.duration IS 'encrypted (session): free text for how long, e.g. 3 days or 10 minutes, once this week (AI or user; max 100 on POST /strategies). NOT a true interval: nothing parses it.';
 COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text: how the participants will know it worked (max 500 on POST /strategies).';
-COMMENT ON COLUMN proposal.removal_reason IS 'encrypted (session): why it was removed: the AI''s REMOVE reason or the participant''s chat text.';
+COMMENT ON COLUMN proposal.removal_reason IS 'encrypted (session): why it was removed: the AI''s REMOVE reason. Never the participant''s chat text — every member who sees the proposal reads it (work-k5fk.32).';
 COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): ciphertext_list, each element encrypted: need labels the proposal addresses that matched no need_share, as given by the AI or the participant.';
 -- mwf_app: Stage 4 capture, the sub-chat and the shared-proposal routes create and edit proposals and their need labels
 -- (stage4-capture.service.ts, stage4-subchat.service.ts, controllers/stage4.ts). FINDING: capture can set and re-assign
--- created_by_user_id to the PARTNER (from model output) and edit a partner's proposal. shared_at and the
--- CONVERTED_TO_AGREEMENT move stay the job's.
+-- created_by_user_id to the PARTNER (from model output) and edit a partner's proposal. shared_at is
+-- app.proposal_share's alone (work-k5fk.32 S1); the CONVERTED_TO_AGREEMENT move stays the worker's.
 GRANT SELECT ON proposal TO app_access;
 GRANT INSERT (session_id, created_by_user_id, source, kind, status, description, duration, measure_of_success,
               unresolved_need_labels, created_at, updated_at) ON proposal TO app_access;
 GRANT UPDATE (description, duration, measure_of_success, kind, status, created_by_user_id,
               unresolved_need_labels, removed_at, removed_by_user_id, removal_reason, updated_at)
   ON proposal TO app_access;
--- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, session_id, created_by_user_id) ON proposal TO mwf_definer;
+-- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share;
+-- app.proposal_share (the creator's commitment, its kind and status, and the one write of shared_at)
+GRANT SELECT (id, session_id, created_by_user_id, kind, status, shared_at) ON proposal TO mwf_definer;
+GRANT UPDATE (shared_at) ON proposal TO mwf_definer;
 -- mwf_worker: stage4-closure closureInputsAsJob (fix round 1) and stage4.ts agreeIfEveryoneWilling: the closure decides
 -- across every participant — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
 GRANT SELECT (id, session_id, created_by_user_id, kind, status, description, duration, measure_of_success, shared_at)
@@ -1748,8 +1750,9 @@ COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone
 COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record the milestone themselves (a CTA) or only the job (a system fact).';
 -- mwf_app: reference data (P3 §1.1 pattern), read only.
 GRANT SELECT ON milestone TO app_access;
--- mwf_definer: reach_milestone refuses a self-assertable key (the participant's own, through mwf_app's INSERT).
-GRANT SELECT (key, self_assertable) ON milestone TO mwf_definer;
+-- mwf_definer: reach_milestone refuses a self-assertable key (the participant's own, through mwf_app's INSERT), and
+-- a participant-scoped key for anyone but the caller (scope; work-k5fk.32 S2).
+GRANT SELECT (key, self_assertable, scope) ON milestone TO mwf_definer;
 -- mwf_ops (work-k5fk.9, least privilege): exactly the columns the Neural Monitor reads (routes/brain.ts, the stage
 -- shim), never a ciphertext or envelope column — stages (v_current_stage, stage-shim loadCurrentStages).
 GRANT SELECT (key, ordinal, stage_label) ON milestone TO ops_access;

@@ -133,11 +133,12 @@ function getAddBreadcrumb(): ((breadcrumb: SentryBreadcrumb) => void) | null {
 /**
  * Reduce a wire event name to something safe to report.
  *
- * `message.name` is ATTACKER-CONTROLLED. Session members are granted
- * `['subscribe', 'publish']` on `meetwithoutfear:session:{id}`
- * (`backend/src/controllers/auth.ts:240`), so a malicious or compromised partner
- * client can publish an event whose *name* is arbitrary text — including the
- * user's private content. The app's `beforeBreadcrumb` hook
+ * `message.name` is treated as ATTACKER-CONTROLLED. Clients may publish only on
+ * `meetwithoutfear:typing:{id}` (the session channel is subscribe-only since
+ * work-k5fk.32 S8; `backend/src/controllers/auth.ts` ablyCapabilityFor), and
+ * only typing names are handled from there — but a name is still never trusted
+ * into a report, in case a compromised partner client publishes arbitrary text,
+ * including the user's private content. The app's `beforeBreadcrumb` hook
  * (`mobile/app/_layout.tsx:57`) strips known PII *keys*, not arbitrary *values*,
  * so an unsanitized name would sail straight through into Sentry.
  *
@@ -260,6 +261,8 @@ export function useRealtime(config: RealtimeConfig): RealtimeState & RealtimeAct
 
   // Refs for channel and subscription management
   const channelRef = useRef<AblyRealtimeChannel | null>(null);
+  // Typing has its own channel: the session channel is subscribe-only for clients (work-k5fk.32 S8).
+  const typingChannelRef = useRef<AblyRealtimeChannel | null>(null);
   const presenceChannelRef = useRef<AblyRealtimeChannel | null>(null);
   const connectionListenerRef = useRef<((stateChange: Ably.ConnectionStateChange) => void) | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -510,6 +513,15 @@ export function useRealtime(config: RealtimeConfig): RealtimeState & RealtimeAct
           return;
         }
 
+        // Typing indicators: the one channel clients publish on (work-k5fk.32 S8). Anything a partner client
+        // publishes there other than typing.start / typing.stop is dropped, never handled as a session event.
+        const typingChannel = ably.channels.get(REALTIME_CHANNELS.typing(sessionId));
+        typingChannelRef.current = typingChannel;
+        await typingChannel.subscribe((message: Ably.Message) => {
+          if (message.name === 'typing.start' || message.name === 'typing.stop') handleMessage(message);
+        });
+        if (isCleanedUp) return;
+
         // Set up presence if enabled
         if (enablePresence) {
           console.log('[Realtime] Entering presence...');
@@ -633,6 +645,13 @@ export function useRealtime(config: RealtimeConfig): RealtimeState & RealtimeAct
           console.warn('[Realtime] Error during channel cleanup:', err);
         }
       }
+      if (typingChannelRef.current) {
+        try {
+          typingChannelRef.current.unsubscribe();
+        } catch (err) {
+          console.warn('[Realtime] Error during typing channel cleanup:', err);
+        }
+      }
       if (presenceChannelRef.current) {
         try {
           presenceChannelRef.current.presence.unsubscribe();
@@ -645,6 +664,7 @@ export function useRealtime(config: RealtimeConfig): RealtimeState & RealtimeAct
       }
 
       channelRef.current = null;
+      typingChannelRef.current = null;
       presenceChannelRef.current = null;
 
       // Clear typing timeout
@@ -710,7 +730,7 @@ export function useRealtime(config: RealtimeConfig): RealtimeState & RealtimeAct
 
   const sendTyping = useCallback(
     (isTyping: boolean) => {
-      if (!channelRef.current || !user?.id) return;
+      if (!typingChannelRef.current || !user?.id) return;
 
       // Debounce typing events
       if (lastTypingRef.current === isTyping) return;
@@ -723,7 +743,7 @@ export function useRealtime(config: RealtimeConfig): RealtimeState & RealtimeAct
       }
 
       const event = isTyping ? 'typing.start' : 'typing.stop';
-      channelRef.current.publish(event, {
+      typingChannelRef.current.publish(event, {
         userId: user.id,
         sessionId,
         isTyping,

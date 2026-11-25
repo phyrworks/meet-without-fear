@@ -55,10 +55,14 @@ describe production.
   creator, convert it to an agreement, attribute a removal to someone else). Deviations from §6,
   each in its policy's COMMENT: `empathy_review` also shows the author a review once sent (and is
   written only once the attempt is revealed); `follow_up` shows a partner's INDIVIDUAL entry only once
-  it is opted in to sharing.
+  it is opted in to sharing. Private until shared (owner decision 2026-11-25, work-k5fk.32): `proposal`
+  shows a partner's INDIVIDUAL_COMMITMENT only once its creator shared it (`shared_at`, written by
+  `app.proposal_share` alone, when they share their Stage 4 stances), and `proposal_need`,
+  `proposal_revision` and `proposal_choice` follow the proposal; `follow_up_checkin` shows a partner's
+  check-in on a SHARED follow-up only once the caller has checked in too (`app.checked_in`).
 - `ai_access` — `ai_session`: rows of the session in `app.session_scope` only, and only while the acting
-  user (`app.current_user_id()`, bound on the AI connection too) is a participant of it
-  (`app.scope_actor_is_member`); with no scope or no such actor, none. `"user"`: that session's
+  user (`app.current_user_id()`, bound on the AI connection too) is a present participant of it, not one who
+  left (`app.scope_actor_is_member`, work-k5fk.32); with no scope or no such actor, none. `"user"`: that session's
   participants; `brain_activity`: also the acting user's own reflection's sessionless rows
   (`ai_reflection`), and their own calls of neither a session nor a reflection — gratitude, meditation,
   memory formatting/validation, people extraction — by `brain_activity.user_id` (`ai_own_call`,

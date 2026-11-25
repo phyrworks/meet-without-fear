@@ -12,7 +12,14 @@
  */
 
 import { Request, Response } from 'express';
-import { getMe, updateProfile, updatePushToken, deletePushToken, getAblyToken } from '../../controllers/auth';
+import {
+  ablyCapabilityFor,
+  getMe,
+  updateProfile,
+  updatePushToken,
+  deletePushToken,
+  getAblyToken,
+} from '../../controllers/auth';
 import { UnauthorizedError, ValidationError } from '../../middleware/errors';
 
 // Mock Prisma
@@ -189,6 +196,18 @@ describe('Auth API', () => {
       await getAblyToken(req as Request, res as Response, mockNext);
 
       expect(mockNext).toHaveBeenCalledWith(expect.any(UnauthorizedError));
+    });
+
+    it('grants no client publish on a session channel: only the typing channel takes a client publish (work-k5fk.32 S8)', () => {
+      expect(ablyCapabilityFor('u1', ['s1', 's2'])).toEqual({
+        'meetwithoutfear:user:u1': ['subscribe'],
+        'meetwithoutfear:session:s1': ['subscribe'],
+        'meetwithoutfear:presence:s1': ['subscribe', 'presence'],
+        'meetwithoutfear:typing:s1': ['subscribe', 'publish'],
+        'meetwithoutfear:session:s2': ['subscribe'],
+        'meetwithoutfear:presence:s2': ['subscribe', 'presence'],
+        'meetwithoutfear:typing:s2': ['subscribe', 'publish'],
+      });
     });
   });
 });

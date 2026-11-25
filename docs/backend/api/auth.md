@@ -155,8 +155,9 @@ Token capability always includes a private notification channel for the user. Se
 ```json
 {
   "meetwithoutfear:user:<userId>": ["subscribe"],
-  "meetwithoutfear:session:sess_abc123": ["subscribe", "publish"],
-  "meetwithoutfear:session:sess_abc123:presence": ["presence"]
+  "meetwithoutfear:session:sess_abc123": ["subscribe"],
+  "meetwithoutfear:presence:sess_abc123": ["subscribe", "presence"],
+  "meetwithoutfear:typing:sess_abc123": ["subscribe", "publish"]
 }
 ```
 

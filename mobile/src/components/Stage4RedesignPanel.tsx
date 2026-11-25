@@ -9,6 +9,7 @@ import {
   Stage4CoverageStatus,
   Stage4Phase,
   Stage4ProposalKind,
+  Stage4ProposalStatus,
   Stage4SelectionDecision,
 } from '@meet-without-fear/shared';
 import { useAppAppearance } from '@/theme';
@@ -93,6 +94,16 @@ function outcomeReasonLabel(reason: Stage4ClosureReason): string {
     default:
       return reason;
   }
+}
+
+/**
+ * Whether the viewer has an individual commitment of their own still live. Sharing one's stances shares those
+ * commitments with the partner too (work-k5fk.32 S1: private until shared), so the share CTA says so.
+ */
+function hasOwnCommitments(state: GetStage4StateResponse): boolean {
+  return state.inventory.individualCommitments.some(
+    (p) => p.ownerLabel === 'You' && p.status !== Stage4ProposalStatus.REMOVED
+  );
 }
 
 function proposalKindLabel(kind: Stage4ProposalKind): string {
@@ -632,6 +643,11 @@ export function Stage4RedesignFooter({
               There are still needs unaddressed — brainstorm or set them aside first.
             </Text>
           )}
+          {hasOwnCommitments(state) && (
+            <Text style={styles.actionHint} testID="stage4-share-commitments-hint">
+              Your own commitments are shared with {who} too.
+            </Text>
+          )}
         </View>
       </View>
     );
@@ -1069,6 +1085,11 @@ export function Stage4RedesignPanel({
               {allMyDecisionsMade && !needsGated && (
                 <Text style={styles.actionHint} testID="stage4-needs-gate-hint-inline">
                   There are still needs unaddressed — brainstorm or set them aside first.
+                </Text>
+              )}
+              {hasOwnCommitments(state) && (
+                <Text style={styles.actionHint} testID="stage4-share-commitments-hint-inline">
+                  Your own commitments are shared with {who} too.
                 </Text>
               )}
             </View>

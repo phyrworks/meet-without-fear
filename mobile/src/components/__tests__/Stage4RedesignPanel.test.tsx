@@ -641,6 +641,24 @@ describe('Stage4RedesignPanel', () => {
       expect(screen.getByTestId('stage4-needs-gate-hint-inline')).toBeTruthy();
     });
 
+    it('says the share also shows the partner your own commitments, and only when you have one (work-k5fk.32)', () => {
+      const { unmount } = render(<Stage4RedesignPanel {...defaultProps} />);
+      expect(screen.getByTestId('stage4-share-commitments-hint-inline')).toBeTruthy();
+      unmount();
+      const partnerOnly: GetStage4StateResponse = {
+        ...baseState,
+        inventory: {
+          ...baseState.inventory,
+          individualCommitments: baseState.inventory.individualCommitments.map((p) => ({
+            ...p,
+            ownerLabel: 'Partner',
+          })),
+        },
+      };
+      render(<Stage4RedesignPanel {...defaultProps} state={partnerOnly} />);
+      expect(screen.queryByTestId('stage4-share-commitments-hint-inline')).toBeNull();
+    });
+
     it('enables Share once every open need is declined', () => {
       const gatedState: GetStage4StateResponse = {
         ...baseState,

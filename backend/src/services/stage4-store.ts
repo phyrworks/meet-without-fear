@@ -169,15 +169,12 @@ type ProposalAccessFacts = Pick<ProposalRow, 'kind' | 'createdByUserId' | 'share
 /**
  * May `viewer` see the proposal (loadProposals' rule, spec §1.4): every
  * SHARED_PROPOSAL — shared with every member from birth — and an
- * INDIVIDUAL_COMMITMENT only to its creator, or once shared (shared_at).
+ * INDIVIDUAL_COMMITMENT only to its creator, or once shared (shared_at, which
+ * shareChoices stamps through app.proposal_share). The proposal app_select
+ * policy is the same rule in the database (work-k5fk.32 S1).
  */
 export function proposalVisibleTo(p: ProposalAccessFacts, viewer: Seat): boolean {
-  return (
-    p.kind === 'SHARED_PROPOSAL' ||
-    p.createdByUserId === viewer.userId ||
-    p.createdByUserId === null ||
-    p.sharedAt !== null
-  );
+  return p.kind === 'SHARED_PROPOSAL' || p.createdByUserId === viewer.userId || p.sharedAt !== null;
 }
 
 /**
@@ -208,7 +205,6 @@ export async function loadProposals(sessionId: string, viewer?: Seat): Promise<P
             OR: [
               { kind: 'SHARED_PROPOSAL' },
               { createdByUserId: viewer.userId },
-              { createdByUserId: null },
               { sharedAt: { not: null } },
             ],
           }
@@ -446,6 +442,14 @@ export async function shareChoices(seat: Seat): Promise<boolean> {
   // notes — become the co-participant's to read with the milestone, so the
   // hook runs in the milestone's transaction. W13 re-encrypts here.
   return prisma.$transaction(async tx => {
+    // Sharing one's stances shares one's own individual commitments with them (work-k5fk.32 S1, owner decision
+    // 2026-11-25: private until shared): each one not removed nor shared yet gets its shared_at from
+    // app.proposal_share, the only writer. Set once — pulling the stances back to revise leaves them shared. The
+    // description is session-encrypted, so nothing re-encrypts.
+    await tx.$queryRaw`
+      SELECT app.proposal_share(p.id) FROM proposal p
+      WHERE p.session_id = ${seat.sessionId}::uuid AND p.created_by_user_id = ${seat.userId}::uuid
+        AND p.kind = 'INDIVIDUAL_COMMITMENT' AND p.status <> 'REMOVED' AND p.shared_at IS NULL`;
     const reached = await reachMilestone(seat, 'choices_shared', new Date(), tx);
     await reencryptForSession(
       {

@@ -827,10 +827,73 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           [commitment, session, bob],
         ),
       ).toBe('rls');
+      // Private until shared (spec §1.4, owner decision 2026-11-25, work-k5fk.32 S1): Bob reads neither Ada's
+      // unshared commitment nor anything hung off it — its need link, its revision text, her choice on it (even
+      // once her choices are shared).
+      const [{ id: need }] = await run.sql<{ id: string }>(
+        `INSERT INTO need (label, category, ai_confidence, user_id, session_id)
+         VALUES ('PROBE_COMMITMENT_NEED', 'SAFETY', 0.9, $1, $2) RETURNING id::text`,
+        [ada, session],
+      );
+      await run.sql(
+        `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'SAFETY', 'n')`,
+        [need, session, ada],
+      );
+      await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [
+        commitment,
+        need,
+        session,
+      ]);
+      await run.sql(
+        `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after)
+         VALUES ($1, $2, $3, 'CREATED', '{"description": "PROBE_COMMITMENT"}')`,
+        [commitment, session, ada],
+      );
+      await run.sql(
+        `INSERT INTO proposal_choice (proposal_id, session_id, user_id, decision, note) VALUES ($1, $2, $3, 'WILLING', 'PROBE_NOTE')`,
+        [commitment, session, ada],
+      );
+      await run.sql(
+        `INSERT INTO participant_milestone (session_id, user_id, milestone_key) VALUES ($1, $2, 'choices_shared') ON CONFLICT DO NOTHING`,
+        [session, ada],
+      );
+      const bobSees = async () =>
+        Promise.all([
+          count('mwf_app', bob, 'proposal', 'id = $1', [commitment]),
+          count('mwf_app', bob, 'proposal_need', 'proposal_id = $1', [commitment]),
+          count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [commitment]),
+          count('mwf_app', bob, 'proposal_choice', 'proposal_id = $1', [commitment]),
+          count('mwf_app', bob, 'v_session_closure_items', 'session_id = $1 AND $2::uuid = ANY (individual_commitment_ids)', [session, commitment]),
+        ]);
+      expect(await bobSees()).toEqual([0, 0, 0, 0, 0]);
+      expect(await count('mwf_app', ada, 'proposal', 'id = $1', [commitment])).toBe(1);
+      // The one writer of shared_at is app.proposal_share, and only for its creator: not Bob, not Carol, not the
+      // app by an UPDATE (no column grant), not the AI.
+      expect(await code('mwf_app', bob, `SELECT app.proposal_share($1)`, [commitment])).toBe('P0002');
+      expect(await code('mwf_app', carol, `SELECT app.proposal_share($1)`, [commitment])).toBe('P0002');
+      expect(await code('mwf_app', ada, `UPDATE proposal SET shared_at = now() WHERE id = $1`, [commitment])).toBe(
+        '42501',
+      );
+      expect(await code('mwf_ai', ada, `SELECT app.proposal_share($1)`, [commitment], session)).toBe('42501');
+      expect(await code('mwf_app', ada, `SELECT app.proposal_share($1)`, [proposal])).toBe('23514'); // a shared proposal
+      expect(await bobSees()).toEqual([0, 0, 0, 0, 0]);
+      // Ada shares it: from then on Bob reads it and what hangs off it. Once only — a second share stamps nothing.
+      expect(await as('mwf_app', ada, `SELECT app.proposal_share($1) AS stamped`, [commitment])).toEqual([
+        { stamped: true },
+      ]);
+      const [{ shared_at: first }] = await run.sql<{ shared_at: Date }>(`SELECT shared_at FROM proposal WHERE id = $1`, [
+        commitment,
+      ]);
+      expect(first).not.toBeNull();
+      expect(await as('mwf_app', ada, `SELECT app.proposal_share($1) AS stamped`, [commitment])).toEqual([
+        { stamped: false },
+      ]);
+      expect(await run.sql(`SELECT shared_at FROM proposal WHERE id = $1`, [commitment])).toEqual([{ shared_at: first }]);
+      expect(await bobSees()).toEqual([1, 1, 1, 1, 1]);
+      expect(await count('mwf_app', carol, 'proposal', 'id = $1', [commitment])).toBe(0);
       // Creator-only until shared (work-k5fk.10.10 / 10.11, owner decision 2026-11-23): shared_at makes Ada's
       // commitment visible to Bob, never his to edit or revise; her SHARED_PROPOSAL is shared from birth, so Bob may;
       // Ada always may.
-      await run.sql(`UPDATE proposal SET shared_at = now() WHERE id = $1`, [commitment]);
       expect(
         await as('mwf_app', bob, `UPDATE proposal SET description = 'rewritten' WHERE id = $1 RETURNING id`, [
           commitment,
@@ -948,7 +1011,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       }
     });
 
-    it('follow_up, follow_up_checkin: a check-in is the partner’s only once a SHARED follow-up completes; Bob cannot share Ada’s entry', async () => {
+    it('follow_up, follow_up_checkin: a check-in is the partner’s only once both have checked in on a SHARED follow-up; Bob cannot share Ada’s entry', async () => {
       expect(await count('mwf_app', bob, 'follow_up', 'id = $1', [shared])).toBe(1);
       expect(await count('mwf_app', carol, 'follow_up')).toBe(0);
       expect(
@@ -961,8 +1024,26 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [shared, session, ada],
       );
       expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
+      // Owner decision 2026-11-25 (work-k5fk.32 S6): hidden until both have submitted — the follow-up going PARTIAL
+      // (Ada checked in) or even COMPLETED does not hand Bob her answers before he gives his own.
+      await run.sql(`UPDATE follow_up SET status = 'PARTIAL' WHERE id = $1`, [shared]);
+      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
       await run.sql(`UPDATE follow_up SET status = 'COMPLETED', completed_at = now() WHERE id = $1`, [shared]);
-      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(1);
+      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
+      expect(await count('mwf_app', bob, 'v_follow_up_cycle', `follow_up_id = $1 AND $2 = ANY (submitted_user_ids)`, [shared, ada])).toBe(0);
+      await run.sql(
+        `INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id, payload) VALUES ($1, $2, $3, '{}')`,
+        [shared, session, bob],
+      );
+      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(2);
+      expect(await count('mwf_app', ada, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(2);
+      expect(await count('mwf_app', carol, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
+      // An INDIVIDUAL follow-up's check-in stays its owner's, whoever else checked in anywhere.
+      await run.sql(
+        `INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id, payload) VALUES ($1, $2, $3, '{}')`,
+        [individual, session, ada],
+      );
+      expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [individual])).toBe(0);
       expect(
         await code(
           'mwf_app',
@@ -1507,6 +1588,145 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           [p],
         ),
       ).toBe('ok');
+    });
+  });
+
+  /**
+   * Batch B1 (work-k5fk.32, owner decision 2026-11-25: everything a user writes is private until they share it, and
+   * the database enforces that). Its own sessions, so nothing above is disturbed: Fay invited Gus, who accepted;
+   * a second session where Hal declined Fay's invitation.
+   */
+  describe('work-k5fk.32 (B1 privacy)', () => {
+    let fay: string;
+    let gus: string;
+    let hal: string;
+    let fg: string;
+    let declined: string;
+    let declinedInvitation: string;
+    beforeAll(async () => {
+      [fay, gus, hal] = [randomUuidV7(), randomUuidV7(), randomUuidV7()];
+      for (const [id, name] of [
+        [fay, 'Fay'],
+        [gus, 'Gus'],
+        [hal, 'Hal'],
+      ]) {
+        await run.sql(`INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, $3)`, [
+          id,
+          `b1-${name.toLowerCase()}-${process.pid}@e2e.test`,
+          name,
+        ]);
+      }
+      [{ id: fg }] = await run.sql<{ id: string }>(
+        `INSERT INTO session (status, topic_frame) VALUES ('ACTIVE', 'PROBE_B1') RETURNING id::text`,
+      );
+      await run.sql(`INSERT INTO participant (session_id, user_id, kind) VALUES ($1, $2, 'human')`, [fg, fay]);
+      await run.sql(
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`,
+        [fg, gus, fay],
+      );
+      await run.sql(
+        `INSERT INTO invitation (session_id, invited_by_user_id, accepted_by_user_id, claimed_by_user_id, status,
+                                 accepted_at, claimed_at, expires_at)
+         VALUES ($1, $2, $3, $3, 'ACCEPTED', now(), now(), now() + interval '7 days')`,
+        [fg, fay, gus],
+      );
+      [{ id: declined }] = await run.sql<{ id: string }>(
+        `INSERT INTO session (status, topic_frame) VALUES ('INVITED', 'PROBE_B1_DECLINED') RETURNING id::text`,
+      );
+      await run.sql(`INSERT INTO participant (session_id, user_id, kind) VALUES ($1, $2, 'human')`, [declined, fay]);
+      [{ id: declinedInvitation }] = await run.sql<{ id: string }>(
+        `INSERT INTO invitation (session_id, invited_by_user_id, claimed_by_user_id, status, declined_at, claimed_at, expires_at)
+         VALUES ($1, $2, $3, 'DECLINED', now(), now(), now() + interval '7 days') RETURNING id::text`,
+        [declined, fay, hal],
+      );
+    });
+
+    const reached = async (user: string, key: string) =>
+      (
+        await run.sql<{ reached_at: Date }>(
+          `SELECT reached_at FROM participant_milestone WHERE session_id = $1 AND user_id = $2 AND milestone_key = $3`,
+          [fg, user, key],
+        )
+      )[0]?.reached_at ?? null;
+    const reach = (caller: string, user: string, key: string, instant: string | null = null) =>
+      code('mwf_app', caller, `SELECT app.reach_milestone($1, $2, $3, $4::timestamptz)`, [fg, user, key, instant]);
+
+    it('S2: a participant-scoped milestone is reached only for oneself; for the partner only a session key, paused, or the inviter’s invitation_sent', async () => {
+      // Gus cannot mark Fay's own progress
+      for (const key of ['empathy_submitted', 'empathy_ready', 'repair_walkthrough_started']) {
+        expect(await reach(gus, fay, key)).toBe('42501');
+        expect(await reached(fay, key)).toBeNull();
+      }
+      // ...but his own, yes
+      expect(await reach(gus, gus, 'repair_walkthrough_started')).toBe('ok');
+      // a session-scoped fact, and pausing, are reached for everyone at once
+      expect(await reach(gus, fay, 'needs_shared')).toBe('ok');
+      expect(await reach(gus, fay, 'paused')).toBe('ok');
+      // invitation_sent: Gus accepted Fay's invitation, so he may record hers; Fay accepted nothing of Gus's
+      expect(await reach(fay, gus, 'invitation_sent')).toBe('42501');
+      expect(await reach(gus, fay, 'invitation_sent')).toBe('ok');
+      expect(await reached(fay, 'invitation_sent')).not.toBeNull();
+      // Carol, in no session of theirs, reaches nothing
+      expect(await reach(carol, fay, 'needs_validated')).toBe('P0002');
+    });
+
+    it('S7 (schema): the request path’s instant is clamped to the last ten minutes, never ahead', async () => {
+      const before = Date.now();
+      expect(await reach(gus, gus, 'empathy_submitted', '2000-01-01T00:00:00Z')).toBe('ok');
+      expect(await reach(gus, gus, 'empathy_ready', '2999-01-01T00:00:00Z')).toBe('ok');
+      const old = (await reached(gus, 'empathy_submitted'))!.getTime();
+      const future = (await reached(gus, 'empathy_ready'))!.getTime();
+      expect(old).toBeGreaterThanOrEqual(before - 10 * 60_000 - 5_000);
+      expect(future).toBeLessThanOrEqual(Date.now() + 1_000);
+    });
+
+    it('S7: only the decliner ends the declined session', async () => {
+      for (const caller of [gus, carol]) {
+        expect(await code('mwf_app', caller, `SELECT app.session_abandon_declined($1)`, [declinedInvitation])).toBe(
+          'P0002',
+        );
+      }
+      expect(await code('mwf_app', fay, `SELECT app.session_abandon_declined($1)`, [declinedInvitation])).toBe('P0002');
+      expect(await run.sql(`SELECT status::text FROM session WHERE id = $1`, [declined])).toEqual([
+        { status: 'INVITED' },
+      ]);
+      expect(await code('mwf_app', hal, `SELECT app.session_abandon_declined($1)`, [declinedInvitation])).toBe('ok');
+      expect(await run.sql(`SELECT status::text FROM session WHERE id = $1`, [declined])).toEqual([
+        { status: 'ABANDONED' },
+      ]);
+    });
+
+    it('S7: a partner’s share offers expire only once the Stage 2 window has closed for everyone', async () => {
+      const expire = (caller: string, subjects: string[]) =>
+        code('mwf_app', caller, `SELECT app.share_offers_expire($1, $2::uuid[])`, [fg, subjects]);
+      expect(await expire(gus, [gus])).toBe('ok');
+      expect(await expire(gus, [fay])).toBe('42501');
+      expect(await expire(gus, [gus, fay])).toBe('42501');
+      expect(await reach(gus, gus, 'empathy_validated')).toBe('ok');
+      expect(await expire(gus, [fay])).toBe('42501'); // Fay's window is still open
+      expect(await reach(gus, fay, 'empathy_validated')).toBe('ok');
+      expect(await expire(gus, [gus, fay])).toBe('ok');
+    });
+
+    it('S7: app.partner_user_id is gone (it had no caller)', async () => {
+      expect(await run.sql(`SELECT to_regprocedure('app.partner_user_id(uuid)') AS f`)).toEqual([{ f: null }]);
+    });
+
+    it('S4: the AI acts for no leaver — reads nothing and writes nothing in the session as them', async () => {
+      const [{ id: fayMain }] = await run.sql<{ id: string }>(
+        `INSERT INTO conversation (session_id, user_id, kind) VALUES ($1, $2, 'MAIN') RETURNING id::text`,
+        [fg, fay],
+      );
+      const line = `INSERT INTO message (conversation_id, session_id, role, kind, content) VALUES ($1, $2, 'AI', 'CHAT', 'PROBE_AI_LINE') RETURNING seq`;
+      // control: acting for Gus while he is present, the AI reads and writes in its scoped session
+      expect(await count('mwf_ai', gus, 'conversation', 'session_id = $1', [fg], fg)).toBe(1);
+      expect(await code('mwf_ai', gus, line, [fayMain, fg], fg)).toBe('ok');
+      await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [fg, gus]);
+      expect(await count('mwf_ai', gus, 'conversation', 'session_id = $1', [fg], fg)).toBe(0);
+      expect(await count('mwf_ai', gus, 'message', 'session_id = $1', [fg], fg)).toBe(0);
+      expect(await code('mwf_ai', gus, line, [fayMain, fg], fg)).toBe('rls');
+      // acting for Fay, who is still there: unchanged
+      expect(await code('mwf_ai', fay, line, [fayMain, fg], fg)).toBe('ok');
     });
   });
 });

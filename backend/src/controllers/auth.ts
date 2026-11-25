@@ -35,6 +35,7 @@ import {
   updateMemoryPreferencesRequestSchema,
   updateNotificationPreferencesRequestSchema,
   updatePrivacyPreferencesRequestSchema,
+  REALTIME_CHANNELS,
 } from '@meet-without-fear/shared';
 import { deleteAccountWithNotifications } from '../services/account-deletion';
 import { isValidPushToken, sendTestPushNotification } from '../services/push';
@@ -195,6 +196,24 @@ export const updatePushToken = asyncHandler(async (req: Request, res: Response):
  *
  * If Ably is not configured, returns a mock token response.
  */
+/**
+ * The Ably capability of a user's token: their private notification channel, and per live session the session
+ * channel (subscribe only — only the server publishes session events, so a client cannot forge one for its
+ * partner; work-k5fk.32 S8), the presence channel, and the typing channel, the one a client publishes on.
+ * Note: 'presence' capability must be on the same channel as subscribe.
+ */
+export function ablyCapabilityFor(userId: string, sessionIds: string[]): Record<string, string[]> {
+  // ALWAYS allow access to the user's private notification channel
+  // This is required for useNotificationChannel to work regardless of session state
+  const capability: Record<string, string[]> = { [REALTIME_CHANNELS.user(userId)]: ['subscribe'] };
+  for (const id of sessionIds) {
+    capability[REALTIME_CHANNELS.session(id)] = ['subscribe'];
+    capability[REALTIME_CHANNELS.presence(id)] = ['subscribe', 'presence'];
+    capability[REALTIME_CHANNELS.typing(id)] = ['subscribe', 'publish'];
+  }
+  return capability;
+}
+
 export const getAblyToken = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
 
@@ -240,19 +259,10 @@ export const getAblyToken = asyncHandler(async (req: Request, res: Response): Pr
     select: { id: true },
   });
 
-  // Build capability object - scope to user's active sessions
-  // Note: 'presence' capability must be on the same channel as subscribe/publish
-  const capability: Record<string, string[]> = {};
-
-  // ALWAYS allow access to the user's private notification channel
-  // This is required for useNotificationChannel to work regardless of session state
-  capability[`meetwithoutfear:user:${user.id}`] = ['subscribe'];
-
-  // Add capabilities for specific sessions
-  for (const session of sessions) {
-    capability[`meetwithoutfear:session:${session.id}`] = ['subscribe', 'publish'];
-    capability[`meetwithoutfear:presence:${session.id}`] = ['subscribe', 'presence'];
-  }
+  const capability = ablyCapabilityFor(
+    user.id,
+    sessions.map(s => s.id),
+  );
 
   try {
     // Dynamic import to handle when Ably is not installed

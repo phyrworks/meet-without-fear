@@ -36,7 +36,17 @@ Each session has a private channel:
 meetwithoutfear:session:{sessionId}
 ```
 
-Both participants subscribe to this channel for session-level events.
+Both participants subscribe to this channel for session-level events. Clients hold `subscribe` only: the server is
+the one publisher (work-k5fk.32), so a client cannot forge a session event for its partner.
+
+### Typing Channel
+
+The one channel a client publishes on, and only `typing.start` / `typing.stop` (clients drop any other name
+received there):
+
+```
+meetwithoutfear:typing:{sessionId}
+```
 
 ### User Presence Channel
 
@@ -299,8 +309,11 @@ function generateAblyCapability(userId: string, sessionIds: string[]) {
   const capability: Record<string, string[]> = {};
 
   for (const sessionId of sessionIds) {
-    capability[`meetwithoutfear:session:${sessionId}`] = ['subscribe', 'publish'];
-    capability[`meetwithoutfear:session:${sessionId}:presence`] = ['presence'];
+    // subscribe only: only the server publishes session events (work-k5fk.32)
+    capability[`meetwithoutfear:session:${sessionId}`] = ['subscribe'];
+    capability[`meetwithoutfear:presence:${sessionId}`] = ['subscribe', 'presence'];
+    // the one channel a client publishes on: typing.start / typing.stop only
+    capability[`meetwithoutfear:typing:${sessionId}`] = ['subscribe', 'publish'];
   }
 
   return capability;

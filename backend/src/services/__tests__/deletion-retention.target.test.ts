@@ -184,6 +184,13 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
         },
         fn,
       );
+    // The AI acts for no leaver (work-k5fk.32 S4: app.scope_actor_is_member requires left_at IS NULL), and the leave
+    // test above left Ada: she is present again just while her request writes the telemetry, then left as before.
+    const [{ left_at: adaLeftAt }] = await run.sql<{ left_at: Date }>(
+      `UPDATE participant SET left_at = NULL WHERE session_id = $1 AND user_id = $2
+       RETURNING (SELECT left_at FROM participant WHERE session_id = $1 AND user_id = $2) AS left_at`,
+      [ids.session, ids.adaUser],
+    );
     const reconcilerRow = await asAdaRequest(() =>
       brainService.startActivity({
         sessionId: ids.session,
@@ -208,6 +215,11 @@ describeTarget('deletion and retention on the target (retention as mwf_worker, d
     for (const row of [reconcilerRow, ownRow]) {
       await brainService.completeActivity(row.id, { output: { text: 'PROBE_TS12_BOB_PRIVATE_LINE' } });
     }
+    await run.sql(`UPDATE participant SET left_at = $3 WHERE session_id = $1 AND user_id = $2`, [
+      ids.session,
+      ids.adaUser,
+      adaLeftAt,
+    ]);
     expect(
       await run.sql(
         `SELECT turn_id, participant_user_id FROM brain_activity WHERE turn_id LIKE 'ts12-r40-%' ORDER BY turn_id`,

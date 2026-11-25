@@ -115,9 +115,9 @@ follow_up_checkin app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (
 follow_up_checkin app_insert FOR INSERT TO app_access USING (-) CHECK ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND (EXISTS ( SELECT 1
    FROM follow_up f
   WHERE (((f.id)::uuid = (follow_up_checkin.follow_up_id)::uuid) AND ((f.scope = 'SHARED'::follow_up_scope) OR ((f.owner_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))))))))
-follow_up_checkin app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+follow_up_checkin app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND app.checked_in((follow_up_id)::uuid) AND (EXISTS ( SELECT 1
    FROM follow_up f
-  WHERE (((f.id)::uuid = (follow_up_checkin.follow_up_id)::uuid) AND (f.scope = 'SHARED'::follow_up_scope) AND (f.status = ANY (ARRAY['COMPLETED'::follow_up_status, 'PARTIAL'::follow_up_status])))))))) CHECK (-)
+  WHERE (((f.id)::uuid = (follow_up_checkin.follow_up_id)::uuid) AND (f.scope = 'SHARED'::follow_up_scope))))))) CHECK (-)
 follow_up_checkin definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 follow_up_checkin diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 follow_up_note [rls true, force true]
@@ -213,7 +213,7 @@ proposal [rls true, force true]
 proposal app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 proposal app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (app.is_current_member((session_id)::uuid)) CHECK (app.is_current_member((session_id)::uuid))
 proposal app_insert FOR INSERT TO app_access USING (-) CHECK ((((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid) AND (status = 'ACTIVE'::proposal_status) AND (removed_by_user_id IS NULL)))
-proposal app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+proposal app_select FOR SELECT TO app_access USING ((app.is_member((session_id)::uuid) AND ((kind = 'SHARED_PROPOSAL'::proposal_kind) OR ((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (shared_at IS NOT NULL)))) CHECK (-)
 proposal app_update FOR UPDATE TO app_access USING ((app.is_member((session_id)::uuid) AND (status <> 'CONVERTED_TO_AGREEMENT'::proposal_status) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind)))) CHECK ((app.is_member((session_id)::uuid) AND (((created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (kind = 'SHARED_PROPOSAL'::proposal_kind))))
 proposal definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 proposal diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -224,7 +224,9 @@ proposal_choice app_active_update FOR UPDATE RESTRICTIVE TO app_access USING (ap
 proposal_choice app_insert FOR INSERT TO app_access USING (-) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 proposal_choice app_select FOR SELECT TO app_access USING ((((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM participant_milestone m
-  WHERE (((m.session_id)::uuid = (proposal_choice.session_id)::uuid) AND ((m.user_id)::uuid = (proposal_choice.user_id)::uuid) AND ((m.milestone_key)::text = 'choices_shared'::text))))))) CHECK (-)
+  WHERE (((m.session_id)::uuid = (proposal_choice.session_id)::uuid) AND ((m.user_id)::uuid = (proposal_choice.user_id)::uuid) AND ((m.milestone_key)::text = 'choices_shared'::text)))) AND (EXISTS ( SELECT 1
+   FROM proposal p
+  WHERE ((p.id)::uuid = (proposal_choice.proposal_id)::uuid)))))) CHECK (-)
 proposal_choice app_update FOR UPDATE TO app_access USING (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id))) CHECK (((user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))
 proposal_choice definer_all FOR ALL TO mwf_definer USING (true) CHECK (true)
 proposal_choice diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -238,14 +240,18 @@ proposal_need app_delete FOR DELETE TO app_access USING ((app.is_member((session
 proposal_need app_insert FOR INSERT TO app_access USING (-) CHECK ((app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM proposal p
   WHERE (((p.id)::uuid = (proposal_need.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind)))))))
-proposal_need app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+proposal_need app_select FOR SELECT TO app_access USING ((app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM proposal p
+  WHERE ((p.id)::uuid = (proposal_need.proposal_id)::uuid))))) CHECK (-)
 proposal_need diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision [rls true, force true]
 proposal_revision app_active_insert FOR INSERT RESTRICTIVE TO app_access USING (-) CHECK (app.is_current_member((session_id)::uuid))
 proposal_revision app_insert FOR INSERT TO app_access USING (-) CHECK ((((actor_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) AND app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM proposal p
   WHERE (((p.id)::uuid = (proposal_revision.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind)))))))
-proposal_revision app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
+proposal_revision app_select FOR SELECT TO app_access USING ((app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
+   FROM proposal p
+  WHERE ((p.id)::uuid = (proposal_revision.proposal_id)::uuid))))) CHECK (-)
 proposal_revision diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 reconciler_guidance [rls true, force true]
@@ -394,7 +400,7 @@ column public.message SELECT: conversation_id, seq, session_id, sender_user_id, 
 column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, source_attempt_id, created_at (mwf_definer)
 column public.message SELECT: session_id, created_at (worker_access)
 column public.milestone SELECT: key, ordinal, stage_label (ops_access)
-column public.milestone SELECT: key, self_assertable (mwf_definer)
+column public.milestone SELECT: key, scope, self_assertable (mwf_definer)
 column public.mood_reading SELECT: id, session_id, user_id, intensity, recorded_at (mwf_definer)
 column public.mood_reading SELECT: id, session_id, user_id, intensity, recorded_at (ops_access)
 column public.need SELECT: id, session_id, user_id, category, superseded_by_need_id, deleted_at (mwf_definer)
@@ -415,8 +421,9 @@ column public.participant_milestone SELECT: session_id, user_id, milestone_key (
 column public.participant_milestone SELECT: session_id, user_id, milestone_key, reached_at (ai_access)
 column public.participant_milestone SELECT: session_id, user_id, milestone_key, reached_at (ops_access)
 column public.persona SELECT: user_id, owner_user_id (mwf_definer)
-column public.proposal SELECT: id, session_id, created_by_user_id (mwf_definer)
 column public.proposal SELECT: id, session_id, created_by_user_id, kind, status, description, duration, measure_of_success, shared_at (worker_access)
+column public.proposal SELECT: id, session_id, created_by_user_id, kind, status, shared_at (mwf_definer)
+column public.proposal UPDATE: shared_at (mwf_definer)
 column public.proposal UPDATE: status (worker_access)
 column public.proposal_choice SELECT: proposal_id, session_id, user_id, decision (mwf_definer)
 column public.proposal_choice SELECT: proposal_id, session_id, user_id, decision (worker_access)
@@ -474,6 +481,7 @@ routine app.all_ciphertext(text[]): EXECUTE (mwf_migrator)
 routine app.anonymize_user_account(uuid): EXECUTE (mwf_definer)
 routine app.anonymize_user_in_session(uuid,uuid): EXECUTE (mwf_definer)
 routine app.attempt_meta(uuid[]): EXECUTE (mwf_definer)
+routine app.checked_in(uuid): EXECUTE (mwf_definer)
 routine app.choices_unshare(uuid): EXECUTE (mwf_definer)
 routine app.co_participant_presence(uuid,uuid): EXECUTE (mwf_definer)
 routine app.create_user(identity_provider,text,text,text,text): EXECUTE (auth_access)
@@ -515,7 +523,7 @@ routine app.owns_persona(uuid): EXECUTE (mwf_definer)
 routine app.owns_reflection(uuid): EXECUTE (ai_access)
 routine app.owns_reflection(uuid): EXECUTE (mwf_definer)
 routine app.participant_presence(uuid,uuid): EXECUTE (mwf_definer)
-routine app.partner_user_id(uuid): EXECUTE (mwf_definer)
+routine app.proposal_share(uuid): EXECUTE (mwf_definer)
 routine app.reach_milestone(uuid,uuid,text,timestamp with time zone): EXECUTE (mwf_definer)
 routine app.resolve_user(identity_provider,text): EXECUTE (auth_access)
 routine app.resolve_user(identity_provider,text): EXECUTE (mwf_definer)
@@ -673,6 +681,7 @@ routine owner app.all_ciphertext(text[]): mwf_migrator
 routine owner app.anonymize_user_account(uuid): mwf_definer
 routine owner app.anonymize_user_in_session(uuid,uuid): mwf_definer
 routine owner app.attempt_meta(uuid[]): mwf_definer
+routine owner app.checked_in(uuid): mwf_definer
 routine owner app.choices_unshare(uuid): mwf_definer
 routine owner app.co_participant_presence(uuid,uuid): mwf_definer
 routine owner app.create_user(identity_provider,text,text,text,text): mwf_definer
@@ -700,7 +709,7 @@ routine owner app.next_message_seq(uuid): mwf_definer
 routine owner app.owns_persona(uuid): mwf_definer
 routine owner app.owns_reflection(uuid): mwf_definer
 routine owner app.participant_presence(uuid,uuid): mwf_definer
-routine owner app.partner_user_id(uuid): mwf_definer
+routine owner app.proposal_share(uuid): mwf_definer
 routine owner app.reach_milestone(uuid,uuid,text,timestamp with time zone): mwf_definer
 routine owner app.resolve_user(identity_provider,text): mwf_definer
 routine owner app.result_facts(uuid[]): mwf_definer
@@ -813,6 +822,7 @@ routine app.all_ciphertext(text[]): EXECUTE (PUBLIC)
 routine app.anonymize_user_account(uuid): EXECUTE (app_access)
 routine app.anonymize_user_in_session(uuid,uuid): EXECUTE (app_access)
 routine app.attempt_meta(uuid[]): EXECUTE (app_access)
+routine app.checked_in(uuid): EXECUTE (app_access)
 routine app.choices_unshare(uuid): EXECUTE (app_access)
 routine app.co_participant_presence(uuid,uuid): EXECUTE (app_access)
 routine app.current_user_id(): EXECUTE (app_access)
@@ -836,7 +846,7 @@ routine app.need_revoke_share(uuid): EXECUTE (app_access)
 routine app.need_share(uuid,text): EXECUTE (app_access)
 routine app.owns_persona(uuid): EXECUTE (app_access)
 routine app.participant_presence(uuid,uuid): EXECUTE (app_access)
-routine app.partner_user_id(uuid): EXECUTE (app_access)
+routine app.proposal_share(uuid): EXECUTE (app_access)
 routine app.reach_milestone(uuid,uuid,text,timestamp with time zone): EXECUTE (app_access)
 routine app.result_facts(uuid[]): EXECUTE (app_access)
 routine app.session_abandon_declined(uuid): EXECUTE (app_access)
@@ -920,20 +930,20 @@ column public.brain_activity SELECT: id, session_id, reflection_id, participant_
 column public.consent SELECT: id, session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id, decided_at, revoked_at, created_at, updated_at, target_kind (diag_access)
 column public.context_share_offer SELECT: id, attempt_id, result_id, session_id, subject_user_id, iteration, status, shared_at, declined_at, offered_at, delivery_status, delivered_at, seen_at, delivery_notified_at, seen_notified_at, created_at, updated_at (diag_access)
 column public.conversation SELECT: id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at (diag_access)
-column public.conversation_read_state SELECT: session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, archived_at, created_at, updated_at (diag_access)
+column public.conversation_read_state SELECT: session_id, user_id, last_seen_conversation_id, last_seen_seq, archived_at, created_at (diag_access)
 column public.draft SELECT: id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at (diag_access)
-column public.empathy_attempt SELECT: id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at (diag_access)
+column public.empathy_attempt SELECT: id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at (diag_access)
 column public.empathy_review SELECT: id, attempt_id, session_id, reviewer_user_id, feedback_sent_at, created_at, updated_at (diag_access)
 column public.feature_state SELECT: user_id, created_at, updated_at (diag_access)
 column public.follow_up SELECT: id, session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for, response_deadline_at, opened_at, completed_at, created_at, updated_at (diag_access)
-column public.follow_up_checkin SELECT: id, follow_up_id, session_id, user_id, next_action, continue_choice, submitted_at, created_at (diag_access)
+column public.follow_up_checkin SELECT: id, follow_up_id, session_id, user_id, submitted_at, created_at (diag_access)
 column public.follow_up_note SELECT: id, session_id, user_id, carry_forward, carried_into_checkin_id, created_at, updated_at (diag_access)
 column public.invitation SELECT: id, session_id, invited_by_user_id, accepted_by_user_id, status, message_confirmed_at, expires_at, accepted_at, declined_at, created_at, updated_at (diag_access)
 column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, dedupe_key, refining_need_id, source_attempt_id, created_at (diag_access)
 column public.milestone SELECT: key, ordinal, scope, self_assertable, created_at, updated_at (diag_access)
-column public.mood_reading SELECT: id, session_id, user_id, created_at (diag_access)
+column public.mood_reading SELECT: id, session_id, user_id (diag_access)
 column public.need SELECT: id, session_id, user_id, confirmed_at, locked_at, superseded_by_need_id, deleted_at, created_at, updated_at (diag_access)
-column public.need_disposition SELECT: need_id, session_id, user_id, status, is_current, created_at, updated_at (diag_access)
+column public.need_disposition SELECT: need_id, session_id, user_id, is_current, created_at, updated_at (diag_access)
 column public.need_share SELECT: need_id, session_id, user_id, shared_at, revoked_at, created_at, updated_at (diag_access)
 column public.participant SELECT: session_id, user_id, kind, added_by_user_id, joined_at, left_at, created_at, updated_at (diag_access)
 column public.participant_milestone SELECT: session_id, user_id, milestone_key, reached_at, created_at (diag_access)
@@ -952,7 +962,7 @@ column public.session_closure SELECT: session_id, kind, closed_by_user_id, check
 column public.takeaway SELECT: id, reflection_id, source, type, position, resolved_at, created_at, updated_at (diag_access)
 column public.takeaway_link SELECT: source_id, target_id, link_type, created_at (diag_access)
 column public.user SELECT: id, kind, deleted_at, created_at, updated_at (diag_access)
-column public.user_device SELECT: id, user_id, platform, biometric_enabled, biometric_enrolled_at, created_at, updated_at (diag_access)
+column public.user_device SELECT: id, user_id, platform, biometric_enabled, biometric_enrolled_at, created_at (diag_access)
 column public.user_memory SELECT: id, user_id, session_id, status, source, created_at, updated_at (diag_access)
 column public.user_preferences SELECT: user_id, doc_schema_version, created_at, updated_at (diag_access)
 database: CONNECT (diag_access)

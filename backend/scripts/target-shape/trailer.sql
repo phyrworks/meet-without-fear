@@ -221,25 +221,6 @@ COMMENT ON FUNCTION app.is_current_member(uuid) IS 'True when the caller is a pa
 REVOKE EXECUTE ON FUNCTION app.is_current_member(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.is_current_member(uuid) TO app_access;
 
--- The caller's co-participant's user id: NULL unless the caller is a
--- participant and the session has exactly two human participants (kept for
--- the two-party job paths; v_co_participant is the N-safe read).
-CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
-  LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-    SELECT other.user_id
-    FROM public.participant me
-    JOIN public.participant other
-      ON other.session_id = me.session_id AND other.user_id <> me.user_id AND other.kind = 'human'
-    WHERE me.session_id = partner_user_id.session
-      AND me.user_id = app.current_user_id()
-      AND (SELECT count(*) FROM public.participant c WHERE c.session_id = me.session_id AND c.kind = 'human') = 2
-  $$;
-COMMENT ON FUNCTION app.partner_user_id(uuid) IS 'The caller''s co-participant''s user id: NULL unless the caller is a participant and the session seats exactly two humans. Kept for the two-party paths; v_co_participant is the N-safe read. (work-k5fk.10.16)';
--- mwf_app (app_access): no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app.
-REVOKE EXECUTE ON FUNCTION app.partner_user_id(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO app_access;
 
 -- The row predicates of the §6 policies (rows 9d–9g, work-k5fk.10.7) that need a row the caller does not see
 -- (or holds no grant on): definers, so a policy never recurses into another table's policy (spec P1-1). Each is a
@@ -298,7 +279,7 @@ COMMENT ON FUNCTION app.owns_persona(uuid) IS 'True when the user is a persona t
 REVOKE EXECUTE ON FUNCTION app.owns_persona(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.owns_persona(uuid) TO app_access;
 
--- The AI's acting user (the request's identity, which the AI connection binds too) is a participant of the one
+-- The AI's acting user (the request's identity, which the AI connection binds too) is a present participant of the one
 -- session its transaction is scoped to (design note §6: the ai_access policies are the scope "and the acting user
 -- must be a member"). An unset scope or identity: false.
 CREATE FUNCTION app.scope_actor_is_member() RETURNS boolean
@@ -306,9 +287,10 @@ CREATE FUNCTION app.scope_actor_is_member() RETURNS boolean
   SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT EXISTS (SELECT 1 FROM public.participant p
-                   WHERE p.session_id = app.session_scope() AND p.user_id = app.current_user_id())
+                   WHERE p.session_id = app.session_scope() AND p.user_id = app.current_user_id()
+                     AND p.left_at IS NULL)
   $$;
-COMMENT ON FUNCTION app.scope_actor_is_member() IS 'True when the acting user (app.current_user_id) is a participant of app.session_scope. The membership term of the ai_access policies (work-k5fk.10.7).';
+COMMENT ON FUNCTION app.scope_actor_is_member() IS 'True when the acting user (app.current_user_id) is a present participant (not left) of app.session_scope: the AI acts for no leaver (work-k5fk.32 S4, as review r2 N1 for the app). The membership term of the ai_access policies (work-k5fk.10.7).';
 -- mwf_ai (ai_access): every ai_session policy, as (SELECT app.scope_actor_is_member()).
 REVOKE EXECUTE ON FUNCTION app.scope_actor_is_member() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.scope_actor_is_member() TO ai_access;
@@ -338,6 +320,22 @@ COMMENT ON FUNCTION app.is_acting_user(uuid) IS 'True when the user is the actin
 -- mwf_ai (ai_access): the brain_activity policy ai_own_call.
 REVOKE EXECUTE ON FUNCTION app.is_acting_user(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.is_acting_user(uuid) TO ai_access;
+
+-- Has the caller checked in on this follow-up? follow_up_checkin's app_select asks it: a co-participant's check-in
+-- on a SHARED follow-up is the caller's to read only once the caller has submitted their own (owner decision
+-- 2026-11-25, work-k5fk.32 S6: hidden until both have submitted). A definer, so the policy does not recurse into
+-- its own table.
+CREATE FUNCTION app.checked_in(follow_up uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    SELECT EXISTS (SELECT 1 FROM public.follow_up_checkin c
+                   WHERE c.follow_up_id = checked_in.follow_up AND c.user_id = app.current_user_id())
+  $$;
+COMMENT ON FUNCTION app.checked_in(uuid) IS 'True when the caller (app.current_user_id) has a check-in on the follow-up; false for a NULL identity. RLS predicate of follow_up_checkin app_select (work-k5fk.32 S6).';
+-- mwf_app (app_access): the follow_up_checkin policy app_select.
+REVOKE EXECUTE ON FUNCTION app.checked_in(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.checked_in(uuid) TO app_access;
 
 -- An invitation as someone who is not (yet) a participant may see it (design note §6 invitation: "pre-membership
 -- accept read via definer app.invitation_peek(id)"). Until it is claimed, the invitation's link is the credential: a
@@ -1561,30 +1559,56 @@ CREATE FUNCTION app.reach_milestone(session uuid, "user" uuid, key text, instant
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_self boolean;
-    n      integer;
+    v_mig   boolean := session_user = 'mwf_migrator';
+    v_me    uuid := app.current_user_id();
+    v_self  boolean;
+    v_scope public.milestone_scope;
+    v_at    timestamptz := coalesce(reach_milestone.instant, CURRENT_TIMESTAMP);
+    n       integer;
   BEGIN
-    IF NOT (session_user = 'mwf_migrator'
+    IF NOT (v_mig
             OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
                   SELECT 1 FROM public.participant p
-                  WHERE p.session_id = reach_milestone.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL)))
+                  WHERE p.session_id = reach_milestone.session AND p.user_id = v_me AND p.left_at IS NULL)))
        OR NOT EXISTS (SELECT 1 FROM public.participant p
                       WHERE p.session_id = reach_milestone.session AND p.user_id = reach_milestone."user") THEN
       RAISE EXCEPTION 'participant not found' USING ERRCODE = 'P0002';
     END IF;
-    SELECT m.self_assertable INTO v_self FROM public.milestone m WHERE m.key = reach_milestone.key;
+    SELECT m.self_assertable, m.scope INTO v_self, v_scope FROM public.milestone m WHERE m.key = reach_milestone.key;
     IF v_self IS DISTINCT FROM false THEN
       RAISE EXCEPTION 'milestone % is not a system milestone (unknown, or the participant''s own)', reach_milestone.key
         USING ERRCODE = 'insufficient_privilege';
     END IF;
+    -- work-k5fk.32 S2 (enumerable): the caller reaches a participant-scoped key for themselves only. For another
+    -- participant, only what the request path legitimately records for them:
+    --   * a session-scoped key (empathy_validated, needs_validated, needs_shared, closed): a fact of the whole session,
+    --     reached for every present human at once;
+    --   * paused: pausing pauses the session for everyone (sessions.ts pauseSession; session_resume clears every row);
+    --   * invitation_sent for the inviter of an invitation the caller accepted (milestone-writer
+    --     reachInvitationSentOnAccept).
+    IF NOT v_mig AND reach_milestone."user" IS DISTINCT FROM v_me
+       AND NOT (v_scope = 'session'
+                OR reach_milestone.key = 'paused'
+                OR (reach_milestone.key = 'invitation_sent' AND EXISTS (
+                      SELECT 1 FROM public.invitation i
+                      WHERE i.session_id = reach_milestone.session AND i.invited_by_user_id = reach_milestone."user"
+                        AND i.accepted_by_user_id = v_me AND i.status = 'ACCEPTED'))) THEN
+      RAISE EXCEPTION 'milestone % is the participant''s own to reach', reach_milestone.key
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    -- schema S7: the request path's instant is clamped to now (at most ten minutes back, never ahead), as
+    -- app.empathy_mark_delivery; the migrator's stands.
+    IF NOT v_mig THEN
+      v_at := least(greatest(v_at, CURRENT_TIMESTAMP - interval '10 minutes'), CURRENT_TIMESTAMP);
+    END IF;
     INSERT INTO public.participant_milestone (session_id, user_id, milestone_key, reached_at)
-    VALUES (reach_milestone.session, reach_milestone."user", reach_milestone.key, coalesce(reach_milestone.instant, CURRENT_TIMESTAMP))
+    VALUES (reach_milestone.session, reach_milestone."user", reach_milestone.key, v_at)
     ON CONFLICT (session_id, user_id, milestone_key) DO NOTHING;
     GET DIAGNOSTICS n = ROW_COUNT;
     RETURN n > 0;
   END
   $$;
-COMMENT ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) IS 'Reach a system (not self-assertable) milestone for a participant of a session the caller is a current participant of (identity-bound, app_access). True when recorded now; the first instant stands. work-k5fk.10.5.';
+COMMENT ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) IS 'Reach a system (not self-assertable) milestone for a participant of a session the caller is a current participant of (identity-bound, app_access): a participant-scoped key for the caller only; for another participant a session-scoped key, paused, or invitation_sent for the inviter of an invitation the caller accepted (work-k5fk.32 S2). The instant is clamped to the last ten minutes, never ahead. True when recorded now; the first instant stands. work-k5fk.10.5.';
 -- mwf_app (app_access): milestone-writer reachMilestone (every system key; the self-assertable ones are its own INSERT).
 REVOKE EXECUTE ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) TO app_access;
@@ -1643,6 +1667,49 @@ COMMENT ON FUNCTION app.choices_unshare(uuid) IS 'Un-reach the caller''s own cho
 REVOKE EXECUTE ON FUNCTION app.choices_unshare(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.choices_unshare(uuid) TO app_access;
 
+-- Share an individual commitment with the co-participants (spec §1.4 proposal: "P (individual commitments until
+-- shared)"; owner decision 2026-11-25, work-k5fk.32 S1). The one writer of proposal.shared_at: its creator, a
+-- present participant, stamps it once (now). Set once and never cleared — once the partner may have read it, an
+-- unshare would only pretend; the commitment can still be REMOVED like any proposal. The app shares a creator's
+-- commitments when they share their Stage 4 stances (stage4-store shareChoices). Returns true when it stamped now,
+-- false when it was already shared.
+CREATE FUNCTION app.proposal_share(proposal uuid) RETURNS boolean
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me      uuid := app.current_user_id();
+    v_session uuid;
+    v_creator uuid;
+    v_kind    public.proposal_kind;
+    v_status  public.proposal_status;
+    n         integer;
+  BEGIN
+    SELECT p.session_id, p.created_by_user_id, p.kind, p.status INTO v_session, v_creator, v_kind, v_status
+    FROM public.proposal p WHERE p.id = proposal_share.proposal FOR NO KEY UPDATE;
+    IF v_session IS NULL OR v_me IS NULL OR NOT pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+       OR v_creator IS DISTINCT FROM v_me OR NOT app.is_current_member(v_session) THEN
+      -- Not the caller's, or the caller left (review r2 N1: a leaver shares nothing): as if it did not exist.
+      RAISE EXCEPTION 'proposal not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_kind <> 'INDIVIDUAL_COMMITMENT' THEN
+      RAISE EXCEPTION 'only an individual commitment is shared (a shared proposal is shared from birth)'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF v_status = 'REMOVED' THEN
+      RAISE EXCEPTION 'a removed commitment is not shared' USING ERRCODE = 'check_violation';
+    END IF;
+    UPDATE public.proposal p SET shared_at = CURRENT_TIMESTAMP
+    WHERE p.id = proposal_share.proposal AND p.shared_at IS NULL;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n > 0;
+  END
+  $$;
+COMMENT ON FUNCTION app.proposal_share(uuid) IS 'Share the caller''s own INDIVIDUAL_COMMITMENT with the co-participants: stamps proposal.shared_at once (now), its only writer; never cleared. Its creator while a present participant (identity-bound, app_access); a removed commitment or a SHARED_PROPOSAL is refused. True when stamped now. work-k5fk.32 S1.';
+-- mwf_app (app_access): stage4-store shareChoices (POST /stage4/share-selections).
+REVOKE EXECUTE ON FUNCTION app.proposal_share(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.proposal_share(uuid) TO app_access;
+
 -- The Stage 2 sharing window closes (stage2.ts triggerStage3Transition): the
 -- open (PENDING / OFFERED) share offers to the named subjects in the session
 -- expire. A current participant of the session. Returns the rows moved.
@@ -1659,6 +1726,20 @@ CREATE FUNCTION app.share_offers_expire(session uuid, subjects uuid[]) RETURNS i
                   WHERE p.session_id = share_offers_expire.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL))) THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
     END IF;
+    -- work-k5fk.32 S7: the caller expires their own open offers; another participant's only once the Stage 2
+    -- sharing window has closed for the session — every present human has reached empathy_validated (stage2.ts
+    -- triggerStage3Transition reaches it for each party before it calls this). Before that, a partner's offer is
+    -- theirs to answer, not the caller's to end.
+    IF session_user <> 'mwf_migrator'
+       AND EXISTS (SELECT 1 FROM unnest(share_offers_expire.subjects) AS x(u) WHERE x.u IS DISTINCT FROM app.current_user_id())
+       AND EXISTS (SELECT 1 FROM public.participant p
+                   WHERE p.session_id = share_offers_expire.session AND p.kind = 'human' AND p.left_at IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM public.participant_milestone m
+                                     WHERE m.session_id = p.session_id AND m.user_id = p.user_id
+                                       AND m.milestone_key = 'empathy_validated')) THEN
+      RAISE EXCEPTION 'another participant''s share offers expire only once the Stage 2 window has closed'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     UPDATE public.context_share_offer o SET status = 'EXPIRED'
     WHERE o.session_id = share_offers_expire.session AND o.subject_user_id = ANY (share_offers_expire.subjects)
       AND o.status IN ('PENDING', 'OFFERED');
@@ -1666,7 +1747,7 @@ CREATE FUNCTION app.share_offers_expire(session uuid, subjects uuid[]) RETURNS i
     RETURN n;
   END
   $$;
-COMMENT ON FUNCTION app.share_offers_expire(uuid, uuid[]) IS 'Expire the open (PENDING / OFFERED) share offers to the given subjects of a session; a current participant of it (identity-bound, app_access). work-k5fk.10.5.';
+COMMENT ON FUNCTION app.share_offers_expire(uuid, uuid[]) IS 'Expire the open (PENDING / OFFERED) share offers to the given subjects of a session; a current participant of it (identity-bound, app_access): their own any time, another participant''s only once every present human has reached empathy_validated (the Stage 2 window closed; work-k5fk.32 S7). work-k5fk.10.5.';
 -- mwf_app (app_access): stage2.ts triggerStage3Transition.
 REVOKE EXECUTE ON FUNCTION app.share_offers_expire(uuid, uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.share_offers_expire(uuid, uuid[]) TO app_access;
@@ -1719,12 +1800,16 @@ CREATE FUNCTION app.session_abandon_declined(invitation uuid) RETURNS void
     v_session uuid;
     v_inviter uuid;
     v_status  public.invitation_status;
+    v_claimer uuid;
     v_from    public.session_status;
   BEGIN
-    SELECT i.session_id, i.invited_by_user_id, i.status INTO v_session, v_inviter, v_status
+    SELECT i.session_id, i.invited_by_user_id, i.status, i.claimed_by_user_id INTO v_session, v_inviter, v_status, v_claimer
     FROM public.invitation i WHERE i.id = session_abandon_declined.invitation;
+    -- work-k5fk.32 S7: the decliner only — app.invitation_answer records whoever declines as the claimer, so the
+    -- caller must be the invitation's claimer (was: anyone but the inviter).
     IF v_session IS NULL OR NOT (session_user = 'mwf_migrator'
-         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND v_me IS NOT NULL AND v_me <> v_inviter)) THEN
+         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND v_me IS NOT NULL AND v_me <> v_inviter
+             AND v_me = v_claimer)) THEN
       RAISE EXCEPTION 'invitation not found' USING ERRCODE = 'P0002';
     END IF;
     IF v_status <> 'DECLINED' THEN
@@ -1736,7 +1821,7 @@ CREATE FUNCTION app.session_abandon_declined(invitation uuid) RETURNS void
     END IF;
   END
   $$;
-COMMENT ON FUNCTION app.session_abandon_declined(uuid) IS 'A DECLINED invitation ends its still CREATED / INVITED session (→ ABANDONED). The decliner (identity-bound, app_access, not the inviter). work-k5fk.10.5.';
+COMMENT ON FUNCTION app.session_abandon_declined(uuid) IS 'A DECLINED invitation ends its still CREATED / INVITED session (→ ABANDONED). The decliner only (identity-bound, app_access: the invitation''s claimer, whom app.invitation_answer records as who declined; work-k5fk.32 S7). work-k5fk.10.5.';
 -- mwf_app (app_access): invitations.ts declineInvitation.
 REVOKE EXECUTE ON FUNCTION app.session_abandon_declined(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_abandon_declined(uuid) TO app_access;
@@ -1768,13 +1853,13 @@ GRANT EXECUTE ON FUNCTION app.identity_subject(public.identity_provider) TO app_
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.is_member(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.is_current_member(uuid) OWNER TO mwf_definer;
-ALTER FUNCTION app.partner_user_id(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_unseated(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.shares_session_with(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_persona(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.scope_actor_is_member() OWNER TO mwf_definer;
 ALTER FUNCTION app.owns_reflection(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.is_acting_user(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.checked_in(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_peek(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_claim(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.invitation_answer(uuid, public.invitation_status, timestamptz, text) OWNER TO mwf_definer;
@@ -1805,6 +1890,7 @@ ALTER FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamp
 ALTER FUNCTION app.reach_milestone(uuid, uuid, text, timestamptz) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_resume(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.choices_unshare(uuid) OWNER TO mwf_definer;
+ALTER FUNCTION app.proposal_share(uuid) OWNER TO mwf_definer;
 ALTER FUNCTION app.share_offers_expire(uuid, uuid[]) OWNER TO mwf_definer;
 ALTER FUNCTION app.share_offers_mark_notified(uuid[], boolean) OWNER TO mwf_definer;
 ALTER FUNCTION app.session_abandon_declined(uuid) OWNER TO mwf_definer;
@@ -2502,7 +2588,7 @@ CREATE TRIGGER t_participant_added_by BEFORE INSERT OR UPDATE OF added_by_user_i
 -- app.session_human_limit() is the one place the number lives; the two triggers below read it.
 --   * t_human_limit on participant (app.t_participant_human_limit): a human seat (any route: createSession, the accept, the linked process, a fixture)
 --     is refused once the session already seats the limit's worth of humans. Every human seat counts, a leaver's
---     too: a seat is never freed, so nobody takes a leaver's place (as app.partner_user_id counts them).
+--     too: a seat is never freed, so nobody takes a leaver's place.
 --   * t_human_limit on invitation (app.t_invitation_human_limit): a PENDING invitation is refused once the session's human seats plus its other
 --     outstanding invitations (PENDING, unexpired: each still able to seat someone) reach the limit. So in a
 --     two-human session nobody may invite at all, and beside the one pending invitation of a session's initiator a
@@ -2520,7 +2606,7 @@ CREATE FUNCTION app.session_human_limit() RETURNS integer
   LANGUAGE sql IMMUTABLE PARALLEL SAFE
   SET search_path = pg_catalog, pg_temp
   AS $$ SELECT 2 $$;
-COMMENT ON FUNCTION app.session_human_limit() IS 'How many humans a session may seat: two, for now (owner decision 2026-11-24, work-k5fk.10.38). The one place to change when sessions take more people; app.t_participant_human_limit and app.t_invitation_human_limit read it. (The two-party helpers — app.partner_user_id, the stage shim — would need their N-party forms first.)';
+COMMENT ON FUNCTION app.session_human_limit() IS 'How many humans a session may seat: two, for now (owner decision 2026-11-24, work-k5fk.10.38). The one place to change when sessions take more people; app.t_participant_human_limit and app.t_invitation_human_limit read it. (The two-party helpers — the stage shim — would need their N-party forms first.)';
 REVOKE EXECUTE ON FUNCTION app.session_human_limit() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_human_limit() TO mwf_definer;
 
@@ -3228,8 +3314,10 @@ CREATE POLICY definer_all ON follow_up TO mwf_definer USING (true) WITH CHECK (t
 -- follow_up_checkin: app_access SI, mwf_definer SD
 ALTER TABLE follow_up_checkin ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON follow_up_checkin FOR SELECT TO app_access
-  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM follow_up f WHERE f.id = follow_up_checkin.follow_up_id AND f.scope = 'SHARED' AND f.status IN ('COMPLETED', 'PARTIAL'))));
-COMMENT ON POLICY app_select ON follow_up_checkin IS 'The caller''s own check-ins; a co-participant''s on a SHARED follow-up once it is COMPLETED or PARTIAL (design note §6; work-k5fk.10.7).';
+  USING (user_id = (SELECT app.current_user_id())
+         OR (app.is_member(session_id) AND app.checked_in(follow_up_id)
+             AND EXISTS (SELECT 1 FROM follow_up f WHERE f.id = follow_up_checkin.follow_up_id AND f.scope = 'SHARED')));
+COMMENT ON POLICY app_select ON follow_up_checkin IS 'The caller''s own check-ins; a co-participant''s on a SHARED follow-up only once the caller has checked in on it too (app.checked_in): hidden until both have submitted (owner decision 2026-11-25, work-k5fk.32 S6; was: once the follow-up was PARTIAL, which let the second participant read the first''s answers before giving theirs) (design note §6; work-k5fk.10.7).';
 CREATE POLICY app_insert ON follow_up_checkin FOR INSERT TO app_access
   WITH CHECK (user_id = (SELECT app.current_user_id())
               AND EXISTS (SELECT 1 FROM follow_up f WHERE f.id = follow_up_checkin.follow_up_id
@@ -3356,8 +3444,10 @@ CREATE POLICY definer_all ON persona TO mwf_definer USING (true) WITH CHECK (tru
 
 -- proposal: app_access SIU, mwf_definer S, worker_access SU
 ALTER TABLE proposal ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_select ON proposal FOR SELECT TO app_access USING (app.is_member(session_id));
-COMMENT ON POLICY app_select ON proposal IS 'The proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_select ON proposal FOR SELECT TO app_access
+  USING (app.is_member(session_id)
+         AND (kind = 'SHARED_PROPOSAL' OR created_by_user_id = (SELECT app.current_user_id()) OR shared_at IS NOT NULL));
+COMMENT ON POLICY app_select ON proposal IS 'In a session the caller is in: every SHARED_PROPOSAL (shared with every member from birth), the caller''s own INDIVIDUAL_COMMITMENT, and a co-participant''s only once its creator shared it (shared_at, written by app.proposal_share alone). Private until shared (spec §1.4 proposal RLS; owner decision 2026-11-25, work-k5fk.32 S1). stage4-store proposalVisibleTo applies the same rule.';
 CREATE POLICY app_insert ON proposal FOR INSERT TO app_access
   WITH CHECK (created_by_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
               AND status = 'ACTIVE' AND removed_by_user_id IS NULL);
@@ -3373,8 +3463,9 @@ CREATE POLICY definer_all ON proposal TO mwf_definer USING (true) WITH CHECK (tr
 -- proposal_choice: app_access SIU, mwf_definer SD, worker_access S
 ALTER TABLE proposal_choice ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON proposal_choice FOR SELECT TO app_access
-  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM participant_milestone m WHERE m.session_id = proposal_choice.session_id AND m.user_id = proposal_choice.user_id AND m.milestone_key = 'choices_shared')));
-COMMENT ON POLICY app_select ON proposal_choice IS 'The caller''s own choices; a co-participant''s once they shared them (choices_shared) (design note §6; work-k5fk.10.7).';
+  USING (user_id = (SELECT app.current_user_id()) OR (app.is_member(session_id) AND EXISTS (SELECT 1 FROM participant_milestone m WHERE m.session_id = proposal_choice.session_id AND m.user_id = proposal_choice.user_id AND m.milestone_key = 'choices_shared')
+                                                          AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_choice.proposal_id)));
+COMMENT ON POLICY app_select ON proposal_choice IS 'The caller''s own choices; a co-participant''s once they shared them (choices_shared), and only on a proposal the caller may see (proposal app_select, under the caller''s RLS: never a choice, or its note, on a commitment that is not shared yet; work-k5fk.32 S1) (design note §6; work-k5fk.10.7).';
 CREATE POLICY app_insert ON proposal_choice FOR INSERT TO app_access WITH CHECK (user_id = (SELECT app.current_user_id()));
 COMMENT ON POLICY app_insert ON proposal_choice IS 'The caller''s own choice (design note §6; work-k5fk.10.7).';
 CREATE POLICY app_update ON proposal_choice FOR UPDATE TO app_access USING (user_id = (SELECT app.current_user_id())) WITH CHECK (user_id = (SELECT app.current_user_id()));
@@ -3384,8 +3475,9 @@ CREATE POLICY definer_all ON proposal_choice TO mwf_definer USING (true) WITH CH
 
 -- proposal_need: app_access SID
 ALTER TABLE proposal_need ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_select ON proposal_need FOR SELECT TO app_access USING (app.is_member(session_id));
-COMMENT ON POLICY app_select ON proposal_need IS 'The need links of the proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_select ON proposal_need FOR SELECT TO app_access
+  USING (app.is_member(session_id) AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_need.proposal_id));
+COMMENT ON POLICY app_select ON proposal_need IS 'The need links of the proposals the caller may see, in a session they are in: proposal app_select under the caller''s RLS, so an unshared commitment''s links stay its creator''s (work-k5fk.32 S1; design note §6; work-k5fk.10.7).';
 CREATE POLICY app_insert ON proposal_need FOR INSERT TO app_access
   WITH CHECK (app.is_member(session_id)
               AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_need.proposal_id
@@ -3399,8 +3491,9 @@ COMMENT ON POLICY app_delete ON proposal_need IS 'A need link of a proposal the 
 
 -- proposal_revision: app_access SI, worker_access I
 ALTER TABLE proposal_revision ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY app_select ON proposal_revision FOR SELECT TO app_access USING (app.is_member(session_id));
-COMMENT ON POLICY app_select ON proposal_revision IS 'The revision history of the proposals of a session the caller is in (design note §6; work-k5fk.10.7).';
+CREATE POLICY app_select ON proposal_revision FOR SELECT TO app_access
+  USING (app.is_member(session_id) AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id));
+COMMENT ON POLICY app_select ON proposal_revision IS 'The revision history of the proposals the caller may see, in a session they are in: proposal app_select under the caller''s RLS, so an unshared commitment''s before/after text stays its creator''s (work-k5fk.32 S1; design note §6; work-k5fk.10.7).';
 CREATE POLICY app_insert ON proposal_revision FOR INSERT TO app_access
   WITH CHECK (actor_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
               AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id
@@ -3645,6 +3738,11 @@ COMMENT ON POLICY app_active_insert ON user_memory IS 'Writes only by a present 
 -- sharing_would_help, session_closure.reason, user_memory.category, feature_state.feature; none of the
 -- relationship graph (user_contact, live_session_pair, persona.owner_user_id); and no per-user activity times
 -- (user_device.last_seen_at, conversation_read_state.last_active_at, mood_reading.recorded_at).
+-- Work-k5fk.32 S5 (the side channels of those): nor the columns that move with a private act — a read receipt or
+-- device refresh (conversation_read_state.last_viewed_at / last_viewed_share_tab_at / updated_at,
+-- user_device.updated_at), the moment of a mood reading (mood_reading.created_at), an attempt's private round state
+-- (empathy_attempt.status), a check-in's answers (follow_up_checkin.next_action / continue_choice), or a walkthrough
+-- decision (need_disposition.status).
 -- Grants are here rather than next to each table: check-schema.sh applies tables.sql to a cluster that need not
 -- have diag_access, and the policy must follow its grant. Plus the migration status the bot reports
 -- (_prisma_migrations, which has no RLS: its bookkeeping columns only, when Prisma created it).
@@ -3679,13 +3777,13 @@ CREATE POLICY diag_read ON context_share_offer FOR SELECT TO diag_access USING (
 GRANT SELECT (id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at) ON conversation TO diag_access;
 CREATE POLICY diag_read ON conversation FOR SELECT TO diag_access USING (true);
 -- conversation_read_state
-GRANT SELECT (session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, archived_at, created_at, updated_at) ON conversation_read_state TO diag_access;
+GRANT SELECT (session_id, user_id, last_seen_conversation_id, last_seen_seq, archived_at, created_at) ON conversation_read_state TO diag_access;
 CREATE POLICY diag_read ON conversation_read_state FOR SELECT TO diag_access USING (true);
 -- draft
 GRANT SELECT (id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at) ON draft TO diag_access;
 CREATE POLICY diag_read ON draft FOR SELECT TO diag_access USING (true);
 -- empathy_attempt
-GRANT SELECT (id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at) ON empathy_attempt TO diag_access;
+GRANT SELECT (id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at) ON empathy_attempt TO diag_access;
 CREATE POLICY diag_read ON empathy_attempt FOR SELECT TO diag_access USING (true);
 -- empathy_review
 GRANT SELECT (id, attempt_id, session_id, reviewer_user_id, feedback_sent_at, created_at, updated_at) ON empathy_review TO diag_access;
@@ -3697,7 +3795,7 @@ CREATE POLICY diag_read ON feature_state FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for, response_deadline_at, opened_at, completed_at, created_at, updated_at) ON follow_up TO diag_access;
 CREATE POLICY diag_read ON follow_up FOR SELECT TO diag_access USING (true);
 -- follow_up_checkin
-GRANT SELECT (id, follow_up_id, session_id, user_id, next_action, continue_choice, submitted_at, created_at) ON follow_up_checkin TO diag_access;
+GRANT SELECT (id, follow_up_id, session_id, user_id, submitted_at, created_at) ON follow_up_checkin TO diag_access;
 CREATE POLICY diag_read ON follow_up_checkin FOR SELECT TO diag_access USING (true);
 -- follow_up_note
 GRANT SELECT (id, session_id, user_id, carry_forward, carried_into_checkin_id, created_at, updated_at) ON follow_up_note TO diag_access;
@@ -3712,13 +3810,13 @@ CREATE POLICY diag_read ON message FOR SELECT TO diag_access USING (true);
 GRANT SELECT (key, ordinal, scope, self_assertable, created_at, updated_at) ON milestone TO diag_access;
 CREATE POLICY diag_read ON milestone FOR SELECT TO diag_access USING (true);
 -- mood_reading
-GRANT SELECT (id, session_id, user_id, created_at) ON mood_reading TO diag_access;
+GRANT SELECT (id, session_id, user_id) ON mood_reading TO diag_access;
 CREATE POLICY diag_read ON mood_reading FOR SELECT TO diag_access USING (true);
 -- need
 GRANT SELECT (id, session_id, user_id, confirmed_at, locked_at, superseded_by_need_id, deleted_at, created_at, updated_at) ON need TO diag_access;
 CREATE POLICY diag_read ON need FOR SELECT TO diag_access USING (true);
 -- need_disposition
-GRANT SELECT (need_id, session_id, user_id, status, is_current, created_at, updated_at) ON need_disposition TO diag_access;
+GRANT SELECT (need_id, session_id, user_id, is_current, created_at, updated_at) ON need_disposition TO diag_access;
 CREATE POLICY diag_read ON need_disposition FOR SELECT TO diag_access USING (true);
 -- need_share
 GRANT SELECT (need_id, session_id, user_id, shared_at, revoked_at, created_at, updated_at) ON need_share TO diag_access;
@@ -3775,7 +3873,7 @@ CREATE POLICY diag_read ON takeaway_link FOR SELECT TO diag_access USING (true);
 GRANT SELECT (id, kind, deleted_at, created_at, updated_at) ON "user" TO diag_access;
 CREATE POLICY diag_read ON "user" FOR SELECT TO diag_access USING (true);
 -- user_device
-GRANT SELECT (id, user_id, platform, biometric_enabled, biometric_enrolled_at, created_at, updated_at) ON user_device TO diag_access;
+GRANT SELECT (id, user_id, platform, biometric_enabled, biometric_enrolled_at, created_at) ON user_device TO diag_access;
 CREATE POLICY diag_read ON user_device FOR SELECT TO diag_access USING (true);
 -- user_memory
 GRANT SELECT (id, user_id, session_id, status, source, created_at, updated_at) ON user_memory TO diag_access;
@@ -3998,7 +4096,7 @@ BEGIN
       'live_session_pair:DELETE', 'live_session_pair:INSERT', 'message:INSERT', 'mood_reading:DELETE', 'need:DELETE',
       'need_disposition:DELETE', 'need_share:INSERT', 'need_share:UPDATE', 'participant:UPDATE',
       'participant_milestone:DELETE', 'participant_milestone:INSERT',
-      'participant_key:UPDATE', 'proposal_choice:DELETE', 'reflection:DELETE', 'regulation_event:DELETE',
+      'participant_key:UPDATE', 'proposal:UPDATE', 'proposal_choice:DELETE', 'reflection:DELETE', 'regulation_event:DELETE',
       'reminder:DELETE', 'session:UPDATE', 'user:INSERT', 'user:UPDATE', 'user_contact:DELETE', 'user_device:DELETE',
       'user_identity:DELETE', 'user_identity:INSERT', 'user_key:UPDATE', 'user_memory:DELETE',
       'user_preferences:DELETE'];
