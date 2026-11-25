@@ -139,6 +139,29 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect(await pairsOf(second.sessionId)).toEqual([sorted(ada.id, ken.id)]);
   });
 
+  it('two humans seated by one statement make their pair once; that pair still refuses a second live session (work-k5fk.31)', async () => {
+    // Every AFTER ROW trigger of a multi-row INSERT runs once the statement has written all its rows, so each
+    // row's t_live_session_pair sees the other human and both used to insert the same pair (23505 on the key).
+    const seat = (sessionId: string) =>
+      run.sql(
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, display_name)
+         VALUES ($1, $2, 'human', NULL, 'Lea'), ($1, $3, 'human', $2, 'Max')`,
+        [sessionId, lea.id, max.id],
+      );
+    const [{ id: first }] = await run.sql<{ id: string }>(`INSERT INTO session DEFAULT VALUES RETURNING id::text`);
+    await seat(first);
+    expect(await pairsOf(first)).toEqual([sorted(lea.id, max.id)]);
+
+    // The same-session skip must not swallow the cross-session refusal.
+    const [{ id: second }] = await run.sql<{ id: string }>(`INSERT INTO session DEFAULT VALUES RETURNING id::text`);
+    expect(await failure(seat(second))).toEqual({ code: '23505', constraint: 'live_session_pair_pkey' });
+    expect(await pairsOf(second)).toEqual([]);
+
+    // End the session so the pair is released and later cases start clean.
+    await run.sql(`UPDATE session SET status = 'ABANDONED' WHERE id = $1`, [first]);
+    expect(await pairsOf(first)).toEqual([]);
+  });
+
   it('a human who leaves a session that stays live releases the pair, so the two may start again (work-k5fk.18)', async () => {
     const noa = person('noa');
     expect((await http(noa, 'get', '/sessions')).status).toBe(200);
