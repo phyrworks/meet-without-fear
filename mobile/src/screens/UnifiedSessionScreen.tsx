@@ -60,6 +60,7 @@ import { PreJoinDraftReviewModal } from '../components/PreJoinDraftReviewModal';
 import { MemorySuggestionCard } from '../components/MemorySuggestionCard';
 // SegmentedControl removed - tabs are now integrated in SessionChatHeader
 import { PartnerInfoDrawer } from '../components/PartnerInfoDrawer';
+import { invitationClaimDescription } from '../utils/invitationClaim';
 import {
   createNeedRefinementMessage,
   NeedRefinementChatMessage,
@@ -1478,11 +1479,10 @@ export function UnifiedSessionScreen({
   // (topicFrame changes), the latch resets and the panel reappears.
   const topicProposalDismissed = false;
   const partnerInfoName = partnerName || 'Meet Without Fear';
-  const partnerStageDescription = getPartnerStageDescription(
-    partnerInfoName,
-    partnerProgress,
-    session?.status
-  );
+  // Before the partner joins, the inviter learns who opened (claimed) the invitation (work-k5fk.35 C13).
+  const partnerStageDescription =
+    invitationClaimDescription(invitation) ??
+    getPartnerStageDescription(partnerInfoName, partnerProgress, session?.status);
   const partnerActivitySession = session as
     | { partnerLastActiveAt?: string | null; partnerLastViewedAt?: string | null }
     | undefined;
