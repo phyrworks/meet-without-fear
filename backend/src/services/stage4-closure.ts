@@ -117,9 +117,16 @@ function willingIndividualCommitments(proposals: ClosureProposal[], choices: Clo
   );
 }
 
-/** What the closer may count in the summary: their own commitments and shared ones. */
+/** What the closer may see: their own commitments and shared ones (the response to the closer). */
 const visibleToCloser = (closer: Seat) => (p: ClosureProposal) =>
   p.createdByUserId === closer.userId || p.sharedAt !== null;
+
+/**
+ * What the session_closure summary may count: only commitments shared with every member. The summary is read by
+ * every member (session_closure app_select), so a count of the closer's own unshared commitments would tell the
+ * partner they exist (work-k5fk.32 S1 sweep).
+ */
+const sharedWithEveryone = (p: ClosureProposal) => p.sharedAt !== null;
 
 export function closeStage4(req: CloseStage4Request): Promise<{
   kind: Stage4ClosureKind;
@@ -157,7 +164,7 @@ async function closeStage4InScope(req: CloseStage4Request): Promise<{
   // Each creator's own WILLING on their own commitment schedules its follow-up
   // (an INDIVIDUAL one, theirs alone); the summary counts only what the closer may see.
   const individual = willingIndividualCommitments(proposals, choices);
-  const individualVisible = individual.filter(visibleToCloser(req.seat));
+  const individualShared = individual.filter(sharedWithEveryone);
 
   const kind =
     req.kind ??
@@ -202,7 +209,7 @@ async function closeStage4InScope(req: CloseStage4Request): Promise<{
   const summary = buildClosureSummary(
     kind,
     mutual.length,
-    individualVisible.length,
+    individualShared.length,
     items.openNeedIds.length,
     req.summary,
   );
@@ -290,7 +297,9 @@ export async function closeStage4WithoutAgreement(args: {
     closureInputsAsJob(args.sessionId),
     loadClosureItems(args.sessionId),
   ]);
-  const individual = willingIndividualCommitments(proposals, choices).filter(visibleToCloser(args.seat));
+  const willing = willingIndividualCommitments(proposals, choices);
+  const individual = willing.filter(visibleToCloser(args.seat));
+  const individualShared = willing.filter(sharedWithEveryone);
   const now = new Date();
   await withSessionScope(
     args.sessionId,
@@ -303,7 +312,7 @@ export async function closeStage4WithoutAgreement(args: {
           summary: buildClosureSummary(
             Stage4ClosureKind.NO_SHARED_AGREEMENT,
             0,
-            individual.length,
+            individualShared.length,
             items.openNeedIds.length,
             args.summary,
           ),

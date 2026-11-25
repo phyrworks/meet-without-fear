@@ -208,7 +208,9 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     await expectSealed(run, 'proposal_revision', 'before', `proposal_id = $1 AND action IN ('REVISED', 'REMOVED')`, [
       probeProposalId,
     ]);
-    // the app reads the explaining text back from the encrypted after
+    // Decrypted, the revision holds the proposal's snapshot but never Bob's chat turn: a revision (and the
+    // proposal's removal_reason) is read by every member who sees the proposal, and the turn is a line of his
+    // private conversation (work-k5fk.32 S1 sweep: was `capturedFromUserMessage` / `reasonText: <the turn>`).
     const back = await asBob(() =>
       prisma.proposalRevision.findMany({
         where: { proposalId: probeProposalId, action: { in: ['REVISED', 'REMOVED'] } },
@@ -216,11 +218,18 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
         select: { action: true, after: true },
       }),
     );
-    expect(back.map(b => (b.after as { reasonText?: string }).reasonText)).toEqual([revise, remove]);
+    expect(back.map(b => (b.after as { description?: string }).description)).toEqual([
+      'take a long walk together every Sunday morning',
+      'take a long walk together every Sunday morning',
+    ]);
+    for (const b of back) {
+      expect(JSON.stringify(b.after)).not.toContain('Please');
+      expect((b.after as Record<string, unknown>).capturedFromUserMessage).toBeUndefined();
+    }
     const removed = await asBob(() =>
       prisma.proposal.findUnique({ where: { id: probeProposalId }, select: { status: true, removalReason: true } }),
     );
-    expect(removed).toEqual({ status: 'REMOVED', removalReason: remove });
+    expect(removed).toEqual({ status: 'REMOVED', removalReason: null });
   });
 
   it('proposal_choice.note (upsertChoice, raw INSERT as mwf_app): sealed; loadVisibleChoices (raw) decrypts; sharing calls the hook', async () => {

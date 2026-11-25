@@ -407,6 +407,9 @@ function extractAddOperations(input: Stage4CaptureInput): Stage4InventoryOperati
   return operations;
 }
 
+// Private until shared (work-k5fk.32 S1 sweep): an operation read from the participant's own chat turn carries no
+// `reason` — the turn is a line of their private conversation, and the reason lands in proposal.removal_reason and
+// the revision's envelope, which every member who sees the proposal reads (was `reason: text`).
 function extractDestructiveOrRevisionOperation(
   text: string,
   proposals: ProposalRow[],
@@ -418,7 +421,6 @@ function extractDestructiveOrRevisionOperation(
         operation: {
           type: 'REMOVE_PROPOSAL',
           proposalId: match.proposal.id,
-          reason: text,
         },
         confidence: match.confidence,
       };
@@ -433,7 +435,6 @@ function extractDestructiveOrRevisionOperation(
         operation: {
           type: 'RESTORE_PROPOSAL',
           proposalId: match.proposal.id,
-          reason: text,
         },
         confidence: match.confidence,
       };
@@ -451,7 +452,6 @@ function extractDestructiveOrRevisionOperation(
           type: 'REVISE_PROPOSAL',
           proposalId: match.proposal.id,
           description,
-          reason: text,
         },
         confidence: match.confidence,
       };
@@ -474,7 +474,6 @@ function extractDestructiveOrRevisionOperation(
           type: 'REVISE_PROPOSAL',
           proposalId: match.proposal.id,
           kind: Stage4ProposalKind.INDIVIDUAL_COMMITMENT,
-          reason: text,
         },
         confidence: match.confidence,
       };
@@ -582,6 +581,9 @@ async function writeRevision(
   // R47: `reason` is a plaintext marker column filtered by value; the explaining
   // text is user/model-derived, so it goes into the encrypted `after` envelope
   // (proposal_revision.after, R46) and `reason` stays null.
+  // Private until shared (work-k5fk.32 S1 sweep): the participant's chat turn itself is NOT copied in. A revision
+  // is read by every member who may see the proposal (proposal_revision app_select), and the turn is a line of the
+  // participant's private conversation — was `capturedFromUserMessage`.
   await prisma.proposalRevision.create({
     data: {
       proposalId,
@@ -589,7 +591,7 @@ async function writeRevision(
       actorUserId: ctx.actor.userId,
       action,
       ...(before ? { before: before as object } : {}),
-      after: { ...after, capturedFromUserMessage: ctx.userMessage, reasonText: reasonText ?? null } as object,
+      after: { ...after, reasonText: reasonText ?? null } as object,
       reason: null,
     },
   });
@@ -758,7 +760,8 @@ async function applyOperation(
         status: Stage4ProposalStatus.REMOVED,
         removedAt: now,
         removedByUserId: ctx.actor.userId,
-        removalReason: operation.reason,
+        // null, not undefined: a removal read from the chat carries no reason, and leaves no earlier one behind
+        removalReason: operation.reason ?? null,
       },
     });
     await writeRevision(
