@@ -4647,7 +4647,9 @@ export function UnifiedSessionScreen({
           suggestedShareFocus={shareOfferData.suggestion.suggestedShareFocus || ''}
           onAccept={() => {
             setShowShareTopicDrawer(false);
-            markCompleted('responded-to-share-offer');
+            // Not responded yet (work-m5d2): accepting only opens the refinement modal. The offer is answered
+            // when the user shares from it (onShareComplete); closing the modal without sharing leaves the offer
+            // open, and the share-topic panel must come back.
             trackShareTopicAccepted(sessionId, shareOfferData.suggestion!.action as 'OFFER_SHARING' | 'OFFER_OPTIONAL');
             // Open refinement modal so user can chat about and refine the draft
             // before sharing
@@ -5024,6 +5026,7 @@ export function UnifiedSessionScreen({
           onClose={() => setRefinementOfferId(null)}
           onShareComplete={() => {
             setRefinementOfferId(null);
+            markCompleted('responded-to-share-offer');
             trackShareDraftSent(sessionId, (shareOfferData?.suggestion?.action ?? 'OFFER_OPTIONAL') as 'OFFER_SHARING' | 'OFFER_OPTIONAL', true);
             // Shared context appears inline in chat. Refresh share data.
             queryClient.invalidateQueries({ queryKey: stageKeys.pendingActions(sessionId) });
