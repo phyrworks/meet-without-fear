@@ -35,15 +35,40 @@ export interface InvitationDetails {
 export type InvitationErrorType = 'not_found' | 'claimed' | 'network' | 'unknown';
 
 /**
- * The API's 403 for an invitation someone else opened first (work-k5fk.10.8: the first signed-in opener claims
- * it and only they read, accept or decline it). GET, acknowledge and accept all answer it so.
+ * The API's 403 FORBIDDEN for an invitation someone else opened first (work-k5fk.10.8: the first signed-in opener
+ * claims it and only they read, accept or decline it). GET, acknowledge and accept all answer it so. Matched by
+ * its code: the accept's privacy refusal is a 403 too, with VALIDATION_ERROR (work-k5fk.35 C3).
  */
 export function isInvitationClaimedError(err: unknown): boolean {
-  return err instanceof ApiClientError && (err.code === ErrorCode.FORBIDDEN || err.status === 403);
+  return err instanceof ApiClientError && err.code === ErrorCode.FORBIDDEN;
+}
+
+/** The accept's refusal when the caller turned off session invitations in Privacy settings (403 VALIDATION_ERROR). */
+export function isInvitationsDisabledError(err: unknown): boolean {
+  return err instanceof ApiClientError && err.status === 403 && err.code === ErrorCode.VALIDATION_ERROR;
 }
 
 /** What the invitee sees for an invitation someone else claimed (the server's message is not shown verbatim). */
 export const INVITATION_CLAIMED_MESSAGE = 'This invitation has already been opened by someone else.';
+
+/** Shown when the user turned off session invitations; says where to turn them back on. */
+export const INVITATIONS_DISABLED_MESSAGE =
+  'You have turned off session invitations in Privacy settings. Turn them back on in Settings, then open the link again.';
+
+/**
+ * Why an accept failed, for the user (work-k5fk.35 C10), and whether the pending invitation is worth keeping: a
+ * refusal (claimed by someone else, invitations turned off, the session full, a live session with this person
+ * already, expired) will not change on retry; a network or server failure might.
+ */
+export function describeAcceptInvitationError(err: unknown): { message: string; keepPending: boolean } {
+  if (isInvitationClaimedError(err)) return { message: INVITATION_CLAIMED_MESSAGE, keepPending: false };
+  if (isInvitationsDisabledError(err)) return { message: INVITATIONS_DISABLED_MESSAGE, keepPending: false };
+  if (err instanceof ApiClientError && err.status >= 400 && err.status < 500) {
+    // CONFLICT (session full, live session exists), EXPIRED, VALIDATION_ERROR: the server's own friendly message.
+    return { message: err.message || 'This invitation can no longer be accepted.', keepPending: false };
+  }
+  return { message: 'Could not accept the invitation right now. Please try again.', keepPending: true };
+}
 
 /** State returned by useInvitationDetails hook */
 export interface UseInvitationDetailsState {

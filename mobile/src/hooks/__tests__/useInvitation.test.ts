@@ -6,6 +6,10 @@ import {
   clearPendingInvitation,
   createInvitationLink,
   useInvitationDetails,
+  isInvitationClaimedError,
+  isInvitationsDisabledError,
+  describeAcceptInvitationError,
+  INVITATION_CLAIMED_MESSAGE,
   type InvitationDetails,
 } from '../useInvitation';
 
@@ -551,5 +555,50 @@ describe('useInvitationDetails', () => {
     });
     expect(result.current.isClaimedByOther).toBe(false);
     expect(result.current.error).toBeNull();
+  });
+});
+
+// work-k5fk.35 C3 / C10: which refusal is which, by the API's code, never by the bare status.
+describe('invitation refusals', () => {
+  const apiError = (code: string, message: string, status: number) =>
+    new (ApiClientError as unknown as new (error: { code: string; message: string }, status: number) => Error)(
+      { code, message },
+      status
+    );
+  const privacyRefusal = () =>
+    apiError(ErrorCode.VALIDATION_ERROR, 'You have disabled session invitations in Privacy settings', 403);
+
+  it('the claimed error is the FORBIDDEN code; the privacy refusal (403 VALIDATION_ERROR) is not it', () => {
+    expect(isInvitationClaimedError(apiError(ErrorCode.FORBIDDEN, 'opened by someone else', 403))).toBe(true);
+    expect(isInvitationClaimedError(privacyRefusal())).toBe(false);
+    expect(isInvitationsDisabledError(privacyRefusal())).toBe(true);
+    expect(isInvitationsDisabledError(apiError(ErrorCode.FORBIDDEN, 'opened by someone else', 403))).toBe(false);
+    expect(isInvitationClaimedError(new Error('boom'))).toBe(false);
+  });
+
+  it('describes each accept refusal, and keeps the pending invitation only for a transient failure', () => {
+    expect(describeAcceptInvitationError(apiError(ErrorCode.FORBIDDEN, 'x', 403))).toEqual({
+      message: INVITATION_CLAIMED_MESSAGE,
+      keepPending: false,
+    });
+    expect(describeAcceptInvitationError(privacyRefusal())).toEqual({
+      message: expect.stringMatching(/Privacy settings/),
+      keepPending: false,
+    });
+    const full = 'This session already has everyone it can seat.';
+    expect(describeAcceptInvitationError(apiError(ErrorCode.CONFLICT, full, 409))).toEqual({
+      message: full,
+      keepPending: false,
+    });
+    const live = 'You already have a session in progress with this person. Finish or archive it before starting another.';
+    expect(describeAcceptInvitationError(apiError(ErrorCode.CONFLICT, live, 409))).toEqual({
+      message: live,
+      keepPending: false,
+    });
+    expect(describeAcceptInvitationError(apiError(ErrorCode.SERVICE_UNAVAILABLE, 'Network error', 0))).toEqual({
+      message: expect.stringMatching(/try again/i),
+      keepPending: true,
+    });
+    expect(describeAcceptInvitationError(apiError(ErrorCode.INTERNAL_ERROR, 'Failed', 500)).keepPending).toBe(true);
   });
 });

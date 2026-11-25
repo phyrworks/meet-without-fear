@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react-native';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import HomeScreen from '../index';
 import { SessionSummaryDTO, SessionStatus, Stage, StageStatus } from '@meet-without-fear/shared';
@@ -33,10 +33,16 @@ jest.mock('lucide-react-native', () => ({
 // Mock useSessions hook
 const mockUseSessions = jest.fn();
 const mockAcceptInvitation = jest.fn();
+// The accept's outcome: success by default; a test sets an error to see the refusal path.
+let mockAcceptError: unknown = null;
 jest.mock('../../../../src/hooks/useSessions', () => ({
   useSessions: () => mockUseSessions(),
   useAcceptInvitation: (options) => {
-    mockAcceptInvitation.mockImplementation((params) => {
+    mockAcceptInvitation.mockImplementation(async (params) => {
+      if (mockAcceptError) {
+        await options.onError?.(mockAcceptError);
+        return;
+      }
       // Simulate successful acceptance
       options.onSuccess?.({ session: { id: 'accepted-session' } });
     });
@@ -95,6 +101,10 @@ jest.mock('@/src/hooks', () => ({
 const mockUseInvitationDetails = jest.fn();
 jest.mock('@/src/hooks/useInvitation', () => ({
   useInvitationDetails: () => mockUseInvitationDetails(),
+  describeAcceptInvitationError: (err: { status?: number; message?: string }) =>
+    err.status && err.status < 500
+      ? { message: err.message, keepPending: false }
+      : { message: 'Could not accept the invitation right now. Please try again.', keepPending: true },
 }));
 
 // Mock components that may have dependencies
@@ -452,6 +462,64 @@ describe('HomeScreen', () => {
     renderWithProviders(<HomeScreen />);
 
     expect(screen.getByText("Accept Jane's invitation")).toBeTruthy();
+  });
+
+  // work-k5fk.35 C10: a refused accept says why, instead of clearing the invitation silently.
+  describe('when the accept fails', () => {
+    const pending = (clearInvitation: jest.Mock) => {
+      mockUseSessions.mockReturnValue({ data: { items: [], hasMore: false }, isLoading: false });
+      mockUsePendingInvitation.mockReturnValue({ pendingInvitation: 'invite-123', isLoading: false, clearInvitation });
+      mockUseInvitationDetails.mockReturnValue({
+        invitation: {
+          id: 'invite-123',
+          invitedBy: { id: 'user-2', name: 'Jane' },
+          status: 'PENDING',
+          createdAt: '2024-01-01T00:00:00Z',
+          expiresAt: '2024-01-08T00:00:00Z',
+          name: null,
+          session: { id: 'session-1', status: 'INVITED' },
+        },
+        isLoading: false,
+        error: null,
+        isExpired: false,
+        isNotFound: false,
+        refetch: jest.fn(),
+      });
+    };
+    let alertSpy: jest.SpyInstance;
+    beforeEach(() => {
+      alertSpy = jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      mockAcceptError = null;
+      alertSpy.mockRestore();
+    });
+
+    it('a refusal (e.g. a live session with this person) is shown, and the invitation is cleared', async () => {
+      const clearInvitation = jest.fn();
+      pending(clearInvitation);
+      const live = 'You already have a session in progress with this person. Finish or archive it before starting another.';
+      mockAcceptError = { status: 409, message: live };
+      renderWithProviders(<HomeScreen />);
+      fireEvent.press(screen.getByText("Accept Jane's invitation"));
+      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Couldn't accept the invitation", live));
+      expect(clearInvitation).toHaveBeenCalled();
+    });
+
+    it('a network failure is shown and the invitation is kept to retry', async () => {
+      const clearInvitation = jest.fn();
+      pending(clearInvitation);
+      mockAcceptError = { status: 0, message: 'Network error' };
+      renderWithProviders(<HomeScreen />);
+      fireEvent.press(screen.getByText("Accept Jane's invitation"));
+      await waitFor(() =>
+        expect(alertSpy).toHaveBeenCalledWith(
+          "Couldn't accept the invitation",
+          'Could not accept the invitation right now. Please try again.'
+        )
+      );
+      expect(clearInvitation).not.toHaveBeenCalled();
+    });
   });
 
   it('does not show Continue button when there is a pending invitation', () => {

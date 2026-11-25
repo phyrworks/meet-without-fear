@@ -11,7 +11,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../lib/api';
 import { disconnectAbly } from '../lib/ably';
 import type { ApiResponse, GetMeResponse } from '@meet-without-fear/shared';
-import type { User, AuthContextValue } from './useAuthTypes';
+import type { User, AuthContextValue, AccountProblem } from './useAuthTypes';
+
+/** The /auth/me refusals that mean there is no user to be (the error's API code; ApiClientError carries it). */
+function accountProblemOf(error: unknown): AccountProblem | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'EMAIL_NOT_VERIFIED' || code === 'ACCOUNT_LINK_CONFLICT' ? code : null;
+}
 
 /**
  * Hook to provide authentication state using Clerk
@@ -27,6 +33,7 @@ export function useAuthProviderClerk(): AuthContextValue {
 
   const [user, setUser] = useState<User | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [accountProblem, setAccountProblem] = useState<AccountProblem | null>(null);
 
   // Sync backend profile when Clerk auth state changes
   useEffect(() => {
@@ -34,6 +41,7 @@ export function useAuthProviderClerk(): AuthContextValue {
       // Not signed in - clear user
       if (!isSignedIn || !clerkUser) {
         setUser(null);
+        setAccountProblem(null);
         return;
       }
 
@@ -46,6 +54,7 @@ export function useAuthProviderClerk(): AuthContextValue {
       try {
         const response = await apiClient.get<ApiResponse<GetMeResponse>>('/auth/me');
 
+        setAccountProblem(null);
         if (response.data?.data?.user) {
           const backendUser = response.data.data.user;
           setUser({
@@ -61,7 +70,14 @@ export function useAuthProviderClerk(): AuthContextValue {
         }
       } catch (error) {
         console.error('[useAuth] Failed to sync backend profile:', error);
-        // Don't block the app - create minimal user from Clerk data
+        // The backend refused the account itself: no user, and the app says what to do (work-k5fk.35 C4)
+        const problem = accountProblemOf(error);
+        if (problem) {
+          setUser(null);
+          setAccountProblem(problem);
+          return;
+        }
+        // Otherwise (network, server) don't block the app - create minimal user from Clerk data
         setUser({
           id: clerkUser.id,
           email: clerkUser.emailAddresses[0]?.emailAddress || '',
@@ -84,6 +100,7 @@ export function useAuthProviderClerk(): AuthContextValue {
 
   const signOut = useCallback(async () => {
     setUser(null);
+    setAccountProblem(null);
     // Clear all React Query cache to prevent stale user data
     // when signing back in with a different account
     queryClient.clear();
@@ -104,6 +121,7 @@ export function useAuthProviderClerk(): AuthContextValue {
     user,
     isLoading: !isLoaded || isLoadingProfile,
     isAuthenticated: isSignedIn ?? false,
+    accountProblem,
     signOut,
     getToken: getTokenFn,
     updateUser,

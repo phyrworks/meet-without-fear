@@ -31,6 +31,8 @@ import {
   expectNeedsSummaryFromApi,
   waitForNeedsReveal,
   waitForStage,
+  submitAndShareStage4Selections,
+  closeStage4WithSharedAgreement,
 } from '../helpers/test-utils';
 
 test.use(devices['iPhone 12']);
@@ -478,48 +480,18 @@ test.describe('Live AI Full Partner Journey: Stages 0-4', () => {
     await handleMoodCheck(harness.userAPage);
     await handleMoodCheck(harness.userBPage);
 
-    await Promise.all([
-      apiA.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/ready`),
-      apiB.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/ready`),
-    ]);
-
-    const [s1, s2, s3] = strategies;
-    await apiA.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/rank`, {
-      rankedIds: [s1.id, s2.id, s3.id],
-    });
-    const rankBResponse = await apiB.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/rank`, {
-      rankedIds: [s1.id, s3.id, s2.id],
-    });
-    const rankBData = await rankBResponse.json();
-    expect(rankBData.data?.canReveal).toBe(true);
-
-    const overlapResponse = await apiA.get(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/overlap`);
-    const overlapData = await overlapResponse.json();
-    const overlapStrategies = overlapData.data?.overlap || [];
-    expect(overlapStrategies.length).toBeGreaterThanOrEqual(1);
-    console.log(`${elapsed()} Strategy overlap: ${overlapStrategies.length} strategies`);
-
-    const followUpDate = new Date();
-    followUpDate.setDate(followUpDate.getDate() + 7);
-
-    const agreementResponse = await apiA.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/agreements`, {
-      strategyId: overlapStrategies[0].id,
-      description: overlapStrategies[0].description,
-      type: 'MICRO_EXPERIMENT',
-      followUpDate: followUpDate.toISOString(),
-    });
-    const agreementData = await agreementResponse.json();
-    const agreementId = agreementData.data?.agreement?.id;
-    expect(agreementId, 'Agreement creation did not return an id').toBeTruthy();
-
-    const confirmResponse = await apiB.post(
-      `${API_BASE_URL}/api/sessions/${harness.sessionId}/agreements/${agreementId}/confirm`,
-      { confirmed: true }
-    );
-    const confirmData = await confirmResponse.json();
-    // The API returns `sessionCanResolve`, not `sessionComplete` — that field
-    // name is stale in two-browser-full-flow.spec.ts too (asserts undefined).
-    expect(confirmData.data?.sessionCanResolve).toBe(true);
+    // Redesigned Stage 4 (work-k5fk.35 C6): the ranking routes (/strategies/ready, /rank,
+    // /overlap) are gone. Each partner takes a WILLING stance on the proposals and shares
+    // (private until both have shared); mutual WILLING closes as a shared agreement, as in
+    // two-browser-full-flow.spec.ts.
+    await submitAndShareStage4Selections(apiA, API_BASE_URL, harness.sessionId, 'User A');
+    await submitAndShareStage4Selections(apiB, API_BASE_URL, harness.sessionId, 'User B');
+    const closeData = await closeStage4WithSharedAgreement(apiA, API_BASE_URL, harness.sessionId, 'User A');
+    expect(closeData.data.closed).toBe(true);
+    expect(closeData.data.outcome.kind).toBe('SHARED_AGREEMENT');
+    expect(closeData.data.outcome.agreements.length).toBeGreaterThanOrEqual(1);
+    const finalB = await (await apiB.get(`${API_BASE_URL}/api/sessions/${harness.sessionId}/stage4`)).json();
+    expect(finalB.data?.outcome?.kind, 'User B sees the closed shared agreement').toBe('SHARED_AGREEMENT');
     console.log(`${elapsed()} === SESSION COMPLETE ===`);
 
     // Final diagnostic screenshots (no toHaveScreenshot — chat varies between runs).

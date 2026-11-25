@@ -174,11 +174,9 @@ test.describe('Reconciler: Gaps Detected → Share Refined', () => {
   }
 
   test.describe('Refinement UI', () => {
-    // FIXME(work-m5d2): product bug. Accepting the share topic marks the offer
-    // responded locally before the refinement modal opens, so closing the modal
-    // without sharing leaves no share-topic panel (the banner still says "Review the
-    // suggestion below") until a reload. Everything before the last assertion passes.
-    test.fixme('User B can open the refinement chat for the suggestion and close it without sharing', async () => {
+    // work-m5d2: accepting the share topic only opens the refinement modal; the offer
+    // is answered when B shares from it, so closing without sharing brings the panel back.
+    test('User B can open the refinement chat for the suggestion and close it without sharing', async () => {
       test.setTimeout(300000);
       const testStart = Date.now();
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;

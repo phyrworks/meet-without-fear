@@ -12,6 +12,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
+  Alert,
   Animated,
   View,
   Text,
@@ -32,7 +33,7 @@ import { SessionStatus, type SessionSummaryDTO } from '@meet-without-fear/shared
 
 import { useAuth } from '@/src/hooks/useAuth';
 import { useBiometricAuth, usePendingInvitation, useSessionDrawer } from '@/src/hooks';
-import { useInvitationDetails } from '@/src/hooks/useInvitation';
+import { describeAcceptInvitationError, useInvitationDetails } from '@/src/hooks/useInvitation';
 import { useSessions, useAcceptInvitation } from '../../../src/hooks/useSessions';
 import { useUnreadSessionCount } from '@/src/hooks/useUnreadSessionCount';
 import { BiometricPrompt, SessionDrawer } from '../../../src/components';
@@ -72,9 +73,12 @@ export default function HomeScreen() {
       await clearInvitation();
       router.push(`/session/${data.session.id}`);
     },
-    onError: async () => {
-      // Clear the pending invitation on error (e.g., expired, already accepted)
-      await clearInvitation();
+    onError: async (error) => {
+      // Say why (work-k5fk.35 C10): claimed by someone else, invitations turned off, the session full, a live
+      // session with this person already, expired. A refusal clears the invitation; a transient failure keeps it.
+      const { message, keepPending } = describeAcceptInvitationError(error);
+      Alert.alert("Couldn't accept the invitation", message);
+      if (!keepPending) await clearInvitation();
     },
   });
 

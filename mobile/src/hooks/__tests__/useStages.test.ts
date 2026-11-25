@@ -25,9 +25,6 @@ import {
   useConsentShareNeeds,
   useStrategies,
   useProposeStrategy,
-  useMarkReadyToRank,
-  useSubmitRankings,
-  useStrategiesReveal,
   useStage4State,
   useSubmitStage4ProposalSelection,
   useSubmitStage4Selections,
@@ -36,7 +33,6 @@ import {
   useSubmitTendingResponse,
   useCreateTendingReentry,
   useAgreements,
-  useCreateAgreement,
   useConfirmAgreement,
   useResolveSession,
   stageKeys,
@@ -928,156 +924,6 @@ describe('useStages', () => {
       });
     });
 
-    describe('useSubmitRankings hook', () => {
-      it('optimistically marks current user ready to rank in cache', async () => {
-        mockPost.mockResolvedValueOnce({
-          ready: true,
-          readyAt: '2026-05-05T00:00:00.000Z',
-          partnerReady: false,
-          canStartRanking: false,
-        });
-
-        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        queryClient.setQueryData(stageKeys.strategies(sessionId), {
-          strategies: [],
-          phase: StrategyPhase.COLLECTING,
-          aiSuggestionsAvailable: false,
-          myReadyToRank: false,
-          partnerReadyToRank: false,
-        });
-        queryClient.setQueryData(stageKeys.progress(sessionId), {
-          sessionId,
-          myProgress: {
-            stage: Stage.STRATEGIC_REPAIR,
-            status: StageStatus.IN_PROGRESS,
-            startedAt: '2026-05-05T00:00:00.000Z',
-            completedAt: null,
-            milestones: {},
-          },
-          partnerProgress: {
-            stage: Stage.STRATEGIC_REPAIR,
-            status: StageStatus.IN_PROGRESS,
-            milestones: {},
-          },
-          canAdvance: false,
-        });
-        const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-          return React.createElement(QueryClientProvider, { client: queryClient }, children);
-        };
-
-        const { result } = renderHook(() => useMarkReadyToRank(), { wrapper });
-
-        await act(async () => {
-          await result.current.mutateAsync({ sessionId });
-        });
-
-        expect(mockPost).toHaveBeenCalledWith(`/sessions/${sessionId}/strategies/ready`);
-        expect(queryClient.getQueryData<any>(stageKeys.strategies(sessionId))?.myReadyToRank).toBe(true);
-        // Readiness is not a milestone: the progress cache is left alone.
-        expect(queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.milestones).toEqual({});
-      });
-
-      it('submits strategy rankings', async () => {
-        mockPost.mockResolvedValueOnce({
-          submitted: true,
-          waitingForPartner: true,
-        });
-
-        const { result } = renderHook(() => useSubmitRankings(), {
-          wrapper: createWrapper(),
-        });
-
-        await act(async () => {
-          await result.current.mutateAsync({
-            sessionId,
-            rankedIds: ['strategy-1', 'strategy-2', 'strategy-3'],
-          });
-        });
-
-        expect(mockPost).toHaveBeenCalledWith(`/sessions/${sessionId}/strategies/rank`, {
-          rankedIds: ['strategy-1', 'strategy-2', 'strategy-3'],
-        });
-      });
-
-      it('moves the local strategy cache out of active ranking immediately', async () => {
-        mockPost.mockResolvedValueOnce({
-          ranked: true,
-          rankedAt: '2026-05-05T00:00:00.000Z',
-          partnerRanked: false,
-          canReveal: false,
-        });
-
-        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        queryClient.setQueryData(stageKeys.strategies(sessionId), {
-          strategies: [],
-          phase: StrategyPhase.RANKING,
-          aiSuggestionsAvailable: false,
-          myReadyToRank: true,
-          partnerReadyToRank: true,
-        });
-        queryClient.setQueryData(stageKeys.progress(sessionId), {
-          sessionId,
-          myProgress: {
-            stage: Stage.STRATEGIC_REPAIR,
-            status: StageStatus.IN_PROGRESS,
-            startedAt: '2026-05-05T00:00:00.000Z',
-            completedAt: null,
-            milestones: {},
-          },
-          partnerProgress: {
-            stage: Stage.STRATEGIC_REPAIR,
-            status: StageStatus.IN_PROGRESS,
-            milestones: {},
-          },
-          canAdvance: false,
-        });
-        const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
-          React.createElement(QueryClientProvider, { client: queryClient }, children);
-
-        const { result } = renderHook(() => useSubmitRankings(), { wrapper });
-
-        await act(async () => {
-          await result.current.mutateAsync({
-            sessionId,
-            rankedIds: ['strategy-1', 'strategy-2'],
-          });
-        });
-
-        expect(queryClient.getQueryData<any>(stageKeys.strategies(sessionId))?.phase)
-          .toBe(StrategyPhase.REVEALING);
-        // Ranking has no milestone on the target: the progress cache is left alone.
-        expect(queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.milestones).toEqual({});
-      });
-    });
-
-    describe('useStrategiesReveal hook', () => {
-      it('fetches strategy overlap after both ranked', async () => {
-        mockGet.mockResolvedValueOnce({
-          overlap: [
-            {
-              id: 'strategy-1',
-              description: 'Weekly check-ins',
-              needsAddressed: ['need-1'],
-              duration: null,
-              measureOfSuccess: null,
-            },
-          ],
-          phase: 'REVEALING',
-        });
-
-        const { result } = renderHook(() => useStrategiesReveal(sessionId), {
-          wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-          expect(result.current.isSuccess).toBe(true);
-        });
-
-        expect(result.current.data?.overlap).toHaveLength(1);
-        expect(result.current.data?.overlap[0].id).toBe('strategy-1');
-      });
-    });
-
     describe('redesigned Stage 4 hooks', () => {
       it('fetches redesigned Stage 4 state', async () => {
         mockGet.mockResolvedValueOnce(redesignedStage4State);
@@ -1343,88 +1189,6 @@ describe('useStages', () => {
       });
     });
 
-    describe('useCreateAgreement hook', () => {
-      it('creates new agreement', async () => {
-        mockPost.mockResolvedValueOnce({
-          agreement: {
-            id: 'agreement-1',
-            description: 'We agree to weekly check-ins on Sundays',
-            type: AgreementType.COMMITMENT,
-            status: 'PROPOSED',
-            duration: null,
-            measureOfSuccess: null,
-            agreedByMe: true,
-            agreedByPartner: false,
-            agreedAt: null,
-            followUpDate: null,
-          },
-          awaitingPartnerConfirmation: true,
-        });
-
-        const { result } = renderHook(() => useCreateAgreement(), {
-          wrapper: createWrapper(),
-        });
-
-        await act(async () => {
-          await result.current.mutateAsync({
-            sessionId,
-            strategyId: 'strategy-1',
-            description: 'We agree to weekly check-ins on Sundays',
-            type: AgreementType.COMMITMENT,
-          });
-        });
-
-        expect(mockPost).toHaveBeenCalledWith(`/sessions/${sessionId}/agreements`, {
-          strategyId: 'strategy-1',
-          description: 'We agree to weekly check-ins on Sundays',
-          type: AgreementType.COMMITMENT,
-        });
-      });
-
-      it('adds the created agreement to cache and leaves reveal state', async () => {
-        mockPost.mockResolvedValueOnce({
-          agreement: {
-            id: 'agreement-1',
-            description: 'We agree to weekly check-ins on Sundays',
-            type: AgreementType.COMMITMENT,
-            status: 'PROPOSED',
-            duration: null,
-            measureOfSuccess: null,
-            agreedByMe: true,
-            agreedByPartner: false,
-            agreedAt: null,
-            followUpDate: null,
-          },
-          awaitingPartnerConfirmation: true,
-        });
-
-        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        queryClient.setQueryData(stageKeys.strategies(sessionId), {
-          strategies: [],
-          phase: StrategyPhase.REVEALING,
-          aiSuggestionsAvailable: false,
-        });
-        const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
-          React.createElement(QueryClientProvider, { client: queryClient }, children);
-
-        const { result } = renderHook(() => useCreateAgreement(), { wrapper });
-
-        await act(async () => {
-          await result.current.mutateAsync({
-            sessionId,
-            strategyId: 'strategy-1',
-            description: 'We agree to weekly check-ins on Sundays',
-            type: AgreementType.COMMITMENT,
-          });
-        });
-
-        expect(queryClient.getQueryData<any>(stageKeys.agreements(sessionId))?.agreements)
-          .toHaveLength(1);
-        expect(queryClient.getQueryData<any>(stageKeys.strategies(sessionId))?.phase)
-          .toBe(StrategyPhase.NEGOTIATING);
-      });
-    });
-
     describe('useConfirmAgreement hook', () => {
       it('confirms agreement', async () => {
         mockPost.mockResolvedValueOnce({
@@ -1523,12 +1287,6 @@ describe('useStages', () => {
       expect(stageKeys.needs(sessionId)).toEqual(['stages', 'needs', sessionId]);
       expect(stageKeys.stage4(sessionId)).toEqual(['stages', 'stage4', sessionId]);
       expect(stageKeys.strategies(sessionId)).toEqual(['stages', 'strategies', sessionId]);
-      expect(stageKeys.strategiesReveal(sessionId)).toEqual([
-        'stages',
-        'strategies',
-        'reveal',
-        sessionId,
-      ]);
       expect(stageKeys.agreements(sessionId)).toEqual(['stages', 'agreements', sessionId]);
     });
   });

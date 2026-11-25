@@ -2,7 +2,12 @@ import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { readPreferences } from '../services/user-settings';
-import { notifyPartner, notifyPartnerWithFallback, publishSessionCreated } from '../services/realtime';
+import {
+  notifyPartner,
+  notifyPartnerWithFallback,
+  publishSessionCreated,
+  publishSessionEvent,
+} from '../services/realtime';
 import { z } from 'zod';
 import { SessionStatus, StageStatus, Stage } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
@@ -309,6 +314,8 @@ export async function createSession(req: Request, res: Response): Promise<void> 
 
     const { personId, inviteName, innerThoughtsId, linkedAtMessageId, context, forceCreate } = parseResult.data;
     let inviteeDisplayName = inviteName?.trim() || undefined;
+    // The live session this pair already shares, ended first when the inviter confirmed (forceCreate)
+    let endingSessionId: string | null = null;
 
     if (personId === user.id) {
       errorResponse(res, 'VALIDATION_ERROR', 'Cannot start a session with yourself', 400);
@@ -344,13 +351,11 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       // pair of humans is live_session_pair's key, which the database enforces
       // when the second human joins. Asked here so the inviter hears it now.
       const existingActiveSession = await findLiveSessionWith(user.id, personId);
-      if (existingActiveSession) {
-        if (forceCreate) {
-          errorResponse(res, 'CONFLICT', LIVE_SESSION_EXISTS_MESSAGE, 409, {
-            existingActiveSession: { id: existingActiveSession.id, status: existingActiveSession.status },
-          });
-          return;
-        }
+      if (existingActiveSession && forceCreate) {
+        // "Start New Anyway" (owner decision, work-k5fk.35 C1): the inviter ends the live session, then the new one
+        // is created — both in the transaction below.
+        endingSessionId = existingActiveSession.id;
+      } else if (existingActiveSession) {
         successResponse(res, {
           existingActiveSession: {
             id: existingActiveSession.id,
@@ -368,6 +373,11 @@ export async function createSession(req: Request, res: Response): Promise<void> 
     // milestones); invitation_sent is reached when the inviter confirms the
     // invitation message (sessions.ts confirmInvitationMessage).
     const { session, invitation } = await prisma.$transaction(async tx => {
+      // The pair rule's one live session ends first: ABANDONED through app.session_set_status, its sole writer (the
+      // caller is a current participant of it; ACTIVE -> ABANDONED). t_live_session_pair_end releases the pair.
+      if (endingSessionId) {
+        await tx.$executeRaw`SELECT app.session_set_status(${endingSessionId}::uuid, 'ABANDONED'::session_status)`;
+      }
       const sess = await tx.session.create({
         data: { status: 'CREATED' },
       });
@@ -429,6 +439,13 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       }
     }
 
+    // After commit: the ended session's other side hears that it ended (content-free, as account deletion's).
+    if (endingSessionId) {
+      await publishSessionEvent(endingSessionId, 'session.abandoned', { reason: 'partner_started_new_session' }).catch(
+        (err: unknown) => logger.warn(`[createSession] Failed to notify ended session ${endingSessionId}:`, err),
+      );
+    }
+
     // Generate invitation URL (user shares via their own channels)
     const invitationUrl = createInvitationUrl(invitation.id);
 
@@ -459,6 +476,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
         },
         invitationId: invitation.id,
         invitationUrl,
+        ...(endingSessionId ? { endedSessionId: endingSessionId } : {}),
       },
       201,
     );

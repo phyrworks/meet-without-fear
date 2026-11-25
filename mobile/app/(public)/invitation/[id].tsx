@@ -15,7 +15,9 @@ import { useAuth } from '@/src/hooks/useAuth';
 import {
   useInvitationDetails,
   isInvitationClaimedError,
+  isInvitationsDisabledError,
   INVITATION_CLAIMED_MESSAGE,
+  INVITATIONS_DISABLED_MESSAGE,
 } from '@/src/hooks/useInvitation';
 import { useAcceptInvitation } from '@/src/hooks/useSessions';
 import { colors } from '@/src/theme';
@@ -100,8 +102,15 @@ function ExpiredState({ inviterName }: { inviterName: string | null }) {
  * Someone else opened the invitation first (work-k5fk.10.40): they are its invitee, so this account cannot read,
  * accept or decline it. Not an error to retry.
  */
-function ClaimedState() {
+function ClaimedState({ invitationId, canSignIn }: { invitationId: string; canSignIn: boolean }) {
   const handleReturnHome = () => {
+    router.replace('/(public)');
+  };
+
+  // Signed out, its claimer reads past the notice once signed in (work-k5fk.10.41, as the website's "This was me —
+  // sign in"): the id is kept as the pending invitation, so the home screen offers it after sign-in (work-k5fk.35 C9).
+  const handleSignIn = async () => {
+    await AsyncStorage.setItem(PENDING_INVITATION_KEY, invitationId);
     router.replace('/(public)');
   };
 
@@ -122,14 +131,64 @@ function ClaimedState() {
         </Text>
 
         <View style={styles.buttonContainer}>
+          {canSignIn && (
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={handleSignIn}
+              accessibilityRole="button"
+              accessibilityLabel="This was me, sign in"
+              testID="invitation-claimed-sign-in"
+            >
+              <Ionicons name="log-in-outline" size={20} color="#FFFFFF" style={styles.buttonIcon} />
+              <Text style={styles.primaryButtonText}>This was me — sign in</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={styles.primaryButton}
+            style={canSignIn ? styles.secondaryButton : styles.primaryButton}
             onPress={handleReturnHome}
             accessibilityRole="button"
             accessibilityLabel="Return home"
           >
-            <Ionicons name="home-outline" size={20} color="#FFFFFF" style={styles.buttonIcon} />
-            <Text style={styles.primaryButtonText}>Return Home</Text>
+            {!canSignIn && (
+              <Ionicons name="home-outline" size={20} color="#FFFFFF" style={styles.buttonIcon} />
+            )}
+            <Text style={canSignIn ? styles.secondaryButtonText : styles.primaryButtonText}>Return Home</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+/**
+ * The accept was refused because this user turned off session invitations in Privacy settings (403
+ * VALIDATION_ERROR, work-k5fk.35 C3): not "already opened", and not a connection error to retry.
+ */
+function InvitationsDisabledState() {
+  const handleOpenSettings = () => {
+    router.replace('/settings/privacy');
+  };
+
+  return (
+    <SafeAreaView style={styles.container} testID="invitation-disabled-state">
+      <View style={styles.content}>
+        <View style={styles.iconContainer}>
+          <Ionicons name="notifications-off-outline" size={64} color={colors.textMuted} />
+        </View>
+
+        <Text style={styles.title}>Invitations Turned Off</Text>
+
+        <Text style={styles.description}>{INVITATIONS_DISABLED_MESSAGE}</Text>
+
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleOpenSettings}
+            accessibilityRole="button"
+            accessibilityLabel="Open settings"
+          >
+            <Ionicons name="settings-outline" size={20} color="#FFFFFF" style={styles.buttonIcon} />
+            <Text style={styles.primaryButtonText}>Open Settings</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -385,7 +444,12 @@ export default function InvitationScreen() {
 
   // Someone else opened it first: the GET, the acknowledge or the accept said so (403)
   if (isClaimedByOther || (acceptInvitation.isError && isInvitationClaimedError(acceptInvitation.error))) {
-    return <ClaimedState />;
+    return <ClaimedState invitationId={id} canSignIn={!isAuthenticated} />;
+  }
+
+  // The accept's privacy refusal: its own message (work-k5fk.35 C3)
+  if (acceptInvitation.isError && isInvitationsDisabledError(acceptInvitation.error)) {
+    return <InvitationsDisabledState />;
   }
 
   // Show error if invitation acceptance failed

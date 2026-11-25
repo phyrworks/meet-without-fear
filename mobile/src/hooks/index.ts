@@ -130,9 +130,6 @@ export {
   useStrategies,
   useProposeStrategy,
   useRequestStrategySuggestions,
-  useMarkReadyToRank,
-  useSubmitRankings,
-  useStrategiesReveal,
   useStage4State,
   useSubmitStage4ProposalSelection,
   useSubmitStage4Selections,
@@ -147,7 +144,6 @@ export {
   useCreateTendingReentry,
   // Agreements
   useAgreements,
-  useCreateAgreement,
   useConfirmAgreement,
   useResolveSession,
   // Stage 4 Sub-chat (Phase 3)

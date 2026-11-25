@@ -60,6 +60,7 @@ import { PreJoinDraftReviewModal } from '../components/PreJoinDraftReviewModal';
 import { MemorySuggestionCard } from '../components/MemorySuggestionCard';
 // SegmentedControl removed - tabs are now integrated in SessionChatHeader
 import { PartnerInfoDrawer } from '../components/PartnerInfoDrawer';
+import { invitationClaimDescription } from '../utils/invitationClaim';
 import {
   createNeedRefinementMessage,
   NeedRefinementChatMessage,
@@ -1478,11 +1479,10 @@ export function UnifiedSessionScreen({
   // (topicFrame changes), the latch resets and the panel reappears.
   const topicProposalDismissed = false;
   const partnerInfoName = partnerName || 'Meet Without Fear';
-  const partnerStageDescription = getPartnerStageDescription(
-    partnerInfoName,
-    partnerProgress,
-    session?.status
-  );
+  // Before the partner joins, the inviter learns who opened (claimed) the invitation (work-k5fk.35 C13).
+  const partnerStageDescription =
+    invitationClaimDescription(invitation) ??
+    getPartnerStageDescription(partnerInfoName, partnerProgress, session?.status);
   const partnerActivitySession = session as
     | { partnerLastActiveAt?: string | null; partnerLastViewedAt?: string | null }
     | undefined;
@@ -4647,7 +4647,9 @@ export function UnifiedSessionScreen({
           suggestedShareFocus={shareOfferData.suggestion.suggestedShareFocus || ''}
           onAccept={() => {
             setShowShareTopicDrawer(false);
-            markCompleted('responded-to-share-offer');
+            // Not responded yet (work-m5d2): accepting only opens the refinement modal. The offer is answered
+            // when the user shares from it (onShareComplete); closing the modal without sharing leaves the offer
+            // open, and the share-topic panel must come back.
             trackShareTopicAccepted(sessionId, shareOfferData.suggestion!.action as 'OFFER_SHARING' | 'OFFER_OPTIONAL');
             // Open refinement modal so user can chat about and refine the draft
             // before sharing
@@ -5024,6 +5026,7 @@ export function UnifiedSessionScreen({
           onClose={() => setRefinementOfferId(null)}
           onShareComplete={() => {
             setRefinementOfferId(null);
+            markCompleted('responded-to-share-offer');
             trackShareDraftSent(sessionId, (shareOfferData?.suggestion?.action ?? 'OFFER_OPTIONAL') as 'OFFER_SHARING' | 'OFFER_OPTIONAL', true);
             // Shared context appears inline in chat. Refresh share data.
             queryClient.invalidateQueries({ queryKey: stageKeys.pendingActions(sessionId) });
