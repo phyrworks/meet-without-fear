@@ -64,6 +64,21 @@ describe('createSessionRequestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  // linkedAtMessageId is a reflection_message id (uuid), which InnerThoughtsScreen passes through new.tsx.
+  it('accepts a reflection message uuid as linkedAtMessageId', () => {
+    const result = createSessionRequestSchema.safeParse({
+      inviteName: 'My Partner',
+      linkedAtMessageId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  // The backend takes first + space + last, each up to 50 (work-k5fk.9, D1).
+  it('accepts an inviteName of 101 characters and rejects 102', () => {
+    expect(createSessionRequestSchema.safeParse({ inviteName: 'x'.repeat(101) }).success).toBe(true);
+    expect(createSessionRequestSchema.safeParse({ inviteName: 'x'.repeat(102) }).success).toBe(false);
+  });
+
   it('rejects context over 500 chars', () => {
     const result = createSessionRequestSchema.safeParse({
       inviteName: 'My Partner',

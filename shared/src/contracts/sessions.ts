@@ -67,9 +67,12 @@ export type SessionDetailInput = z.infer<typeof sessionDetailSchema>;
 export const createSessionRequestSchema = z
   .object({
     personId: z.string().uuid().optional(),
-    inviteName: z.string().min(1, 'Name is required').max(100, 'Name too long').optional(),
+    // 101: first + space + last, each up to 50 — the backend's bound (work-k5fk.9, D1)
+    inviteName: z.string().min(1, 'Name is required').max(101, 'Name too long').optional(),
     context: z.string().max(500, 'Context too long').optional(),
     innerThoughtsId: z.string().uuid().optional(), // Link to originating Inner Thoughts session
+    // The Inner Thoughts (reflection_message) message the user started from: a uuid, not a session message's
+    // "<conversationId>:<seq>" id. The backend accepts it and does not store it (spec §1.6).
     linkedAtMessageId: z.string().uuid().optional(),
     forceCreate: z.boolean().optional(),
   })
