@@ -301,119 +301,108 @@ test.describe('Partner Journey (Two Browser Contexts)', () => {
     // ==========================================
     console.log(`${elapsed()} === PHASE 6: Checking for share suggestion ===`);
 
-    // Wait for reconciler to complete (runs in background after feel-heard confirmation)
-    await userBPage.waitForTimeout(3000);
-
-    // First verify the share offer exists via API (more reliable than UI)
-    const shareOfferResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/reconciler/share-offer`, {
-      headers: getE2EHeaders(userB.email, userBId, FIXTURE_ID),
-    });
-
-    console.log(`${elapsed()} Share offer API status: ${shareOfferResponse.status()}`);
-
+    // The reconciler runs in the background after feel-heard; with this fixture it finds gaps
+    // in Shantam's guess, so Darryl gets a share offer. Wait for it (work-k5fk.35 E4: the share
+    // phase below is required, not conditional on the offer having appeared).
     let shareOfferData: any = null;
-    try {
-      shareOfferData = await shareOfferResponse.json();
-      console.log(`${elapsed()} Share offer API response:`, JSON.stringify(shareOfferData, null, 2));
-    } catch (e) {
-      console.log(`${elapsed()} Share offer API response failed to parse:`, e);
-    }
-
-    // API wraps response in { success, data } envelope
-    const hasShareOfferFromAPI = shareOfferData?.data?.hasSuggestion === true;
-    if (hasShareOfferFromAPI) {
-      console.log(`${elapsed()} Share suggestion content: "${shareOfferData.suggestion?.suggestedContent?.substring(0, 50)}..."`);
-    }
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/reconciler/share-offer`, {
+            headers: getE2EHeaders(userB.email, userBId, FIXTURE_ID),
+          });
+          shareOfferData = response.ok() ? await response.json() : null;
+          return shareOfferData?.data?.hasSuggestion === true;
+        },
+        { timeout: 30000, message: 'the reconciler should offer Darryl a share suggestion' }
+      )
+      .toBe(true);
+    console.log(`${elapsed()} Share offer API response:`, JSON.stringify(shareOfferData, null, 2));
 
     // The share suggestion lives in the share-topic panel above User B's chat input
     // (mobile #602, 506c3f9a, removed the Activity drawer this spec used to open).
-    if (hasShareOfferFromAPI) {
-      // ==========================================
-      // PHASE 7: User B shares context
-      // ==========================================
-      console.log(`${elapsed()} === PHASE 7: User B shares context ===`);
-      await userBPage.screenshot({ path: 'test-results/partner-07-user-b-share-suggestion-card.png' });
+    // ==========================================
+    // PHASE 7: User B shares context
+    // ==========================================
+    console.log(`${elapsed()} === PHASE 7: User B shares context ===`);
+    await userBPage.screenshot({ path: 'test-results/partner-07-user-b-share-suggestion-card.png' });
 
-      // The offer exists server-side (API above); without Ably the subject's chat
-      // only shows it after a fresh read (see waitForShareTopicPanel).
-      await waitForShareTopicPanel(userBPage);
-      const shareResponse = await shareFromShareTopicDrawer(userBPage);
-      console.log(`${elapsed()} Share API response status: ${shareResponse.status()}`);
-      expect(shareResponse.ok()).toBe(true);
+    // The offer exists server-side (API above); without Ably the subject's chat
+    // only shows it after a fresh read (see waitForShareTopicPanel).
+    await waitForShareTopicPanel(userBPage);
+    const shareResponse = await shareFromShareTopicDrawer(userBPage);
+    console.log(`${elapsed()} Share API response status: ${shareResponse.status()}`);
+    expect(shareResponse.ok()).toBe(true);
 
-      // The share suggestion is gone once it was shared
-      await expect(userBPage.getByTestId('share-topic-panel')).not.toBeVisible({ timeout: 10000 });
+    // The share suggestion is gone once it was shared
+    await expect(userBPage.getByTestId('share-topic-panel')).not.toBeVisible({ timeout: 10000 });
 
-      console.log(`${elapsed()} User B shared context`);
-      await userBPage.screenshot({ path: 'test-results/partner-08-user-b-shared.png' });
+    console.log(`${elapsed()} User B shared context`);
+    await userBPage.screenshot({ path: 'test-results/partner-08-user-b-shared.png' });
 
-      // ==========================================
-      // PHASE 8: Verify User A receives the shared context
-      // ==========================================
-      console.log(`${elapsed()} === PHASE 8: Check User A received shared context ===`);
+    // ==========================================
+    // PHASE 8: Verify User A receives the shared context
+    // ==========================================
+    console.log(`${elapsed()} === PHASE 8: Check User A received shared context ===`);
 
-      // Log Ably console output before checking
-      console.log(`${elapsed()} User A Ably logs before check:`, userAConsoleLogs.slice(-10));
+    // Log Ably console output before checking
+    console.log(`${elapsed()} User A Ably logs before check:`, userAConsoleLogs.slice(-10));
 
-      // Wait for the Ably event to arrive
-      // The backend publishes 'empathy.context_shared' which should trigger a cache refetch
-      await userAPage.waitForTimeout(3000);
+    // Wait for the Ably event to arrive
+    // The backend publishes 'empathy.context_shared' which should trigger a cache refetch
+    await userAPage.waitForTimeout(3000);
 
-      // Log Ably console output after waiting
-      console.log(`${elapsed()} User A Ably logs after wait:`, userAConsoleLogs.slice(-10));
+    // Log Ably console output after waiting
+    console.log(`${elapsed()} User A Ably logs after wait:`, userAConsoleLogs.slice(-10));
 
-      // The Ably real-time event should trigger a React Query cache update on User A's page
-      // which will cause the "Context from Darryl" indicator to appear without a page reload.
-      // Note: When context is from partner (not self), it shows "Context from {partnerName}"
+    // The Ably real-time event should trigger a React Query cache update on User A's page
+    // which will cause the "Context from Darryl" indicator to appear without a page reload.
+    // Note: When context is from partner (not self), it shows "Context from {partnerName}"
 
-      // Try waiting for the indicator to appear via Ably (with longer timeout)
-      const sharedContextIndicator = userAPage.getByText('Context from Darryl', { exact: true });
-      const indicatorVisible = await sharedContextIndicator.isVisible({ timeout: 8000 }).catch(() => false);
+    // Try waiting for the indicator to appear via Ably (with longer timeout)
+    const sharedContextIndicator = userAPage.getByText('Context from Darryl', { exact: true });
+    const indicatorVisible = await sharedContextIndicator.isVisible({ timeout: 8000 }).catch(() => false);
 
-      if (!indicatorVisible) {
-        // Log what we know about Ably connection state
-        console.log(`${elapsed()} Ably update not received. All Ably logs:`, userAConsoleLogs);
+    if (!indicatorVisible) {
+      // Log what we know about Ably connection state
+      console.log(`${elapsed()} Ably update not received. All Ably logs:`, userAConsoleLogs);
 
-        // Ably update didn't arrive in time - reload to verify the data was persisted
-        console.log(`${elapsed()} Reloading User A page to verify state`);
-        await userAPage.reload();
+      // Ably update didn't arrive in time - reload to verify the data was persisted
+      console.log(`${elapsed()} Reloading User A page to verify state`);
+      await userAPage.reload();
+      await userAPage.waitForLoadState('networkidle');
+
+      // Handle mood check if present after reload
+      const moodContinue = userAPage.getByTestId('mood-check-continue-button');
+      const hasMoodCheck = await moodContinue.isVisible({ timeout: 3000 }).catch(() => false);
+      if (hasMoodCheck) {
+        console.log(`${elapsed()} User A dismissing mood check`);
+        await moodContinue.click();
         await userAPage.waitForLoadState('networkidle');
-
-        // Handle mood check if present after reload
-        const moodContinue = userAPage.getByTestId('mood-check-continue-button');
-        const hasMoodCheck = await moodContinue.isVisible({ timeout: 3000 }).catch(() => false);
-        if (hasMoodCheck) {
-          console.log(`${elapsed()} User A dismissing mood check`);
-          await moodContinue.click();
-          await userAPage.waitForLoadState('networkidle');
-        }
-      } else {
-        console.log(`${elapsed()} SUCCESS: Ably update received! No reload needed.`);
       }
-
-      await userAPage.screenshot({ path: 'test-results/partner-09-user-a-after-share.png' });
-
-      // Verify the indicator is visible (either from Ably update or after reload)
-      await expect(sharedContextIndicator).toBeVisible({ timeout: 10000 });
-      console.log(`${elapsed()} User A sees "Context from Darryl" indicator`);
-
-      // Verify via API that the shared context was recorded
-      const empathyStatusResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/status`, {
-        headers: getE2EHeaders(userA.email, userAId, FIXTURE_ID),
-      });
-
-      if (empathyStatusResponse.ok()) {
-        const empathyStatusData = await empathyStatusResponse.json();
-        const hasSharedContext = empathyStatusData.data?.sharedContext !== null;
-        console.log(`${elapsed()} Empathy status - has shared context: ${hasSharedContext}`);
-      }
-
-      await userAPage.screenshot({ path: 'test-results/partner-10-user-a-sees-shared.png' });
-      console.log(`${elapsed()} User A received Darryl's shared context`);
     } else {
-      console.log(`${elapsed()} No share suggestion found via API`);
-      await userBPage.screenshot({ path: 'test-results/partner-06-user-b-no-share-suggestion.png' });
+      console.log(`${elapsed()} SUCCESS: Ably update received! No reload needed.`);
     }
+
+    await userAPage.screenshot({ path: 'test-results/partner-09-user-a-after-share.png' });
+
+    // Verify the indicator is visible (either from Ably update or after reload)
+    await expect(sharedContextIndicator).toBeVisible({ timeout: 10000 });
+    console.log(`${elapsed()} User A sees "Context from Darryl" indicator`);
+
+    // Verify via API that the shared context was recorded
+    const empathyStatusResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/status`, {
+      headers: getE2EHeaders(userA.email, userAId, FIXTURE_ID),
+    });
+
+    expect(empathyStatusResponse.ok()).toBe(true);
+    const empathyStatusData = await empathyStatusResponse.json();
+    expect(empathyStatusData.data?.sharedContext, 'Shantam has Darryl\'s shared context').toEqual(
+      expect.objectContaining({ content: expect.any(String), sharedAt: expect.any(String) })
+    );
+
+    await userAPage.screenshot({ path: 'test-results/partner-10-user-a-sees-shared.png' });
+    console.log(`${elapsed()} User A received Darryl's shared context`);
 
     // ==========================================
     // PHASE 9: Verify via API
