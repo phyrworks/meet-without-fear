@@ -15,7 +15,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -88,6 +88,37 @@ describeTarget(
       expect(
         (await http(ada, 'post', `/sessions/00000000-0000-7000-8000-000000000000/topic-frame/confirm`)).status,
       ).toBe(404);
+    });
+
+    it('topic frame of a linked process (no invitation): its initiator confirms; a participant someone added is refused (work-k5fk.16)', async () => {
+      // A tending NEW_PROCESS session: the caller is the initiator (no adder) and no invitation exists.
+      // Cy (not Bob: Ada and Bob may already share a live session) is seated as added by Ada.
+      const cy = { id: randomUuidV7(), email: `cy-${process.pid}@e2e.test` };
+      expect((await http(cy, 'get', '/sessions')).status).toBe(200);
+      const [linked] = await run.sql<{ id: string }>(
+        `INSERT INTO session (status, topic_frame, previous_session_id) VALUES ('CREATED', 'Tending follow-up', $1) RETURNING id`,
+        [ids.session],
+      );
+      // One row per statement: the pair trigger of a two-row INSERT would see both rows twice.
+      await run.sql(`INSERT INTO participant (session_id, user_id, kind) VALUES ($1, $2, 'human')`, [
+        linked.id,
+        ids.adaUser,
+      ]);
+      await run.sql(
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'human', $3)`,
+        [linked.id, cy.id, ids.adaUser],
+      );
+      expect(await run.sql(`SELECT 1 FROM invitation WHERE session_id = $1`, [linked.id])).toEqual([]);
+
+      expect((await http(cy, 'post', `/sessions/${linked.id}/topic-frame/confirm`)).status).toBe(403);
+      const res = await http(ada, 'post', `/sessions/${linked.id}/topic-frame/confirm`);
+      expect(res.status).toBe(200);
+      const [row] = await run.sql<{ status: string; confirmed: Date | null }>(
+        `SELECT status::text AS status, topic_frame_confirmed_at AS confirmed FROM session WHERE id = $1`,
+        [linked.id],
+      );
+      expect(row.status).toBe('INVITED');
+      expect(row.confirmed).not.toBeNull();
     });
 
     it('invitation confirm: Stage 0 → 1 by milestones, no message text on the invitation; idempotent', async () => {

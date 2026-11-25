@@ -163,5 +163,6 @@ The step-10 sweep (work-k5fk.9) applied the rule "a jsonb column is a document t
 inside". Every column above keeps to it except `follow_up_checkin.payload`. The app filters and joins on
 ids inside it (`tending.service.ts`: `entryOutcomes[].followUpId`, `needOutcomes`, `partialClosures`), and
 a co-participant reads it. Normalising it means four to six child tables and a rewrite of the tending
-service, so it stays an encrypted envelope for now (orchestrator decision OD-3, 2026-11-18). Its
-normalisation is bead work-k5fk.27.
+service, so it stays an encrypted envelope (orchestrator decision OD-3, 2026-11-18). This is the settled
+exception, not a pending one: the owner decided on 2026-11-24 that the payload stays jsonb and is not
+normalised (work-k5fk.27, closed).

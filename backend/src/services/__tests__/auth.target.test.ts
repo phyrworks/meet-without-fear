@@ -277,6 +277,39 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
     expect(res.body.data.user.id).not.toBe(u.id);
   });
 
+  it('a tombstone whose identity was kept (no walk): its subject collides on user_identity_pkey, rethrown as CONFLICT, not ACCOUNT_LINK_CONFLICT (work-k5fk.13)', async () => {
+    // Scrubbed by hand, not by app.anonymize_user_account: the identity row survives,
+    // so resolve_user finds no live user and create_user's identity insert collides
+    // on (provider, subject) with no email holder — a 23505 that is not MWF01.
+    const [u] = await run.sql<{ id: string }>(
+      `INSERT INTO "user" (email, first_name) VALUES ('kept@example.test', 'Kept') RETURNING id`,
+    );
+    await run.sql(`INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts12Kept', $1)`, [
+      u.id,
+    ]);
+    await run.sql(
+      `UPDATE "user" SET email = 'deleted+' || id::text || '@invalid', first_name = NULL, deleted_at = now() WHERE id = $1`,
+      [u.id],
+    );
+    const warn = jest.spyOn(logger, 'warn');
+    const error = jest.spyOn(logger, 'error');
+    const info = jest.spyOn(logger, 'info');
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Kept' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({ primaryEmailAddressId: 'idn_k', emailAddresses: [verified('idn_k', 'kept-again@example.test')] }),
+    );
+
+    const res = await me();
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CONFLICT');
+    expect(res.body.error.details).toEqual({ constraint: 'user_identity_pkey' });
+    const calls = [...warn.mock.calls, ...error.mock.calls, ...info.mock.calls];
+    expect(calls.filter(c => JSON.stringify(c).includes('auth.identity_conflict'))).toEqual([]);
+    expect(await userByEmail('kept-again@example.test')).toEqual([]);
+    expect(await identityOf('user_ts12Kept')).toEqual([{ user_id: u.id }]);
+  });
+
   it('an unknown user whose Clerk profile lookup fails is refused; no row is written', async () => {
     mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Unknown' });
     mockGetUser.mockRejectedValue(Object.assign(new Error('rate limited'), { status: 429 }));

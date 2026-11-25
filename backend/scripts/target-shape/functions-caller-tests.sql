@@ -1279,38 +1279,52 @@ BEGIN
   END;
   RAISE NOTICE 'PASS 28b plaintext in, a malformed ciphertext in, a key beside, a non-string and a non-object envelope are refused (% cases and the INSERT arm), naming the reason and never the value (no DETAIL)', i;
 END $$;
--- 28c. the four other envelope columns, with the superuser's writes (rolled back)
+-- 28c. the other envelope columns, with the superuser's writes (rolled back): a proposal_revision and a
+--     follow_up_checkin are seeded in session S (A's), so the refusals of proposal_snapshot_json_schema
+--     (before and after) and checkin_payload_json_schema run on real rows, not on a direct call of the rule
+--     (work-k5fk.19); reflection.summary_doc through an INSERT.
 \connect - mwf_user
 BEGIN;
-DO $$ DECLARE v_detail text; v_n int := 0; BEGIN
-  BEGIN
-    UPDATE proposal_revision SET after = '{"$enc": "MY SECRET PLAN"}' WHERE id = (SELECT id FROM proposal_revision LIMIT 1);
-    IF NOT FOUND THEN
-      -- no revision in the fixture: a direct call of the rule stands in for the row
-      IF app.jsonb_envelope_violation('{"$enc": "MY SECRET PLAN"}') IS NULL THEN RAISE EXCEPTION 'TEST FAILED: rule'; END IF;
-    ELSE
-      RAISE EXCEPTION 'TEST FAILED: plaintext envelope in proposal_revision.after';
-    END IF;
-  EXCEPTION WHEN check_violation THEN
-    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-    IF SQLERRM <> 'value for domain proposal_snapshot_json_schema violates check constraint "jsonb_envelope"' OR v_detail <> '' THEN RAISE; END IF;
-  END;
-  BEGIN
-    INSERT INTO reflection (user_id, summary_doc) VALUES ('00000000-0000-7e00-8000-0000000000b1', '{"$enc": "MY SECRET SUMMARY"}');
-    RAISE EXCEPTION 'TEST FAILED: plaintext envelope in reflection.summary_doc';
-  EXCEPTION WHEN check_violation THEN
-    IF SQLERRM <> 'value for domain reflection_summary_json_schema violates check constraint "jsonb_envelope"' OR SQLERRM LIKE '%SECRET%' THEN RAISE; END IF;
-    v_n := v_n + 1;
-  END;
-  BEGIN
-    UPDATE follow_up_checkin SET payload = '"MY SECRET ANSWERS"' WHERE id = (SELECT id FROM follow_up_checkin LIMIT 1);
-    IF FOUND THEN RAISE EXCEPTION 'TEST FAILED: a non-object payload'; END IF;
-  EXCEPTION WHEN check_violation THEN
-    IF SQLERRM <> 'value for domain checkin_payload_json_schema violates check constraint "jsonb_envelope"' THEN RAISE; END IF;
-    v_n := v_n + 1;
-  END;
-  IF v_n < 1 THEN RAISE EXCEPTION 'TEST FAILED: the reflection INSERT was not refused'; END IF;
-  RAISE NOTICE 'PASS 28c the envelope rule on reflection (an INSERT), proposal_revision and follow_up_checkin (fixture rows when present): % refused, no value in the message', v_n;
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+DO $$
+DECLARE
+  v_x uuid := current_setting('t.r_session')::uuid;
+  v_c uuid := current_setting('t.a_user')::uuid;
+  v_prop uuid; v_rev uuid; v_fu uuid; v_chk uuid;
+  v_detail text; v_n int := 0;
+  c jsonb;  -- [the statement, the domain whose CHECK must refuse it]
+BEGIN
+  INSERT INTO proposal (session_id, created_by_user_id, description) VALUES (v_x, v_c, 'TS7 28c a plan')
+    RETURNING id INTO v_prop;
+  INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after)
+    VALUES (v_prop, v_x, v_c, 'CREATED', '{"description": "a plan"}') RETURNING id INTO v_rev;
+  INSERT INTO follow_up (session_id, type) VALUES (v_x, 'USER_INITIATED_REENTRY') RETURNING id INTO v_fu;
+  INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id, payload)
+    VALUES (v_fu, v_x, v_c, '{"answers": []}') RETURNING id INTO v_chk;
+  FOR c IN SELECT * FROM jsonb_array_elements(jsonb_build_array(
+      jsonb_build_array(format($q$UPDATE proposal_revision SET after = '{"$enc": "MY SECRET PLAN"}' WHERE id = %L$q$, v_rev), 'proposal_snapshot_json_schema'),
+      jsonb_build_array(format($q$UPDATE proposal_revision SET before = '{"$enc": "MY SECRET PLAN"}' WHERE id = %L$q$, v_rev), 'proposal_snapshot_json_schema'),
+      jsonb_build_array(format($q$UPDATE follow_up_checkin SET payload = '"MY SECRET ANSWERS"' WHERE id = %L$q$, v_chk), 'checkin_payload_json_schema'),
+      jsonb_build_array(format($q$UPDATE follow_up_checkin SET payload = '{"$enc": "MY SECRET ANSWERS"}' WHERE id = %L$q$, v_chk), 'checkin_payload_json_schema'),
+      jsonb_build_array($q$INSERT INTO reflection (user_id, summary_doc) VALUES ('00000000-0000-7e00-8000-0000000000b1', '{"$enc": "MY SECRET SUMMARY"}')$q$, 'reflection_summary_json_schema')))
+  LOOP
+    BEGIN
+      EXECUTE c ->> 0;
+      RAISE EXCEPTION 'TEST FAILED: stored (%)', c ->> 0;
+    EXCEPTION WHEN check_violation THEN
+      GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+      IF SQLERRM IS DISTINCT FROM format('value for domain %s violates check constraint "jsonb_envelope"', c ->> 1)
+         OR SQLERRM LIKE '%SECRET%' OR v_detail <> '' THEN
+        RAISE EXCEPTION 'TEST FAILED: % refused with % (detail %)', c ->> 0, SQLERRM, v_detail;
+      END IF;
+      v_n := v_n + 1;
+    END;
+  END LOOP;
+  IF (SELECT after FROM proposal_revision WHERE id = v_rev) IS DISTINCT FROM '{"description": "a plan"}'::jsonb
+     OR (SELECT payload FROM follow_up_checkin WHERE id = v_chk) IS DISTINCT FROM '{"answers": []}'::jsonb THEN
+    RAISE EXCEPTION 'TEST FAILED: a seeded document changed';
+  END IF;
+  RAISE NOTICE 'PASS 28c the envelope rule on seeded proposal_revision (before, after) and follow_up_checkin (payload) rows and a reflection INSERT: % refused, no value in the message', v_n;
 END $$;
 ROLLBACK;
 -- 28d. typed domains (owner, 2026-11-23), as their writers: brain_activity.metadata (activity_metadata_json_schema) is the

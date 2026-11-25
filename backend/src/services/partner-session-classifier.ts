@@ -221,20 +221,19 @@ export function createIdMapping(facts: CategorizedFactWithId[]): IdMapping {
 }
 
 /**
- * Resolve short IDs back to full UUIDs in the LLM response.
+ * Resolve short IDs back to full UUIDs in the LLM response. An id the mapping
+ * does not know (neither a short id nor an existing fact's full id) names no
+ * existing fact: an upsert with one is a new fact and gets a fresh uuidv7, so a
+ * model-invented id is never stored (work-k5fk.19); a delete of one is dropped.
  * @internal Exported for testing
  */
 export function resolveShortIds(factUpdates: FactUpdatePayload, mapping: IdMapping): FactUpdatePayload {
-  const { shortToFull } = mapping;
+  const { shortToFull, fullToShort } = mapping;
+  const resolve = (id: string): string | undefined => shortToFull.get(id) ?? (fullToShort.has(id) ? id : undefined);
 
   return {
-    upsert: factUpdates.upsert.map(item => {
-      if (item.id && shortToFull.has(item.id)) {
-        return { ...item, id: shortToFull.get(item.id)! };
-      }
-      return item;
-    }),
-    delete: factUpdates.delete.map(id => shortToFull.get(id) || id),
+    upsert: factUpdates.upsert.map(item => (item.id ? { ...item, id: resolve(item.id) ?? uuidv7() } : item)),
+    delete: factUpdates.delete.flatMap(id => resolve(id) ?? []),
   };
 }
 

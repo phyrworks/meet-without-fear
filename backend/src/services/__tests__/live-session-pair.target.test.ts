@@ -360,6 +360,15 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect(forced.body.error.message).toMatch(/already .*session/i);
     // Nothing was written for the refused session.
     expect(await run.sql(`SELECT count(*)::int AS n FROM session`)).toEqual([{ n: before }]);
+
+    // work-k5fk.17: mwf_app reads a pair only when the caller is in it (app_select: user_a = me OR user_b = me).
+    const pairSql = `SELECT session_id::text AS s FROM live_session_pair WHERE session_id = $1`;
+    expect(await run.as('mwf_app', ada.id, pairSql, [s.sessionId])).toEqual([{ s: s.sessionId }]);
+    expect(await run.as('mwf_app', olaf.id, pairSql, [s.sessionId])).toEqual([{ s: s.sessionId }]);
+    const third = person('third');
+    expect((await http(third, 'get', '/sessions')).status).toBe(200);
+    expect(await run.as('mwf_app', third.id, pairSql, [s.sessionId])).toEqual([]);
+    expect(await run.as('mwf_app', third.id, `SELECT count(*)::int AS n FROM live_session_pair`)).toEqual([{ n: 0 }]);
   });
 
   it('review F2: before the invitee joins, what the inviter calls them is the invite name (not "Partner")', async () => {

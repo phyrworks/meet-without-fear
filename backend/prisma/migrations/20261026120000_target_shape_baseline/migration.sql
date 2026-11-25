@@ -5659,7 +5659,7 @@ CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON publi
 -- on an upsert, SET doc_schema_version = EXCLUDED.doc_schema_version too.
 CREATE FUNCTION app.t_doc_schema() RETURNS trigger
   LANGUAGE plpgsql
-  SET search_path = pg_catalog, public, pg_temp
+  SET search_path = pg_catalog, pg_temp
   AS $$
   DECLARE
     v_name text := TG_TABLE_NAME || coalesce('.' || lower(to_jsonb(NEW) ->> 'kind'), '');
@@ -7176,11 +7176,12 @@ BEGIN
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: view(s) without security_invoker, or materialized view(s): %', bad; END IF;
 
   -- Every SECURITY DEFINER function and every trigger function in schema app
-  -- pins search_path with pg_temp last (C1/I4: no temp-object shadowing).
+  -- pins search_path with pg_temp last (C1/I4: no temp-object shadowing); one
+  -- that names nothing in public pins it without public (t_doc_schema; work-k5fk.19).
   SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'app' AND (p.prosecdef OR p.prorettype = 'pg_catalog.trigger'::regtype)
-    AND NOT coalesce('search_path=pg_catalog, public, pg_temp' = ANY (p.proconfig), false);
+    AND NOT coalesce(p.proconfig && ARRAY['search_path=pg_catalog, public, pg_temp', 'search_path=pg_catalog, pg_temp'], false);
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: app function(s) without a pinned search_path: %', bad; END IF;
 
   -- No SECURITY DEFINER function and no trigger function is executable by PUBLIC.

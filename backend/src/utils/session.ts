@@ -112,16 +112,19 @@ export async function getPartnerUserId(sessionId: string, currentUserId: string)
 }
 
 /**
- * Checks if a user is the creator of a session (the one who sent the invitation).
- * Used to allow the creator to work on Stages 0-1 while waiting for partner to accept.
+ * Checks if a user is the session's initiator: their participant row has no
+ * adder (participant.added_by_user_id IS NULL; work-k5fk.2, at most one such
+ * row per session). True for the inviter of an invited session and for the
+ * caller who started a tending linked process (no invitation; work-k5fk.16).
+ * Used to allow the initiator to work on Stages 0-1 while waiting for a partner.
  */
 export async function isSessionCreator(sessionId: string, userId: string): Promise<boolean> {
-  const invitation = await prisma.invitation.findFirst({
-    where: { sessionId, invitedByUserId: userId },
-    select: { id: true },
+  const participant = await prisma.participant.findFirst({
+    where: { sessionId, userId, addedByUserId: null },
+    select: { userId: true },
   });
 
-  return invitation !== null;
+  return participant !== null;
 }
 
 /**

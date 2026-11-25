@@ -137,22 +137,25 @@ describe('Short ID Mapping', () => {
       expect(resolved.delete).toEqual(['full-uuid-2', 'full-uuid-3']);
     });
 
-    it('preserves IDs that are not in the mapping', () => {
+    it('an id not in the mapping is a new fact with a fresh uuidv7; deleting one is dropped (work-k5fk.19)', () => {
       const mapping: IdMapping = {
         shortToFull: new Map([['aa0000', 'full-uuid-1']]),
-        fullToShort: new Map(),
+        fullToShort: new Map([['full-uuid-1', 'aa0000']]),
       };
 
       const factUpdates: FactUpdatePayload = {
-        upsert: [{ id: 'unknown-id', category: 'People', fact: 'Some fact' }],
-        delete: ['unknown-delete-id'],
+        upsert: [
+          { id: 'unknown-id', category: 'People', fact: 'Some fact' },
+          { id: 'full-uuid-1', category: 'People', fact: 'An existing fact by its full id' },
+        ],
+        delete: ['unknown-delete-id', 'full-uuid-1'],
       };
 
       const resolved = resolveShortIds(factUpdates, mapping);
 
-      // Unknown IDs are preserved as-is
-      expect(resolved.upsert[0].id).toBe('unknown-id');
-      expect(resolved.delete[0]).toBe('unknown-delete-id');
+      expect(resolved.upsert[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(resolved.upsert[1].id).toBe('full-uuid-1');
+      expect(resolved.delete).toEqual(['full-uuid-1']);
     });
   });
 });
