@@ -7,7 +7,7 @@
 
 import { useMemo, useCallback, useReducer, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Stage, MessageRole, StrategyPhase, AgreementType, MemorySuggestion, SessionStatus, ConfirmAgreementResponse, MAX_AGREEMENTS, type GetEmpathyDraftResponse } from '@meet-without-fear/shared';
+import { Stage, MessageRole, StrategyPhase, MemorySuggestion, SessionStatus, ConfirmAgreementResponse, type GetEmpathyDraftResponse } from '@meet-without-fear/shared';
 import { useToast } from '../contexts/ToastContext';
 import { ApiClientError } from '../lib/api';
 
@@ -44,7 +44,6 @@ import {
   useProposeStrategy,
   useAgreements,
   useConfirmAgreement,
-  useCreateAgreement,
   useResolveSession,
   useEmpathyStatus,
   useShareOffer,
@@ -362,7 +361,6 @@ export function useUnifiedSession(
   const { mutate: requestSuggestions, isPending: isGenerating } =
     useRequestStrategySuggestions();
   const { mutate: confirmAgreement } = useConfirmAgreement();
-  const { mutate: createAgreement } = useCreateAgreement();
   const { mutate: resolveSession } = useResolveSession();
 
   /**
@@ -1197,20 +1195,6 @@ export function useUnifiedSession(
     [sessionId, confirmAgreement]
   );
 
-  const handleCreateAgreementFromOverlap = useCallback(
-    (strategy: { id: string; description: string }) => {
-      if (!sessionId) return;
-      if (agreements.length >= MAX_AGREEMENTS) return; // UI should already disable
-      createAgreement({
-        sessionId,
-        strategyId: strategy.id,
-        description: strategy.description,
-        type: AgreementType.MICRO_EXPERIMENT,
-      });
-    },
-    [sessionId, createAgreement, agreements.length]
-  );
-
   const handleResolveSession = useCallback(
     (onSuccess?: () => void) => {
       if (!sessionId) return;
@@ -1364,7 +1348,6 @@ export function useUnifiedSession(
     handleAddStrategy,
     handleRequestMoreStrategies,
     handleConfirmAgreement,
-    handleCreateAgreementFromOverlap,
     handleResolveSession,
     handleRespondToShareOffer,
 

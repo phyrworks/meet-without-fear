@@ -57,9 +57,6 @@ import {
   GetStrategiesResponse,
   ProposeStrategyRequest,
   ProposeStrategyResponse,
-  SubmitRankingResponse,
-  RevealOverlapResponse,
-  MarkReadyResponse,
   GetStage4StateResponse,
   Stage4SelectionDecision,
   SubmitStage4SelectionRequest,
@@ -78,8 +75,6 @@ import {
   CreateTendingReentryRequest,
   CreateTendingReentryResponse,
   AgreementDTO,
-  CreateAgreementRequest,
-  CreateAgreementResponse,
   ConfirmAgreementResponse,
   ResolveSessionResponse,
   Stage,
@@ -97,7 +92,6 @@ import {
   SaveValidationFeedbackDraftResponse,
   RefineValidationFeedbackRequest,
   RefineValidationFeedbackResponse,
-  StrategyPhase,
   IdentifiedNeedDTO,
 } from '@meet-without-fear/shared';
 
@@ -2190,155 +2184,6 @@ export function useRequestStrategySuggestions(
   });
 }
 
-/**
- * Mark ready to rank strategies.
- */
-export function useMarkReadyToRank(
-  options?: Omit<
-    UseMutationOptions<
-      MarkReadyResponse,
-      ApiClientError,
-      { sessionId: string },
-      {
-        previousStrategies: GetStrategiesResponse | undefined;
-      }
-    >,
-    'mutationFn'
-  >
-) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ sessionId }) => {
-      return post<MarkReadyResponse>(`/sessions/${sessionId}/strategies/ready`);
-    },
-    onMutate: async ({ sessionId }) => {
-      await queryClient.cancelQueries({ queryKey: stageKeys.strategies(sessionId) });
-
-      const previousStrategies = queryClient.getQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId)
-      );
-
-      queryClient.setQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId),
-        (old) => old
-          ? { ...old, myReadyToRank: true }
-          : old
-      );
-      return { previousStrategies };
-    },
-    onSuccess: (data, { sessionId }) => {
-      queryClient.setQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId),
-        (old) => old
-          ? {
-              ...old,
-              myReadyToRank: true,
-              partnerReadyToRank: data.partnerReady,
-              phase: data.canStartRanking ? StrategyPhase.RANKING : old.phase,
-              canMarkReadyToRank: false,
-              canRank: data.canStartRanking,
-            }
-          : old
-      );
-      queryClient.invalidateQueries({ queryKey: stageKeys.strategies(sessionId) });
-      queryClient.invalidateQueries({ queryKey: stageKeys.progress(sessionId) });
-      queryClient.invalidateQueries({ queryKey: sessionKeys.state(sessionId) });
-    },
-    onError: (_error, { sessionId }, context) => {
-      if (context?.previousStrategies) {
-        queryClient.setQueryData(stageKeys.strategies(sessionId), context.previousStrategies);
-      }
-    },
-    ...options,
-  });
-}
-
-/**
- * Submit strategy rankings.
- */
-export function useSubmitRankings(
-  options?: Omit<
-    UseMutationOptions<
-      SubmitRankingResponse,
-      ApiClientError,
-      { sessionId: string; rankedIds: string[] },
-      {
-        previousStrategies: GetStrategiesResponse | undefined;
-      }
-    >,
-    'mutationFn'
-  >
-) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ sessionId, rankedIds }) => {
-      return post<SubmitRankingResponse>(`/sessions/${sessionId}/strategies/rank`, {
-        rankedIds,
-      });
-    },
-    onMutate: async ({ sessionId }) => {
-      await queryClient.cancelQueries({ queryKey: stageKeys.strategies(sessionId) });
-
-      const previousStrategies = queryClient.getQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId)
-      );
-
-      queryClient.setQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId),
-        (old) => old
-          ? { ...old, phase: StrategyPhase.REVEALING }
-          : old
-      );
-      return { previousStrategies };
-    },
-    onSuccess: (data, { sessionId }) => {
-      const canReveal =
-        (data as SubmitRankingResponse & { canReveal?: boolean }).canReveal ??
-        (data as SubmitRankingResponse & { awaitingReveal?: boolean }).awaitingReveal ??
-        false;
-      queryClient.setQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId),
-        (old) => old
-          ? { ...old, phase: canReveal ? StrategyPhase.REVEALING : old.phase }
-          : old
-      );
-      queryClient.refetchQueries({ queryKey: stageKeys.strategies(sessionId) });
-      queryClient.refetchQueries({ queryKey: stageKeys.strategiesReveal(sessionId) });
-      queryClient.refetchQueries({ queryKey: stageKeys.progress(sessionId) });
-    },
-    onError: (_error, { sessionId }, context) => {
-      if (context?.previousStrategies) {
-        queryClient.setQueryData(stageKeys.strategies(sessionId), context.previousStrategies);
-      }
-    },
-    ...options,
-  });
-}
-
-/**
- * Get strategy reveal (overlap after both ranked).
- */
-export function useStrategiesReveal(
-  sessionId: string | undefined,
-  options?: Omit<
-    UseQueryOptions<RevealOverlapResponse, ApiClientError>,
-    'queryKey' | 'queryFn'
-  >
-) {
-  return useQuery({
-    queryKey: stageKeys.strategiesReveal(sessionId || ''),
-    queryFn: async () => {
-      if (!sessionId) throw new Error('Session ID is required');
-      return get<RevealOverlapResponse>(`/sessions/${sessionId}/strategies/overlap`);
-    },
-    enabled: !!sessionId,
-    staleTime: 0,
-    ...options,
-  });
-}
-
 // ============================================================================
 // Redesigned Stage 4
 // ============================================================================
@@ -2962,57 +2807,6 @@ export function useAgreements(
     },
     enabled: !!sessionId,
     staleTime: 0,
-    ...options,
-  });
-}
-
-/**
- * Create an agreement.
- */
-export function useCreateAgreement(
-  options?: Omit<
-    UseMutationOptions<
-      CreateAgreementResponse,
-      ApiClientError,
-      { sessionId: string } & CreateAgreementRequest
-    >,
-    'mutationFn'
-  >
-) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ sessionId, ...request }) => {
-      return post<CreateAgreementResponse>(
-        `/sessions/${sessionId}/agreements`,
-        request
-      );
-    },
-    onSuccess: (data, { sessionId, strategyId }) => {
-      queryClient.setQueryData<{ agreements: AgreementDTO[] }>(
-        stageKeys.agreements(sessionId),
-        (old) => {
-          const existing = old?.agreements ?? [];
-          const agreement = {
-            ...data.agreement,
-            strategyId: data.agreement.strategyId ?? strategyId ?? null,
-          };
-          const withoutDuplicate = existing.filter((a) => a.id !== agreement.id);
-          return { agreements: [...withoutDuplicate, agreement] };
-        }
-      );
-      queryClient.setQueryData<GetStrategiesResponse>(
-        stageKeys.strategies(sessionId),
-        (old) => old
-          ? { ...old, phase: StrategyPhase.NEGOTIATING }
-          : old
-      );
-      queryClient.refetchQueries({ queryKey: stageKeys.agreements(sessionId) });
-      queryClient.refetchQueries({ queryKey: stageKeys.strategies(sessionId) });
-      queryClient.refetchQueries({ queryKey: stageKeys.strategiesReveal(sessionId) });
-      queryClient.refetchQueries({ queryKey: stageKeys.progress(sessionId) });
-      queryClient.refetchQueries({ queryKey: sessionKeys.state(sessionId) });
-    },
     ...options,
   });
 }
