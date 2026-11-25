@@ -357,7 +357,7 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
   });
 
   test.describe('Partner Empathy Visibility', () => {
-    test('User B sees partner empathy in chat only once it is revealed', async ({ request }) => {
+    test('User B does not see User A\'s empathy before it is revealed', async ({ request }) => {
       test.setTimeout(300000);
       const testStart = Date.now();
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
@@ -365,33 +365,38 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
       await setupUserA();
       await completeUserBStage1();
 
-      // Wait for reconciler and Ably events
-      await userBPage.waitForTimeout(5000);
+      // With no gaps the reconciler moves User A's attempt to READY: it waits for User B's own
+      // empathy, unrevealed (work-k5fk.35 E6: was an allow-list that included undefined).
+      await expect
+        .poll(
+          async () => {
+            const response = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/status`, {
+              headers: getE2EHeaders(userA.email, userAId, FIXTURE_ID),
+            });
+            return response.ok() ? (await response.json()).data?.myAttempt?.status : undefined;
+          },
+          { timeout: 30000, message: "the reconciler should find no gaps in User A's empathy" }
+        )
+        .toBe('READY');
 
+      // Privacy: User B, who has not shared their own yet, gets no partner attempt at all.
       const empathyStatusResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/status`, {
         headers: getE2EHeaders(userB.email, userBId, FIXTURE_ID),
       });
+      expect(empathyStatusResponse.ok()).toBe(true);
       const empathyData = await empathyStatusResponse.json();
-      const partnerStatus = empathyData.data?.partnerAttempt?.status;
-      console.log(`${elapsed()} Partner empathy status: ${partnerStatus}`);
-
-      // With no gaps, User A's empathy is READY (waiting for B's own) or already revealed
-      const expectedStatuses = ['REVEALED', 'READY', 'VALIDATED', undefined];
-      expect(expectedStatuses).toContain(partnerStatus);
+      expect(empathyData.data.partnerAttempt).toBeNull();
+      console.log(`${elapsed()} User A's attempt READY; none revealed to User B`);
 
       await userBPage.reload();
       await userBPage.waitForLoadState('networkidle');
       await handleMoodCheck(userBPage, 3000);
       await expect(userBPage.getByTestId('chat-input')).toBeVisible({ timeout: 10000 });
 
+      // Privacy: the unrevealed attempt must not reach User B's chat
       const partnerEmpathyText = /stressed from work|support each other/i;
-      if (partnerStatus === 'REVEALED' || partnerStatus === 'VALIDATED') {
-        await expectPartnerEmpathyInChat(userBPage, userA.name, partnerEmpathyText);
-      } else {
-        // Privacy: an unrevealed attempt must not reach User B
-        await expect(userBPage.getByText(`Empathy from ${userA.name}`, { exact: true })).toHaveCount(0);
-        await expect(userBPage.getByText(partnerEmpathyText)).toHaveCount(0);
-      }
+      await expect(userBPage.getByText(`Empathy from ${userA.name}`, { exact: true })).toHaveCount(0);
+      await expect(userBPage.getByText(partnerEmpathyText)).toHaveCount(0);
     });
   });
 });
