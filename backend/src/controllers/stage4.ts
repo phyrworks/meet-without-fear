@@ -809,7 +809,9 @@ async function pendingAgreementDTO(
   followUpDate: string | null,
 ): Promise<AgreementDTO | null> {
   const proposal = await loadProposal(proposalId);
-  if (!proposal) return null;
+  // Private until shared (work-k5fk.32 S1): never a partner's unshared individual commitment — the proposal
+  // app_select policy hides it from the request connection too; this is the app's side of the same rule.
+  if (!proposal || !proposalVisibleTo(proposal, { sessionId: proposal.sessionId, userId: me })) return null;
   const parties = await legacyParties(proposalId);
   return {
     id: proposal.id,
@@ -949,6 +951,12 @@ export async function createAgreement(req: Request, res: Response): Promise<void
       // proposal — their own, or a SHARED_PROPOSAL they see; never the partner's individual commitment.
       if (!proposalEditableBy(proposal, me)) {
         errorResponse(res, 'FORBIDDEN', 'Only its creator can make an agreement of this strategy', 403);
+        return;
+      }
+      // An agreement asks the partner to confirm what they can read: one's own commitment only once it is shared
+      // (work-k5fk.32 S1; it is shared with one's Stage 4 stances).
+      if (proposal.kind === 'INDIVIDUAL_COMMITMENT' && proposal.sharedAt === null) {
+        errorResponse(res, 'VALIDATION_ERROR', 'Share this commitment before proposing it as an agreement', 400);
         return;
       }
     } else {
@@ -1210,11 +1218,13 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
       prisma.proposal.findMany({
         where: { sessionId, status: { in: ['ACTIVE', 'REVISED'] }, revisions: { some: { reason: LEGACY_PROPOSED } } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { id: true },
+        select: { id: true, kind: true, createdByUserId: true, sharedAt: true },
       }),
     ]);
     const pending = [];
-    for (const p of pendingProposals) {
+    // Private until shared (work-k5fk.32 S1): a partner's unshared individual commitment is not the caller's to
+    // list, even proposed as an agreement (the proposal app_select policy refuses it as well).
+    for (const p of pendingProposals.filter(p => proposalVisibleTo(p, seatOf(participant)))) {
       const dto = await pendingAgreementDTO(p.id, participant.userId, partner, null);
       if (dto) pending.push(dto);
     }

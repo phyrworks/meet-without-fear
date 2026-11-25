@@ -268,11 +268,13 @@ POST /api/v1/sessions/:id/stage4/share-selections
 
 Returns the full `GetStage4StateResponse`. After sharing, `mySelectionStatus` remains `'SUBMITTED'` (sharing is tracked via a separate visibility flag, not an additional status state).
 
+Sharing stances also shares the caller's own individual commitments (every one not removed and not yet shared): each gets `proposal.shared_at` from `app.proposal_share`, its only writer. Until then an individual commitment is its creator's alone — the `proposal` RLS policy hides it, its need links, revisions and choices from the partner, and GET `/agreements` and GET `/stage4` do not list it (owner decision 2026-11-25, work-k5fk.32). `shared_at` is set once and never cleared: unsharing the stances leaves the commitments shared. POST `/agreements` refuses an unshared commitment (400).
+
 ---
 
 ### Unshare Selections
 
-Withdraws the caller's shared selections (allowed while partner has not yet shared).
+Withdraws the caller's shared selections (allowed while partner has not yet shared). Individual commitments shared with them stay shared.
 
 ```
 POST /api/v1/sessions/:id/stage4/unshare-selections
