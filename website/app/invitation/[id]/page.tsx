@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState, useRef } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useAuth, useUser, useClerk, SignIn } from "@clerk/nextjs";
 import Link from "next/link";
 import {
@@ -46,7 +46,6 @@ export default function InvitationPage() {
 
 function InvitationPageInner() {
   const params = useParams();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const invitationId = params.id as string;
 
@@ -62,6 +61,10 @@ function InvitationPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [hasSignedOut, setHasSignedOut] = useState(false);
   const hasTrackedView = useRef(false);
+  // work-k5fk.35 C2: the accept runs once per page. An in-place Clerk sign-in changes isSignedIn/getToken, which
+  // re-runs the fetch below; without this, that re-fetch reset the state to needs_auth mid-accept and the accept
+  // POSTed a second time (the loser showed an error or "Already accepted").
+  const acceptStarted = useRef(false);
 
   // Sign out any existing session when visiting invitation page
   // This ensures invitees start with a fresh auth state
@@ -138,12 +141,20 @@ function InvitationPageInner() {
         return;
       }
 
+      // Once the accept has started, the accept owns the state: a re-fetch must not reset it.
+      if (acceptStarted.current) {
+        console.log("[Invitation] Accept already started, skipping re-fetch");
+        return;
+      }
+
       console.log("[Invitation] Fetching invitation details...");
       try {
         // Signed in (the claimer, or back from OAuth): the caller's own preview (work-k5fk.10.41).
         const token = isSignedIn ? await getToken().catch(() => null) : null;
         const data = await getInvitation(invitationId, token);
         console.log("[Invitation] API response:", data);
+        // The accept may have started while this fetch was in flight.
+        if (acceptStarted.current) return;
 
         if (!data) {
           console.log("[Invitation] No invitation data, marking not_found");
@@ -188,6 +199,7 @@ function InvitationPageInner() {
           }
         }
       } catch (err) {
+        if (acceptStarted.current) return;
         if (err instanceof InvitationClaimedError) {
           // work-k5fk.10.41: the claim notice. Signed out, it offers sign-in: its claimer, signed in, reads past it.
           console.log("[Invitation] Claimed by another account than this visitor's");
@@ -226,6 +238,11 @@ function InvitationPageInner() {
         console.log("[Invitation] State is not needs_auth, skipping accept");
         return;
       }
+      if (acceptStarted.current) {
+        console.log("[Invitation] Accept already started, not accepting again");
+        return;
+      }
+      acceptStarted.current = true;
 
       console.log("[Invitation] User signed in, accepting invitation...");
       setState("accepting");
@@ -313,7 +330,8 @@ function InvitationPageInner() {
   }
 
   if (state === "error") {
-    return <ErrorState message={error} onRetry={() => router.refresh()} />;
+    // A full reload: the accept is once per page load (acceptStarted), so a retry starts a fresh page.
+    return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   }
 
   // Default loading
