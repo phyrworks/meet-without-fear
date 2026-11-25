@@ -131,6 +131,7 @@ export function E2EAuthProvider({ children }: E2EAuthProviderProps) {
     user,
     isLoading,
     isAuthenticated: !!user,
+    accountProblem: null,
     signOut,
     getToken,
     updateUser,

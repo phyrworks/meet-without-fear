@@ -15,6 +15,13 @@ export interface User extends UserDTO {
 }
 
 /**
+ * The backend refused the signed-in account (GET /auth/me, work-k5fk.35 C4): Clerk says signed in, but there is
+ * no user to be. EMAIL_NOT_VERIFIED: the account's email is not verified. ACCOUNT_LINK_CONFLICT: the email belongs
+ * to another account.
+ */
+export type AccountProblem = 'EMAIL_NOT_VERIFIED' | 'ACCOUNT_LINK_CONFLICT';
+
+/**
  * Authentication context value
  * Clerk-first: Clerk is the auth source, backend profile is just data
  */
@@ -22,6 +29,8 @@ export interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  /** Set when the backend refused the account; the app shows what to do instead of the app (null otherwise) */
+  accountProblem: AccountProblem | null;
   signOut: () => Promise<void>;
   getToken: () => Promise<string | null>;
   updateUser: (updates: Partial<User>) => void;

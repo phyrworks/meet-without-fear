@@ -155,6 +155,35 @@ describe('useAuthProvider', () => {
     });
   });
 
+  // work-k5fk.35 C4: an account the backend refuses must not get a made-up user (the Clerk id as user.id).
+  describe.each([
+    ['EMAIL_NOT_VERIFIED', 403],
+    ['ACCOUNT_LINK_CONFLICT', 409],
+  ])('when /auth/me refuses the account with %s', (code, status) => {
+    it('builds no user and reports the account problem', async () => {
+      mockApiGet.mockRejectedValueOnce(Object.assign(new Error('refused'), { code, status }));
+
+      const wrapper = createQueryClientWrapper();
+      const { result } = renderHook(() => useAuthProvider(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.accountProblem).toBe(code);
+    });
+  });
+
+  it('reports no account problem on a normal sign-in', async () => {
+    const wrapper = createQueryClientWrapper();
+    const { result } = renderHook(() => useAuthProvider(), { wrapper });
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(result.current.accountProblem).toBeNull();
+  });
+
   describe('signOut', () => {
     it('calls Clerk signOut and clears user', async () => {
       const wrapper = createQueryClientWrapper();

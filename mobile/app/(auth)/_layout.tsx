@@ -6,6 +6,8 @@ import { isE2EMode } from '@/src/providers/E2EAuthProvider';
 import { useNotifications } from '@/src/hooks/useNotifications';
 import { BiometricLockProvider } from '@/src/contexts/BiometricLockContext';
 import { BiometricLockOverlay } from '@/src/components/BiometricLockOverlay';
+import { AccountProblemScreen } from '@/src/components/AccountProblemScreen';
+import { useAuth } from '@/src/hooks/useAuthTypes';
 
 /**
  * Auth group layout
@@ -15,6 +17,7 @@ import { BiometricLockOverlay } from '@/src/components/BiometricLockOverlay';
  */
 export default function AuthLayout() {
   const { isSignedIn, isLoaded } = useClerkAuth();
+  const { accountProblem, signOut } = useAuth();
   const { palette } = useAppAppearance();
 
   // Subscribe to user-level session updates for real-time list refreshes
@@ -31,6 +34,11 @@ export default function AuthLayout() {
   // If Clerk says not signed in, redirect to public
   if (!isSignedIn) {
     return <Redirect href="/(public)" />;
+  }
+
+  // Signed in, but the backend refused the account (work-k5fk.35 C4): say what to do instead of the app
+  if (accountProblem) {
+    return <AccountProblemScreen problem={accountProblem} onSignOut={signOut} />;
   }
 
   // Render the app - backend profile sync happens in useAuth hook
