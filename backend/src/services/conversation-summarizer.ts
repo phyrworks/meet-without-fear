@@ -245,10 +245,29 @@ export function needsSummarization(messageCount: number, existingSummary?: strin
   return shouldResummarizeByCount || shouldResummarizeByTokens;
 }
 
-/** A list of strings from the model: a single string becomes [s]; non-string items are dropped; anything else is []. */
-function stringList(v: unknown): string[] {
+/**
+ * A list of strings from the model: a single string becomes [s]; non-string
+ * items are dropped; anything else is []. What is dropped is logged (warn:
+ * the field and how many items or which JSON type, never the content — logs
+ * reach CloudWatch), so a model that drifts shows up instead of a summary that
+ * silently thins (work-k5fk.19).
+ */
+function stringList(field: string, v: unknown): string[] {
   if (typeof v === 'string') return v.trim() ? [v] : [];
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) {
+    logger.warn('[ConversationSummarizer] summary field is not a list; dropped', { field, type: typeof v });
+    return [];
+  }
+  const kept = v.filter((x): x is string => typeof x === 'string');
+  if (kept.length < v.length) {
+    logger.warn('[ConversationSummarizer] summary list items are not strings; dropped', {
+      field,
+      dropped: v.length - kept.length,
+      of: v.length,
+    });
+  }
+  return kept;
 }
 
 /** The fields of a summarization result after normalisation: every list present, every text a string. */
@@ -271,14 +290,14 @@ export function normalizeSummarizationResult(raw: unknown): NormalizedSummarizat
   if (typeof r.summary !== 'string' || !r.summary.trim()) return null;
   return {
     summary: r.summary,
-    keyThemes: stringList(r.keyThemes),
+    keyThemes: stringList('keyThemes', r.keyThemes),
     emotionalJourney: typeof r.emotionalJourney === 'string' ? r.emotionalJourney : '',
-    unresolvedTopics: stringList(r.unresolvedTopics),
-    agreedFacts: stringList(r.agreedFacts),
-    userNeeds: stringList(r.userNeeds),
-    partnerNeeds: stringList(r.partnerNeeds),
-    openQuestions: stringList(r.openQuestions),
-    agreements: stringList(r.agreements),
+    unresolvedTopics: stringList('unresolvedTopics', r.unresolvedTopics),
+    agreedFacts: stringList('agreedFacts', r.agreedFacts),
+    userNeeds: stringList('userNeeds', r.userNeeds),
+    partnerNeeds: stringList('partnerNeeds', r.partnerNeeds),
+    openQuestions: stringList('openQuestions', r.openQuestions),
+    agreements: stringList('agreements', r.agreements),
     lastUnresolvedThread: typeof r.lastUnresolvedThread === 'string' ? r.lastUnresolvedThread : null,
   };
 }
