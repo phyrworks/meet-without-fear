@@ -252,6 +252,18 @@ test.describe('Transition Message Display', () => {
     await page.screenshot({ path: 'test-results/transition-03-before-invitation-confirm.png' });
     const messagesBefore = await page.locator('[data-testid^="chat-bubble-"]').count();
     console.log(`${elapsed()} Messages before invitation confirmation: ${messagesBefore}`);
+    // The conversation as the server has it, before the confirmation (work-k5fk.35 E5)
+    type ChatMessage = { id: string; role: string; content: string };
+    const readMessages = async (): Promise<ChatMessage[]> => {
+      const response = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/state`, {
+        headers: getE2EHeaders(userA.email, userId, FIXTURE_ID),
+      });
+      expect(response.ok()).toBe(true);
+      return (await response.json()).data.messages.messages;
+    };
+    const before = await readMessages();
+    const idsBefore = new Set(before.map((m) => m.id));
+    const userTurnsBefore = before.filter((m) => m.role === 'USER').length;
 
     // CRITICAL: Confirm invitation was sent
     console.log(`${elapsed()} Confirming invitation sent...`);
@@ -264,15 +276,29 @@ test.describe('Transition Message Display', () => {
     // CRITICAL TEST: Wait for transition message to appear WITHOUT sending another message.
     // The post-invitation transition is AI-generated (sessions.ts confirmInvitationMessage);
     // under MOCK_LLM its text is whichever user-a-full-journey turn the orchestrator serves,
-    // which changed with the two-step Stage 0 (#310). So assert the behaviour, not the copy:
-    // a new chat bubble arrives with no user input.
+    // which changed with the two-step Stage 0 (#310). So the copy is read from the server:
+    // the new AI message the confirmation wrote must render in the chat, with no user input
+    // (work-k5fk.35 E5: was a bubble count only).
     console.log(`${elapsed()} Waiting for transition message after invitation...`);
 
-    // This is the key assertion - message should appear without user input
+    let transition: ChatMessage | undefined;
     await expect
-      .poll(() => page.locator('[data-testid^="chat-bubble-"]').count(), { timeout: 15000 })
-      .toBeGreaterThan(messagesBefore);
-    await expect(page.locator('[data-testid^="chat-bubble-"]').last()).toBeVisible();
+      .poll(
+        async () => {
+          transition = (await readMessages()).find((m) => m.role === 'AI' && !idsBefore.has(m.id));
+          return transition !== undefined;
+        },
+        { timeout: 15000, message: 'the invitation confirmation should write a transition message' }
+      )
+      .toBe(true);
+    expect(transition!.content.trim().length).toBeGreaterThan(0);
+
+    // This is the key assertion - that message appears in the chat without user input
+    const transitionBubble = page.getByTestId(`chat-bubble-${transition!.id}`);
+    await expect(transitionBubble).toBeVisible({ timeout: 15000 });
+    await expect(transitionBubble).toContainText(transition!.content.trim().slice(0, 40));
+    // ... and the user sent nothing
+    expect((await readMessages()).filter((m) => m.role === 'USER').length).toBe(userTurnsBefore);
     console.log(`${elapsed()} Transition message appeared!`);
 
     // Take screenshot after
