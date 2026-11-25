@@ -399,7 +399,9 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     ]);
     // The pair is released (t_live_session_pair_end), so Olaf can join the new session.
     expect(await run.sql(pairSql, [s.sessionId])).toEqual([]);
-    expect((await http(ada, 'post', '/sessions', { personId: olaf.id })).body.data.existingActiveSession).toBeUndefined();
+    expect(
+      (await http(ada, 'post', '/sessions', { personId: olaf.id })).body.data.existingActiveSession,
+    ).toBeUndefined();
   });
 
   it('review F2: before the invitee joins, what the inviter calls them is the invite name (not "Partner")', async () => {
