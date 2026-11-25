@@ -117,12 +117,11 @@ test.describe('Single User Journey', () => {
       },
     });
 
-    if (!createResponse.ok()) {
-      const errorText = await createResponse.text();
-      console.log('Session creation failed:', createResponse.status(), errorText);
-      test.skip(true, 'Backend API not ready for session creation');
-      throw new Error('unreachable');
-    }
+    // A smoke-tier journey: a failed create is a failure, never a skip (work-k5fk.35 C8).
+    expect(
+      createResponse.ok(),
+      `POST /sessions failed: ${createResponse.status()} ${createResponse.ok() ? '' : await createResponse.text()}`
+    ).toBe(true);
 
     const sessionData = await createResponse.json();
     expect(sessionData.success).toBe(true);
@@ -377,10 +376,19 @@ test.describe('Single User Journey', () => {
     });
     expect(stateResponse.ok()).toBe(true);
     const stateData = await stateResponse.json();
-    const empathyMessages = stateData.data.messages.messages.filter(
+    const empathyMessages: Array<{ id: string; content: string }> = stateData.data.messages.messages.filter(
       (m: { role: string }) => m.role === 'EMPATHY_STATEMENT'
     );
     expect(empathyMessages.length).toBeGreaterThan(0);
+
+    // work-k5fk.35 E7 (restored from base e46e6832): the shared statement shows in A's chat
+    // (the "empathy shared" frame, now the statement's own shared-frame bubble), and the chat
+    // input is hidden while A waits for Darryl (waiting status empathy-pending hides it).
+    const sharedStatement = empathyMessages[empathyMessages.length - 1];
+    const statementBubble = page.getByTestId(`chat-bubble-${sharedStatement.id}`);
+    await expect(statementBubble).toBeVisible({ timeout: 10000 });
+    await expect(statementBubble).toContainText(sharedStatement.content);
+    await expect(page.getByTestId('chat-input')).not.toBeVisible({ timeout: 5000 });
     console.log(`${elapsed()} Test complete! Found ${empathyMessages.length} empathy statement(s)`);
   });
 
