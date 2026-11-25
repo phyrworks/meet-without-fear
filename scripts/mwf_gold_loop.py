@@ -394,7 +394,7 @@ def start_background_command(
 def build_loop_service_env(args: argparse.Namespace, base_env: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(base_env if base_env is not None else os.environ)
     env.setdefault("E2E_AUTH_BYPASS", "true")
-    # The API honours E2E_AUTH_BYPASS only with NODE_ENV test/development
+    # The API honours E2E_AUTH_BYPASS only with NODE_ENV test, development or e2e
     # (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
     env.setdefault("NODE_ENV", "development")
     env.setdefault("MOCK_LLM", "false")
@@ -565,7 +565,7 @@ def preflight(api_url: str, app_url: str, skip_services: bool = False) -> dict[s
         method="POST",
         body=b'{"email":"mwf-gold-loop-probe@e2e.test","name":"Gold Loop Probe"}',
     )
-    require(probe_ok, "E2E seed endpoint failed; start backend with E2E_AUTH_BYPASS=true and NODE_ENV=development (or test)")
+    require(probe_ok, "E2E seed endpoint failed; start backend with E2E_AUTH_BYPASS=true and NODE_ENV=development (or test, or e2e)")
     require(http_ok(app_url), f"E2E web app is not reachable at {app_url}")
     require(":8082" in app_url or os.environ.get("MWF_ALLOW_NON_E2E_WEB"), "Refusing non-8082 app URL without MWF_ALLOW_NON_E2E_WEB=1")
     checks["services"] = "ok"
