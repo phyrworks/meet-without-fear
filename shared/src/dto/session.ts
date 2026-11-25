@@ -101,7 +101,7 @@ export interface CreateSessionRequest {
   // Optional: Inner Thoughts message where the user tapped the start-session action
   linkedAtMessageId?: string;
 
-  // Explicit confirmation that the user wants another session despite an active one
+  // Explicit confirmation: end the live session with this person (ABANDONED), then create this one
   forceCreate?: boolean;
 }
 
@@ -109,6 +109,8 @@ export interface CreateSessionResponse {
   session: SessionSummaryDTO;
   invitationId: string;
   invitationUrl: string;
+  /** With forceCreate: the live session the pair shared, ended (ABANDONED) before this one was created. */
+  endedSessionId?: string;
 }
 
 // ============================================================================

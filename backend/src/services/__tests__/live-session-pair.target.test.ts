@@ -23,7 +23,8 @@
  *     no session with is not found;
  *   - the invite-time pre-check (createSession with personId): an existing
  *     live session with that person comes back as existingActiveSession, and
- *     forceCreate gives a friendly 409 instead of a second session;
+ *     forceCreate ends it (ABANDONED, the pair released) and creates the new
+ *     one in the same request (work-k5fk.35 C1, owner decision);
  *   - no session DTO carries relationshipId.
  *
  * Requires: npx tsx src/testing/golden/cli.ts build CREATED
@@ -367,7 +368,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect((await http(ada, 'patch', `/relationships/${randomUuidV7()}/nickname`, { nickname: 'x' })).status).toBe(404);
   });
 
-  it('the invite-time pre-check: an existing live session with that person, and a friendly 409 on forceCreate', async () => {
+  it('the invite-time pre-check: an existing live session with that person; forceCreate ends it, then creates', async () => {
     const s = await invite('Olaf');
     const olaf = person('olaf');
     expect((await http(olaf, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
@@ -375,14 +376,6 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     const again = await http(ada, 'post', '/sessions', { personId: olaf.id });
     expect(again.status).toBe(200);
     expect(again.body.data.existingActiveSession).toMatchObject({ id: s.sessionId, status: 'ACTIVE' });
-
-    const [{ before }] = await run.sql<{ before: number }>(`SELECT count(*)::int AS before FROM session`);
-    const forced = await http(ada, 'post', '/sessions', { personId: olaf.id, forceCreate: true });
-    expect(forced.status).toBe(409);
-    expect(forced.body.error.code).toBe('CONFLICT');
-    expect(forced.body.error.message).toMatch(/already .*session/i);
-    // Nothing was written for the refused session.
-    expect(await run.sql(`SELECT count(*)::int AS n FROM session`)).toEqual([{ n: before }]);
 
     // work-k5fk.17: mwf_app reads a pair only when the caller is in it (app_select: user_a = me OR user_b = me).
     const pairSql = `SELECT session_id::text AS s FROM live_session_pair WHERE session_id = $1`;
@@ -392,6 +385,21 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect((await http(third, 'get', '/sessions')).status).toBe(200);
     expect(await run.as('mwf_app', third.id, pairSql, [s.sessionId])).toEqual([]);
     expect(await run.as('mwf_app', third.id, `SELECT count(*)::int AS n FROM live_session_pair`)).toEqual([{ n: 0 }]);
+
+    // "Start New Anyway" (work-k5fk.35 C1, owner decision): the live session ends, then the new one is created.
+    const [{ before }] = await run.sql<{ before: number }>(`SELECT count(*)::int AS before FROM session`);
+    const forced = await http(ada, 'post', '/sessions', { personId: olaf.id, forceCreate: true });
+    expect(forced.status).toBe(201);
+    expect(forced.body.data.endedSessionId).toBe(s.sessionId);
+    const created: string = forced.body.data.session.id;
+    expect(created).not.toBe(s.sessionId);
+    expect(await run.sql(`SELECT count(*)::int AS n FROM session`)).toEqual([{ n: before + 1 }]);
+    expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [s.sessionId])).toEqual([
+      { status: 'ABANDONED' },
+    ]);
+    // The pair is released (t_live_session_pair_end), so Olaf can join the new session.
+    expect(await run.sql(pairSql, [s.sessionId])).toEqual([]);
+    expect((await http(ada, 'post', '/sessions', { personId: olaf.id })).body.data.existingActiveSession).toBeUndefined();
   });
 
   it('review F2: before the invitee joins, what the inviter calls them is the invite name (not "Partner")', async () => {

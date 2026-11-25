@@ -141,17 +141,18 @@ export default function NewSessionScreen() {
         // Handle existing active session response
         if ('existingActiveSession' in response) {
           const existing = (response as { existingActiveSession: { id: string; status: string } }).existingActiveSession;
+          // One live session per pair: starting a new one ends the current one (work-k5fk.35, owner decision).
           Alert.alert(
             `Active session with ${selectedPerson.name}`,
-            'You already have an active session with this person.',
+            `You already have a session in progress with ${selectedPerson.name}. Starting a new one will end it for both of you.`,
             [
               {
                 text: 'Continue Existing',
                 onPress: () => router.replace(`/session/${existing.id}`),
               },
               {
-                text: 'Start New Anyway',
-                style: 'default',
+                text: 'End It and Start New',
+                style: 'destructive',
                 onPress: () => {
                   void createSessionFromForm(true);
                 },
