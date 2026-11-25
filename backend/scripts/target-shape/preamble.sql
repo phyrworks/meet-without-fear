@@ -6,8 +6,8 @@
 -- Carries what TS-1's migration 20261019173038_phase3_app_schema_helpers did
 -- before the table DDL existed (that migration is gone with the old history,
 -- OD7): the roles assertion, the SET ROLE mwf_definer check, schema app,
--- app.current_user_id() and app.session_scope() (work-k5fk.10.5). The membership helpers app.is_member and
--- app.partner_user_id are created by the trailer, over participant.
+-- app.current_user_id() and app.session_scope() (work-k5fk.10.5). The membership helpers (app.is_member and
+-- the rest) are created by the trailer, over participant.
 -- ============================================================================
 
 -- Refuse anything but an empty database: the roles the baseline grants to (the

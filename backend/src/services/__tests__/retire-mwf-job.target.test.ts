@@ -136,7 +136,9 @@ const DEFINER_EXECUTE: Record<string, string[]> = {
   'app.anonymize_user_in_session(uuid,uuid)': ['app_access'],
   'app.anonymize_user_account(uuid)': ['app_access'],
   'app.is_member(uuid)': ['app_access'],
-  'app.partner_user_id(uuid)': ['app_access'],
+  // work-k5fk.32 S1 / S6: the one writer of proposal.shared_at, and follow_up_checkin's both-submitted predicate
+  'app.proposal_share(uuid)': ['app_access'],
+  'app.checked_in(uuid)': ['app_access'],
   'app.empathy_direction_status()': ['app_access'],
 };
 

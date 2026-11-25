@@ -1,5 +1,6 @@
 /**
- * app.current_user_id() and the identity-bound definer helpers app.is_member and app.partner_user_id, as the
+ * app.current_user_id() and the identity-bound definer helper app.is_member (app.partner_user_id is gone,
+ * work-k5fk.32 S7), as the
  * logins production uses see them (work-k5fk.10.19: ported from the old shape's Phase 3 W2 suite).
  *
  * On a clone of the CREATED target fixture, seeded through the target tables ("user", session, participant):
@@ -122,6 +123,7 @@ describeTarget('app.* identity helpers (database, target shape)', () => {
     it('is true for each member and false for a non-member', async () => {
       expect(await scalar('mwf_app', alice, 'SELECT app.is_member($1)', [pair])).toBe(true);
       expect(await scalar('mwf_app', bob, 'SELECT app.is_member($1)', [pair])).toBe(true);
+      expect(await scalar('mwf_app', dave, 'SELECT app.is_member($1)', [trio])).toBe(true);
       expect(await scalar('mwf_app', carol, 'SELECT app.is_member($1)', [pair])).toBe(false);
       expect(await scalar('mwf_app', dave, 'SELECT app.is_member($1)', [pair])).toBe(false);
     });
@@ -132,30 +134,15 @@ describeTarget('app.* identity helpers (database, target shape)', () => {
     });
   });
 
-  describe('app.partner_user_id(session)', () => {
-    it("returns the other member's id to each member of a two-human session", async () => {
-      expect(await scalar('mwf_app', alice, 'SELECT app.partner_user_id($1)', [pair])).toBe(bob);
-      expect(await scalar('mwf_app', bob, 'SELECT app.partner_user_id($1)', [pair])).toBe(alice);
-    });
-
-    it('is NULL for a non-member and with no identity', async () => {
-      expect(await scalar('mwf_app', carol, 'SELECT app.partner_user_id($1)', [pair])).toBeNull();
-      expect(await scalar('mwf_app', null, 'SELECT app.partner_user_id($1)', [pair])).toBeNull();
-    });
-
-    it('is NULL when the session does not have exactly two human members', async () => {
-      expect(await scalar('mwf_app', alice, 'SELECT app.is_member($1)', [trio])).toBe(true);
-      expect(await scalar('mwf_app', alice, 'SELECT app.partner_user_id($1)', [trio])).toBeNull();
-      expect(await scalar('mwf_app', dave, 'SELECT app.partner_user_id($1)', [trio])).toBeNull();
-    });
+  it('app.partner_user_id is gone: it had no caller (work-k5fk.32 S7)', async () => {
+    expect(await run.sql(`SELECT to_regprocedure('app.partner_user_id(uuid)') AS f`)).toEqual([{ f: null }]);
   });
 
   describe('who may call the definer helpers', () => {
     it.each<RunRole>(['mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth'])(
-      '%s, which holds no grant on them, cannot EXECUTE either',
+      '%s, which holds no grant on it, cannot EXECUTE app.is_member',
       async role => {
         expect(await code(role, 'SELECT app.is_member($1)', [pair])).toBe('42501');
-        expect(await code(role, 'SELECT app.partner_user_id($1)', [pair])).toBe('42501');
       },
     );
 
@@ -164,7 +151,7 @@ describeTarget('app.* identity helpers (database, target shape)', () => {
         SELECT p.proname, p.prosecdef, pg_get_userbyid(p.proowner) AS owner, p.proconfig,
                has_function_privilege('public', p.oid, 'EXECUTE') AS public_exec
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'app' AND p.proname IN ('current_user_id', 'is_member', 'partner_user_id')
+        WHERE n.nspname = 'app' AND p.proname IN ('current_user_id', 'is_member')
         ORDER BY p.proname`);
       const definer = {
         prosecdef: true,
@@ -181,7 +168,6 @@ describeTarget('app.* identity helpers (database, target shape)', () => {
           public_exec: false,
         },
         { proname: 'is_member', ...definer },
-        { proname: 'partner_user_id', ...definer },
       ]);
     });
   });
