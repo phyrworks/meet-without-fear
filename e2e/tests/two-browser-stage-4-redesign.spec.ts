@@ -3,11 +3,12 @@
  *
  * These tests intentionally seed Stage 4 data instead of relying on prompt output.
  * They exercise the two-user API contract that the mobile two-browser surfaces use:
- * inventory visibility, selection privacy, closure outcomes, and Tending entries.
+ * inventory visibility, selection privacy, closure outcomes, and Tending entries, plus the
+ * legacy agreement routes (GET/POST /agreements, confirm) mobile still reads.
  */
 
 import { test, expect, APIRequestContext } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder } from '../helpers';
+import { cleanupE2EData, getE2EHeaders, handleMoodCheck, SessionBuilder } from '../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 
@@ -488,5 +489,97 @@ test.describe('Stage 4 redesign: deterministic two-user coverage', () => {
     expect(reentryData.data.entry.type).toBe('USER_INITIATED_REENTRY');
     expect(reentryData.data.entry.status).toBe('OPEN');
     expect(reentryData.data.entry.agreementId).toBeNull();
+  });
+
+  // work-k5fk.35 C7: the legacy agreement routes mobile still reads. GET /agreements feeds the
+  // session's agreement views, and UnifiedSessionScreen confirms a pending one through
+  // POST /agreements/:id/confirm (AgreementCard). No client creates one any more (the
+  // create hook was removed), so the proposing side goes through the API here.
+  // Until every party confirms, an agreement's handle is its proposal's id; once both have,
+  // it is the agreement's own id.
+  test('legacy agreement: proposed via API, listed for both, confirmed by the partner in the app', async ({ request, page }) => {
+    const seeded = await seedSession(request, 'STAGE4_REDESIGN_INVENTORY');
+    const apiA = apiFor(request, users.a.email, seeded.userAId);
+    const apiB = apiFor(request, users.b.email, seeded.userBId);
+    const base = `/api/sessions/${seeded.sessionId}`;
+
+    const inventory = await readJson<any>(await apiA.get(`${base}/stage4`), 'get Stage 4 inventory');
+    const checkin = inventory.data.inventory.sharedProposals.find((proposal: any) =>
+      proposal.description.includes('Sunday evening planning check-in')
+    );
+    expect(checkin, 'the seeded shared proposal Alice created').toBeTruthy();
+
+    // POST: Alice proposes it as an agreement. Pending: the handle is the proposal.
+    const followUpDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const created = await readJson<any>(
+      await apiA.post(`${base}/agreements`, {
+        strategyId: checkin.id,
+        description: checkin.description,
+        type: 'MICRO_EXPERIMENT',
+        followUpDate,
+      }),
+      'propose the agreement'
+    );
+    expect(created.data.awaitingPartnerConfirmation).toBe(true);
+    expect(created.data.agreement).toMatchObject({
+      id: checkin.id,
+      proposalId: checkin.id,
+      status: 'PROPOSED',
+      agreedByMe: true,
+      agreedByPartner: false,
+    });
+
+    // GET: each side sees the pending agreement from their own seat.
+    const listA = await readJson<any>(await apiA.get(`${base}/agreements`), 'list agreements for Alice');
+    expect(listA.data.agreements).toEqual([
+      expect.objectContaining({ id: checkin.id, agreedByMe: true, agreedByPartner: false }),
+    ]);
+    const listB = await readJson<any>(await apiB.get(`${base}/agreements`), 'list agreements for Bob');
+    expect(listB.data.agreements).toEqual([
+      expect.objectContaining({ id: checkin.id, agreedByMe: false, agreedByPartner: true }),
+    ]);
+
+    // Confirm, in the app: Bob's session shows the agreement card for the pending agreement.
+    const params = new URLSearchParams({ 'e2e-user-id': seeded.userBId, 'e2e-user-email': users.b.email });
+    await page.goto(`/session/${seeded.sessionId}?${params.toString()}`);
+    await page.waitForLoadState('domcontentloaded');
+    await handleMoodCheck(page, 5000);
+    const confirmButton = page.getByTestId('confirm-agreement-button');
+    await expect(confirmButton).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText('Micro-Experiment Agreement')).toBeVisible();
+    await expect(page.getByText(checkin.description).first()).toBeVisible();
+
+    const [confirmResponse] = await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes(`/agreements/${checkin.id}/confirm`) && response.request().method() === 'POST',
+        { timeout: 15000 }
+      ),
+      confirmButton.click(),
+    ]);
+    expect(confirmResponse.ok(), 'the in-app confirm succeeds').toBe(true);
+    const confirmed = await confirmResponse.json() as any;
+    expect(confirmed.data.sessionCanResolve).toBe(true);
+    expect(confirmed.data.agreement).toMatchObject({
+      status: 'AGREED',
+      agreedByMe: true,
+      agreedByPartner: true,
+      proposalId: checkin.id,
+    });
+
+    // Both confirmed: the agreement exists, under its own id now, for both sides.
+    for (const [label, api] of [['Alice', apiA], ['Bob', apiB]] as const) {
+      const list = await readJson<any>(await api.get(`${base}/agreements`), `list agreements for ${label} after confirm`);
+      expect(list.data.agreements, `${label} sees exactly the one agreement`).toHaveLength(1);
+      const [agreement] = list.data.agreements;
+      expect(agreement).toMatchObject({
+        status: 'AGREED',
+        proposalId: checkin.id,
+        agreedByMe: true,
+        agreedByPartner: true,
+      });
+      expect(agreement.id, `${label}: the handle is the agreement's id, not the proposal's`).not.toBe(checkin.id);
+      expect(agreement.id).toBe(confirmed.data.agreement.id);
+    }
   });
 });
