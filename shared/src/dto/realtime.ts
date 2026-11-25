@@ -158,6 +158,12 @@ export const REALTIME_CHANNELS = {
   session: (sessionId: string) => `meetwithoutfear:session:${sessionId}`,
   /** Presence channel for a session */
   presence: (sessionId: string) => `meetwithoutfear:presence:${sessionId}`,
+  /**
+   * Typing indicators for a session: the one channel clients publish on, and it carries only typing.start /
+   * typing.stop (clients drop anything else). The session channel is subscribe-only for clients: only the
+   * server publishes there (work-k5fk.32 S8).
+   */
+  typing: (sessionId: string) => `meetwithoutfear:typing:${sessionId}`,
   /** User's private channel */
   user: (userId: string) => `meetwithoutfear:user:${userId}`,
 } as const;

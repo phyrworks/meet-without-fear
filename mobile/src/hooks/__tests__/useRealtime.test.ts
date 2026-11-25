@@ -166,6 +166,53 @@ describe('useRealtime', () => {
         });
       }).not.toThrow();
     });
+
+    it('publishes typing only on the typing channel, and handles only typing names from it (work-k5fk.32 S8)', async () => {
+      const { getAblyClientSync } = jest.requireMock('../../lib/ably');
+      const ably = getAblyClientSync();
+      const sessionChannel = ably.channels.get();
+      const typingChannel = {
+        ...sessionChannel,
+        subscribe: jest.fn().mockResolvedValue(undefined),
+        unsubscribe: jest.fn(),
+        publish: jest.fn(),
+      };
+      ably.channels.get.mockImplementation((name?: string) =>
+        name === `meetwithoutfear:typing:${testSessionId}` ? typingChannel : sessionChannel
+      );
+      sessionChannel.publish.mockClear();
+      const onTypingChange = jest.fn();
+      const onSessionEvent = jest.fn();
+      try {
+        const { result } = renderHook(() =>
+          useRealtime({ sessionId: testSessionId, onTypingChange, onSessionEvent, enablePresence: false })
+        );
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        const typing = typingChannel.subscribe.mock.calls[0][0] as (m: { name: string; data: unknown }) => void;
+        act(() => {
+          // A forged session event on the typing channel is dropped, never handled.
+          typing({ name: 'partner.needs_shared', data: { sessionId: testSessionId, timestamp: 1, stage: 3 } });
+          typing({
+            name: 'typing.start',
+            data: { sessionId: testSessionId, timestamp: 1, userId: 'user-456', isTyping: true },
+          });
+        });
+        expect(onSessionEvent).not.toHaveBeenCalled();
+        expect(onTypingChange).toHaveBeenCalledWith('user-456', true);
+
+        act(() => {
+          result.current.sendTyping(true);
+        });
+        expect(typingChannel.publish).toHaveBeenCalledWith('typing.start', expect.objectContaining({ isTyping: true }));
+        expect(sessionChannel.publish).not.toHaveBeenCalled();
+      } finally {
+        ably.channels.get.mockImplementation(() => sessionChannel);
+      }
+    });
   });
 
   describe('callbacks', () => {
@@ -529,8 +576,9 @@ describe('useRealtime', () => {
     });
 
     it('never reports an attacker-controlled event name', async () => {
-      // Session members hold publish rights on the session channel
-      // (backend/src/controllers/auth.ts:240), so message.name is hostile input.
+      // A compromised partner client could publish arbitrary names (on the typing
+      // channel since work-k5fk.32 S8; auth.ts ablyCapabilityFor), so message.name
+      // is hostile input.
       // An unknown name must collapse to 'unknown' rather than reach Sentry,
       // because beforeBreadcrumb strips PII *keys*, not arbitrary *values*.
       const Sentry = jest.requireMock('@sentry/react-native');
