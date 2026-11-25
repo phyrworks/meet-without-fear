@@ -165,7 +165,8 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
     expect(row).toEqual({
       status: 'REMOVED',
       by: ids.adaUser,
-      reason: 'Please remove the proposal "Use a pause phrase when either person starts to shut down".',
+      // work-k5fk.32 sweep: the chat turn is not copied into the (shared) removal_reason
+      reason: null,
     });
     expect((await revisions(target.id)).map(r => r.action)).toContain('REMOVED');
   });
