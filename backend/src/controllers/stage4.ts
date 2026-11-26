@@ -74,6 +74,7 @@ import {
   resolveNeedLabels,
   setProposalNeeds,
   shareChoices,
+  shareCommitment,
   unshareChoices,
   upsertChoice,
 } from '../services/stage4-store';
@@ -552,6 +553,51 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
   }
 }
 
+/**
+ * Share one of the caller's own individual commitments with the partner (owner decision 2026-11-25, work-k5fk.37):
+ * each commitment is shared by its own action — sharing one's stances shares none. app.proposal_share stamps its
+ * shared_at once; it is never unshared. The partner then reads its current text (description, duration, measure of
+ * success) and nothing of its history: proposal_revision app_select keeps the earlier wordings and the quote it was
+ * captured from its creator's. Already shared: 200, unchanged. Not the caller's own live commitment: 404 when the
+ * caller cannot see it or it is the partner's, 400 for a shared proposal or a removed commitment.
+ * POST /sessions/:id/stage4/commitments/:proposalId/share
+ */
+export async function shareStage4Commitment(req: Request, res: Response): Promise<void> {
+  try {
+    const user = req.user;
+    if (!user) {
+      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
+      return;
+    }
+    const { id: sessionId, proposalId } = req.params;
+    const ctx = await stage4Context(req, sessionId, user.id);
+    if (refuse(res, ctx, 'share a commitment', { stage: false, open: true })) return;
+    const me = seatOf(ctx.participant);
+
+    // The app's side of app.proposal_share's refusals, checked first so each answers cleanly.
+    const proposal = (await loadProposals(sessionId, me)).find(p => p.id === proposalId);
+    if (!proposal || proposal.createdByUserId !== me.userId) {
+      errorResponse(res, 'NOT_FOUND', 'Commitment not found', 404);
+      return;
+    }
+    if (proposal.kind !== 'INDIVIDUAL_COMMITMENT') {
+      errorResponse(res, 'VALIDATION_ERROR', 'Only an individual commitment is shared this way', 400);
+      return;
+    }
+    if (proposal.status === 'REMOVED') {
+      errorResponse(res, 'VALIDATION_ERROR', 'A removed commitment is not shared', 400);
+      return;
+    }
+
+    const stamped = await shareCommitment(proposalId);
+    if (stamped) await notifyStrategiesUpdated(sessionId, user.id, 'stage4_commitment_shared');
+    successResponse(res, { state: await buildStage4State(sessionId, user.id) });
+  } catch (error) {
+    logger.error('[shareStage4Commitment] Error:', error);
+    errorResponse(res, 'INTERNAL_ERROR', 'Failed to share the commitment', 500);
+  }
+}
+
 /** The shared need exists in the session (a need_share id). */
 async function sharedNeedExists(sessionId: string, needId: string): Promise<boolean> {
   return (await prisma.needShare.count({ where: { needId, sessionId, revokedAt: null } })) > 0;
@@ -953,10 +999,12 @@ export async function createAgreement(req: Request, res: Response): Promise<void
         errorResponse(res, 'FORBIDDEN', 'Only its creator can make an agreement of this strategy', 403);
         return;
       }
-      // An agreement asks the partner to confirm what they can read: one's own commitment only once it is shared
-      // (work-k5fk.32 S1; it is shared with one's Stage 4 stances).
-      if (proposal.kind === 'INDIVIDUAL_COMMITMENT' && proposal.sharedAt === null) {
-        errorResponse(res, 'VALIDATION_ERROR', 'Share this commitment before proposing it as an agreement', 400);
+      // An individual commitment is one person's own, not an agreement for the partner to confirm — and the partner
+      // could not confirm it: a legacy agreement is its proposal's LEGACY_PROPOSED revision, and a co-participant's
+      // commitment's revisions are never theirs to read, shared or not (proposal_revision app_select, work-k5fk.37;
+      // was: refused only until shared, work-k5fk.32 S1).
+      if (proposal.kind === 'INDIVIDUAL_COMMITMENT') {
+        errorResponse(res, 'VALIDATION_ERROR', 'An individual commitment is not proposed as an agreement', 400);
         return;
       }
     } else {

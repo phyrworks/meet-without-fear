@@ -889,7 +889,9 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         { stamped: false },
       ]);
       expect(await run.sql(`SELECT shared_at FROM proposal WHERE id = $1`, [commitment])).toEqual([{ shared_at: first }]);
-      expect(await bobSees()).toEqual([1, 1, 1, 1, 1]);
+      // ... all but its revision history: sharing releases only the current text (work-k5fk.37, owner decision
+      // 2026-11-25) — the before/after of a co-participant's commitment are never Bob's to read.
+      expect(await bobSees()).toEqual([1, 1, 0, 1, 1]);
       expect(await count('mwf_app', carol, 'proposal', 'id = $1', [commitment])).toBe(0);
       // Creator-only until shared (work-k5fk.10.10 / 10.11, owner decision 2026-11-23): shared_at makes Ada's
       // commitment visible to Bob, never his to edit or revise; her SHARED_PROPOSAL is shared from birth, so Bob may;
@@ -1727,6 +1729,106 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await code('mwf_ai', gus, line, [fayMain, fg], fg)).toBe('rls');
       // acting for Fay, who is still there: unchanged
       expect(await code('mwf_ai', fay, line, [fayMain, fg], fg)).toBe('ok');
+    });
+  });
+
+  // work-k5fk.37 (owner decision 2026-11-25): an individual commitment is shared by its own action, and sharing
+  // releases only its CURRENT text. Its revision history — the earlier wordings in before/after, and the capturedQuote
+  // (the sentence of the author's private chat it was captured from, in its CREATED revision's after) — stays its
+  // creator's, in the database.
+  describe('work-k5fk.37 (B1b: a shared commitment releases only its current text)', () => {
+    const commitmentOf = async (description: string) =>
+      (
+        await run.sql<{ id: string }>(
+          `INSERT INTO proposal (session_id, created_by_user_id, kind, description, duration, measure_of_success)
+           VALUES ($1, $2, 'INDIVIDUAL_COMMITMENT', $3, 'PROBE_B1B_DURATION', 'PROBE_B1B_MEASURE') RETURNING id::text`,
+          [session, ada, description],
+        )
+      )[0].id;
+    const revisionsTouching = (user: string, text: string) =>
+      count('mwf_app', user, 'proposal_revision', `before::text LIKE $1 OR after::text LIKE $1`, [`%${text}%`]);
+
+    it('after the share Bob reads its current description, duration and measure — and none of its revisions, so no earlier wording and no quote', async () => {
+      const commitment = await commitmentOf('PROBE_B1B_NOW');
+      await run.sql(
+        `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after)
+         VALUES ($1, $2, $3, 'CREATED', '{"description": "PROBE_B1B_FIRST", "capturedQuote": "PROBE_B1B_QUOTE"}')`,
+        [commitment, session, ada],
+      );
+      await run.sql(
+        `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, before, after)
+         VALUES ($1, $2, $3, 'REVISED', '{"description": "PROBE_B1B_FIRST"}', '{"description": "PROBE_B1B_NOW"}')`,
+        [commitment, session, ada],
+      );
+      expect(await as('mwf_app', ada, `SELECT app.proposal_share($1) AS stamped`, [commitment])).toEqual([
+        { stamped: true },
+      ]);
+      expect(
+        await as('mwf_app', bob, `SELECT description, duration, measure_of_success FROM proposal WHERE id = $1`, [
+          commitment,
+        ]),
+      ).toEqual([
+        { description: 'PROBE_B1B_NOW', duration: 'PROBE_B1B_DURATION', measure_of_success: 'PROBE_B1B_MEASURE' },
+      ]);
+      expect(await count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [commitment])).toBe(0);
+      expect(await revisionsTouching(bob, 'PROBE_B1B_FIRST')).toBe(0);
+      expect(await revisionsTouching(bob, 'PROBE_B1B_QUOTE')).toBe(0);
+      // Ada reads her own history, quote included
+      expect(await count('mwf_app', ada, 'proposal_revision', 'proposal_id = $1', [commitment])).toBe(2);
+      expect(await revisionsTouching(ada, 'PROBE_B1B_QUOTE')).toBe(1);
+      // control: a SHARED_PROPOSAL's history is every member's (shared from birth)
+      const [{ id: shared }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, kind, description)
+         VALUES ($1, $2, 'SHARED_PROPOSAL', 'PROBE_B1B_SHARED') RETURNING id::text`,
+        [session, ada],
+      );
+      await run.sql(
+        `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after)
+         VALUES ($1, $2, $3, 'CREATED', '{"description": "PROBE_B1B_SHARED"}')`,
+        [shared, session, ada],
+      );
+      expect(await count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [shared])).toBe(1);
+    });
+
+    it('a commitment never becomes a shared proposal, so no kind change releases its history', async () => {
+      const unshared = await commitmentOf('PROBE_B1B_KIND');
+      expect(await code('mwf_app', ada, `UPDATE proposal SET kind = 'SHARED_PROPOSAL' WHERE id = $1`, [unshared])).toBe(
+        '42501',
+      );
+      expect(await run.sql(`SELECT kind::text FROM proposal WHERE id = $1`, [unshared])).toEqual([
+        { kind: 'INDIVIDUAL_COMMITMENT' },
+      ]);
+    });
+
+    it('a shared proposal Ada makes her commitment is hidden from Bob, history and all, until she shares it — then only its text', async () => {
+      const [{ id: converted }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_user_id, kind, description)
+         VALUES ($1, $2, 'SHARED_PROPOSAL', 'PROBE_B1B_WAS_SHARED') RETURNING id::text`,
+        [session, ada],
+      );
+      await run.sql(
+        `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after)
+         VALUES ($1, $2, $3, 'CREATED', '{"description": "PROBE_B1B_WAS_SHARED"}')`,
+        [converted, session, ada],
+      );
+      expect(await count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [converted])).toBe(1);
+      expect(
+        await code(
+          'mwf_app',
+          ada,
+          `UPDATE proposal SET kind = 'INDIVIDUAL_COMMITMENT', description = 'PROBE_B1B_MINE_NOW' WHERE id = $1`,
+          [converted],
+        ),
+      ).toBe('ok');
+      expect(await count('mwf_app', bob, 'proposal', 'id = $1', [converted])).toBe(0);
+      expect(await count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [converted])).toBe(0);
+      expect(await as('mwf_app', ada, `SELECT app.proposal_share($1) AS stamped`, [converted])).toEqual([
+        { stamped: true },
+      ]);
+      expect(await as('mwf_app', bob, `SELECT description FROM proposal WHERE id = $1`, [converted])).toEqual([
+        { description: 'PROBE_B1B_MINE_NOW' },
+      ]);
+      expect(await count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [converted])).toBe(0);
     });
   });
 });

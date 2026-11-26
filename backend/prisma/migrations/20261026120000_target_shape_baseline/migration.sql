@@ -1394,7 +1394,7 @@ CREATE INDEX ON proposal (session_id, removed_by_user_id);
 COMMENT ON TABLE proposal IS 'A Stage-4 repair idea: a shared proposal for the needs both see, or one participant''s individual commitment.';
 COMMENT ON COLUMN proposal.created_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, created_by_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN proposal.removed_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, removed_by_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when its creator shared it with the co-participants (until then it is the creator''s alone: proposal app_select). Written once, by app.proposal_share only; never cleared (work-k5fk.32 S1).';
+COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when its creator shared it with the co-participants (until then it is the creator''s alone: proposal app_select), by its own action (POST /stage4/commitments/:proposalId/share; work-k5fk.37). Releases its current text only — its revisions stay the creator''s (proposal_revision app_select). Written once, by app.proposal_share only; never cleared (work-k5fk.32 S1).';
 COMMENT ON COLUMN proposal.description IS 'encrypted (session): what the proposal is, AI-proposed or typed (POST /strategies: 10 to 1000).';
 COMMENT ON COLUMN proposal.duration IS 'encrypted (session): free text for how long, e.g. 3 days or 10 minutes, once this week (AI or user; max 100 on POST /strategies). NOT a true interval: nothing parses it.';
 COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text: how the participants will know it worked (max 500 on POST /strategies).';
@@ -2517,7 +2517,7 @@ COMMENT ON COLUMN proposal_revision.session_id IS 'The session of every particip
 COMMENT ON COLUMN proposal_revision.actor_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, actor_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN proposal_revision.reason IS 'An app marker or NULL; never user or model text (R47).';
 COMMENT ON COLUMN proposal_revision.before IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields before the change.';
-COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it.';
+COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it. A CREATED revision of an INDIVIDUAL_COMMITMENT captured from chat carries capturedQuote, the sentence of its creator''s private chat — readable by its creator alone (proposal_revision app_select; work-k5fk.37).';
 -- mwf_app: the audit row of a caller's edit (controllers/stage4.ts, stage4-capture, stage4-subchat). Append-only.
 GRANT SELECT ON proposal_revision TO app_access;
 GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason, created_at)
@@ -4900,9 +4900,11 @@ GRANT EXECUTE ON FUNCTION app.choices_unshare(uuid) TO app_access;
 -- Share an individual commitment with the co-participants (spec §1.4 proposal: "P (individual commitments until
 -- shared)"; owner decision 2026-11-25, work-k5fk.32 S1). The one writer of proposal.shared_at: its creator, a
 -- present participant, stamps it once (now). Set once and never cleared — once the partner may have read it, an
--- unshare would only pretend; the commitment can still be REMOVED like any proposal. The app shares a creator's
--- commitments when they share their Stage 4 stances (stage4-store shareChoices). Returns true when it stamped now,
--- false when it was already shared.
+-- unshare would only pretend; the commitment can still be REMOVED like any proposal. The creator shares each
+-- commitment by its own action (POST /stage4/commitments/:proposalId/share, owner decision 2026-11-25, work-k5fk.37);
+-- sharing one's Stage 4 stances shares none. It releases only the commitment's current text: its revision history
+-- stays the creator's (proposal_revision app_select). Returns true when it stamped now, false when it was already
+-- shared.
 CREATE FUNCTION app.proposal_share(proposal uuid) RETURNS boolean
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -4935,8 +4937,8 @@ CREATE FUNCTION app.proposal_share(proposal uuid) RETURNS boolean
     RETURN n > 0;
   END
   $$;
-COMMENT ON FUNCTION app.proposal_share(uuid) IS 'Share the caller''s own INDIVIDUAL_COMMITMENT with the co-participants: stamps proposal.shared_at once (now), its only writer; never cleared. Its creator while a present participant (identity-bound, app_access); a removed commitment or a SHARED_PROPOSAL is refused. True when stamped now. work-k5fk.32 S1.';
--- mwf_app (app_access): stage4-store shareChoices (POST /stage4/share-selections).
+COMMENT ON FUNCTION app.proposal_share(uuid) IS 'Share the caller''s own INDIVIDUAL_COMMITMENT with the co-participants: stamps proposal.shared_at once (now), its only writer; never cleared. Its creator while a present participant (identity-bound, app_access); a removed commitment or a SHARED_PROPOSAL is refused. Releases only the current text, never the revision history (proposal_revision app_select). True when stamped now. Called per commitment by POST /stage4/commitments/:proposalId/share (work-k5fk.37). work-k5fk.32 S1.';
+-- mwf_app (app_access): stage4-store shareCommitment (POST /stage4/commitments/:proposalId/share).
 REVOKE EXECUTE ON FUNCTION app.proposal_share(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.proposal_share(uuid) TO app_access;
 
@@ -5425,6 +5427,10 @@ CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
 --    in the same UPDATE. Any other change — a re-assignment from the model's output, to the partner or to oneself —
 --    is refused.
 --  * A move into INDIVIDUAL_COMMITMENT names the acting user as creator (the same rule from the kind's side).
+--  * No move out of INDIVIDUAL_COMMITMENT (owner decision 2026-11-25, work-k5fk.37): a commitment's revision history
+--    is its creator's alone (proposal_revision app_select), and a SHARED_PROPOSAL's is every member's, so a kind
+--    change would release its earlier wordings and the quote it was captured from. Its creator shares one with
+--    app.proposal_share, which releases only its current text.
 --  * CONVERTED_TO_AGREEMENT is the agreement path's (the worker's createAgreementsAsJob, with its agreement rows),
 --    never an app edit's.
 --  * A removal is attributed to the acting user: removed_by_user_id moves only with the status — into REMOVED it
@@ -5456,6 +5462,11 @@ CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
       RAISE EXCEPTION 'a proposal becomes an individual commitment only as the editor''s own'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
+    -- work-k5fk.37: an individual commitment stays one (its history is its creator's; a shared proposal's is not)
+    IF OLD.kind = 'INDIVIDUAL_COMMITMENT' AND NEW.kind IS DISTINCT FROM 'INDIVIDUAL_COMMITMENT' THEN
+      RAISE EXCEPTION 'an individual commitment does not become a shared proposal'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     IF NEW.status = 'CONVERTED_TO_AGREEMENT' AND OLD.status IS DISTINCT FROM 'CONVERTED_TO_AGREEMENT' THEN
       RAISE EXCEPTION 'a proposal becomes an agreement only through the agreement path'
         USING ERRCODE = 'insufficient_privilege';
@@ -5475,7 +5486,7 @@ CREATE FUNCTION app.t_proposal_app_moves() RETURNS trigger
   $$;
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_proposal_app_moves() FROM PUBLIC;
-COMMENT ON FUNCTION app.t_proposal_app_moves() IS 'For mwf_app: proposal.created_by_user_id changes only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT, and no proposal becomes an INDIVIDUAL_COMMITMENT of anyone else; status never becomes CONVERTED_TO_AGREEMENT; a removal names the acting user. work-k5fk.10.9, review F5.';
+COMMENT ON FUNCTION app.t_proposal_app_moves() IS 'For mwf_app: proposal.created_by_user_id changes only to itself, in the UPDATE that makes the proposal its INDIVIDUAL_COMMITMENT, and no proposal becomes an INDIVIDUAL_COMMITMENT of anyone else; an INDIVIDUAL_COMMITMENT never becomes a SHARED_PROPOSAL (its history is its creator''s, work-k5fk.37); status never becomes CONVERTED_TO_AGREEMENT; a removal names the acting user. work-k5fk.10.9, review F5.';
 CREATE TRIGGER t_proposal_app_moves BEFORE UPDATE ON public.proposal
   FOR EACH ROW EXECUTE FUNCTION app.t_proposal_app_moves();
 
@@ -6722,8 +6733,10 @@ COMMENT ON POLICY app_delete ON proposal_need IS 'A need link of a proposal the 
 -- proposal_revision: app_access SI, worker_access I
 ALTER TABLE proposal_revision ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON proposal_revision FOR SELECT TO app_access
-  USING (app.is_member(session_id) AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id));
-COMMENT ON POLICY app_select ON proposal_revision IS 'The revision history of the proposals the caller may see, in a session they are in: proposal app_select under the caller''s RLS, so an unshared commitment''s before/after text stays its creator''s (work-k5fk.32 S1; design note §6; work-k5fk.10.7).';
+  USING (app.is_member(session_id)
+         AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id
+                       AND (p.kind = 'SHARED_PROPOSAL' OR p.created_by_user_id = (SELECT app.current_user_id()))));
+COMMENT ON POLICY app_select ON proposal_revision IS 'The revision history of the proposals the caller may see and edit, in a session they are in (proposal app_select under the caller''s RLS, and the app_insert rule): every SHARED_PROPOSAL''s (shared with every member from birth) and the caller''s own INDIVIDUAL_COMMITMENT''s — never a co-participant''s commitment, shared or not. Sharing a commitment releases only its current text (proposal.description, duration, measure_of_success), never its earlier wordings in before/after nor the capturedQuote of its CREATED revision, the sentence of its creator''s private chat it was captured from (owner decision 2026-11-25, work-k5fk.37; work-k5fk.32 S1; design note §6; work-k5fk.10.7). t_proposal_app_moves keeps a commitment from becoming a SHARED_PROPOSAL, which would release it.';
 CREATE POLICY app_insert ON proposal_revision FOR INSERT TO app_access
   WITH CHECK (actor_user_id = (SELECT app.current_user_id()) AND app.is_member(session_id)
               AND EXISTS (SELECT 1 FROM proposal p WHERE p.id = proposal_revision.proposal_id

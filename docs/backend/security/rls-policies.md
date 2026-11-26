@@ -52,13 +52,20 @@ describe production.
   (review r1 F4), and the identity-bound write definers refuse a leaver too (r2 N1). Own-row tables
   whose session link is optional (reflection, ai_memory, user_memory) stay their owner's: only a new
   link needs present membership (`t_session_link_moves`, r2 N2). `t_proposal_app_moves` holds what a proposal UPDATE may not do (re-assign its
-  creator, convert it to an agreement, attribute a removal to someone else). Deviations from §6,
+  creator, convert it to an agreement, attribute a removal to someone else, turn an INDIVIDUAL_COMMITMENT into a
+  SHARED_PROPOSAL — work-k5fk.37). Deviations from §6,
   each in its policy's COMMENT: `empathy_review` also shows the author a review once sent (and is
   written only once the attempt is revealed); `follow_up` shows a partner's INDIVIDUAL entry only once
   it is opted in to sharing. Private until shared (owner decision 2026-11-25, work-k5fk.32): `proposal`
   shows a partner's INDIVIDUAL_COMMITMENT only once its creator shared it (`shared_at`, written by
-  `app.proposal_share` alone, when they share their Stage 4 stances), and `proposal_need`,
-  `proposal_revision` and `proposal_choice` follow the proposal; `follow_up_checkin` shows a partner's
+  `app.proposal_share` alone, per commitment, from POST `/stage4/commitments/:proposalId/share` — sharing
+  stances shares none, work-k5fk.37), and `proposal_need` and `proposal_choice` follow the proposal. Sharing
+  releases only a commitment's CURRENT text (work-k5fk.37): `proposal_revision` shows the history of the
+  proposals the caller may edit — every SHARED_PROPOSAL's and the caller's own commitment's — so a partner's
+  commitment's earlier wordings (`before` / `after`) and `capturedQuote` (the sentence of its creator's
+  private chat, in its CREATED revision) stay its creator's, shared or not. Because a SHARED_PROPOSAL's history is
+  every member's, `t_proposal_app_moves` keeps a commitment from becoming one, and capture writes
+  `capturedQuote` only on a commitment. `follow_up_checkin` shows a partner's
   check-in on a SHARED follow-up only once the caller has checked in too (`app.checked_in`).
 - `ai_access` — `ai_session`: rows of the session in `app.session_scope` only, and only while the acting
   user (`app.current_user_id()`, bound on the AI connection too) is a present participant of it, not one who

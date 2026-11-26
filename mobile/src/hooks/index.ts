@@ -134,6 +134,7 @@ export {
   useSubmitStage4ProposalSelection,
   useSubmitStage4Selections,
   useShareStage4Selections,
+  useShareStage4Commitment,
   useUnshareStage4Selections,
   useCloseStage4,
   useTendingEntries,

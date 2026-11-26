@@ -651,6 +651,16 @@ async function auditSkippedDestructiveCapture(
   );
 }
 
+/**
+ * The kind an edit leaves a proposal with: the operation's, except that an individual commitment stays one (owner
+ * decision 2026-11-25, work-k5fk.37). Its revision history is its creator's alone and a shared proposal's is every
+ * member's, so reclassifying it would release its earlier wordings; the database refuses the move
+ * (t_proposal_app_moves). Its creator shares it with POST /stage4/commitments/:proposalId/share instead.
+ */
+function keptKind(current: Stage4ProposalKind, requested?: Stage4ProposalKind): Stage4ProposalKind {
+  return current === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? current : (requested ?? current);
+}
+
 async function applyOperation(
   ctx: CaptureContext,
   operation: Stage4InventoryOperation,
@@ -662,17 +672,18 @@ async function applyOperation(
     const superseded = live.find(p => isSupersededStrategy(p.description, operation.description));
     if (superseded) {
       const before = proposalSnapshot(superseded);
+      const kind = keptKind(superseded.kind, operation.kind);
       await prisma.proposal.update({
         where: { id: superseded.id },
         data: {
           description: operation.description,
           duration: operation.duration,
           measureOfSuccess: operation.measureOfSuccess,
-          kind: operation.kind,
+          kind,
           status: Stage4ProposalStatus.ACTIVE,
           // Becoming an individual commitment makes it the actor's own (the database refuses one handed to anyone
           // else: t_proposal_app_moves).
-          ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
+          ...(kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
           superseded.kind !== Stage4ProposalKind.INDIVIDUAL_COMMITMENT
             ? creatorColumns(ctx, ctx.actor.userId)
             : {}),
@@ -683,7 +694,7 @@ async function applyOperation(
         description: operation.description,
         duration: operation.duration ?? null,
         measureOfSuccess: operation.measureOfSuccess ?? null,
-        kind: operation.kind,
+        kind,
         status: Stage4ProposalStatus.ACTIVE,
       });
       await writeRevision(
@@ -742,7 +753,12 @@ async function applyOperation(
         measureOfSuccess: operation.measureOfSuccess ?? null,
         kind: operation.kind,
         status: Stage4ProposalStatus.ACTIVE,
-        capturedQuote: operation.capturedQuote ?? null,
+        // The sentence of the participant's own chat it was captured from: kept only on an individual commitment,
+        // whose revisions are its creator's alone (proposal_revision app_select) and which never becomes a shared
+        // proposal (t_proposal_app_moves). A shared proposal's revisions are every member's, and the line is private
+        // until shared (owner decision 2026-11-25, work-k5fk.37).
+        capturedQuote:
+          operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? (operation.capturedQuote ?? null) : null,
       },
       'Captured from Stage 4 conversation.',
     );
@@ -807,17 +823,21 @@ async function applyOperation(
     return true;
   }
 
+  const kind = keptKind(proposal.kind, operation.kind);
   await prisma.proposal.update({
     where: { id: operation.proposalId },
     data: {
       description: operation.description ?? proposal.description,
       duration: operation.duration ?? proposal.duration,
       measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
-      kind: operation.kind ?? proposal.kind,
+      kind,
       // The creator moves only when the edit makes the proposal the actor's own commitment; it is never
       // re-assigned from the model's output (work-k5fk.10.9: the database refuses any other change of
       // created_by_user_id, t_proposal_app_moves).
-      ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? creatorColumns(ctx, ctx.actor.userId) : {}),
+      ...(kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
+      proposal.kind !== Stage4ProposalKind.INDIVIDUAL_COMMITMENT
+        ? creatorColumns(ctx, ctx.actor.userId)
+        : {}),
       status: Stage4ProposalStatus.ACTIVE,
     },
   });
@@ -833,7 +853,7 @@ async function applyOperation(
       needsAddressed: operation.needsAddressed ?? null,
       duration: operation.duration ?? proposal.duration,
       measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
-      kind: operation.kind ?? proposal.kind,
+      kind,
       status: Stage4ProposalStatus.ACTIVE,
     },
     operation.reason,

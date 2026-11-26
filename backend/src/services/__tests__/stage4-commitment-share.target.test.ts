@@ -1,9 +1,12 @@
 /**
- * work-k5fk.32 S1 (owner decision 2026-11-25: everything a user writes is private until they share it), over HTTP
- * as mwf_app. Ada's INDIVIDUAL_COMMITMENT in STAGE4_REDESIGN_INVENTORY ("I will name when I am overloaded before I
- * disappear") is hers until she shares her Stage 4 stances: then app.proposal_share stamps its shared_at, once.
- * Before that Bob reads it through no route — not GET /stage4, and not GET /agreements, which listed a pending
- * (legacy-proposed) agreement's text without a visibility check.
+ * Owner decision 2026-11-25 (work-k5fk.37; refines work-k5fk.32 S1): everything a user writes is private until they
+ * share it, and an individual commitment is shared by its OWN action — POST /stage4/commitments/:proposalId/share,
+ * which calls app.proposal_share for that one commitment. Sharing one's Stage 4 stances shares none. Sharing releases
+ * only the commitment's CURRENT text (description, duration, measure of success): its revision history — the earlier
+ * wordings and the capturedQuote, the sentence of Ada's private chat it was captured from — stays hers, in the
+ * database (proposal_revision app_select). Over HTTP as mwf_app.
+ *
+ * Ada's INDIVIDUAL_COMMITMENT in STAGE4_REDESIGN_INVENTORY: "I will name when I am overloaded before I disappear".
  *
  * One run (one fixture database) per file: the app's Prisma client is bound to the first run database it sees.
  * Requires: npx tsx src/testing/golden/cli.ts build STAGE4_REDESIGN_INVENTORY
@@ -16,8 +19,19 @@ const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
 const COMMITMENT = 'I will name when I am overloaded before I disappear';
+const EARLIER_WORDING = 'PROBE_EARLIER_WORDING of the commitment';
+const PRIVATE_SENTENCE = 'PROBE_PRIVATE_SENTENCE from Ada’s own chat';
 
-describeTarget('Stage 4: an individual commitment is private until its creator shares it (work-k5fk.32 S1)', () => {
+type Card = {
+  id: string;
+  description: string;
+  duration: string | null;
+  measureOfSuccess: string | null;
+  ownerLabel?: string;
+  isShared?: boolean;
+};
+
+describeTarget('Stage 4: a commitment is shared by its own action, and only its current text (work-k5fk.37)', () => {
   let run: TargetRun;
   let http: Awaited<ReturnType<typeof httpAs>>;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
@@ -26,7 +40,7 @@ describeTarget('Stage 4: an individual commitment is private until its creator s
   let commitment: string;
 
   beforeAll(async () => {
-    run = await openTargetRun('STAGE4_REDESIGN_INVENTORY', `b1_share_${process.pid}`);
+    run = await openTargetRun('STAGE4_REDESIGN_INVENTORY', `b1b_share_${process.pid}`);
     ids = await adaAndBob(run);
     ada = { id: ids.adaUser, email: 'ada@e2e.test' };
     bob = { id: ids.bobUser, email: 'bob@e2e.test' };
@@ -35,46 +49,123 @@ describeTarget('Stage 4: an individual commitment is private until its creator s
       `SELECT id::text FROM proposal WHERE session_id = $1 AND kind = 'INDIVIDUAL_COMMITMENT' AND created_by_user_id = $2`,
       [ids.session, ada.id],
     );
-    // A legacy "proposed as an agreement" mark on it, as POST /agreements wrote before it refused an unshared
-    // commitment: what GET /agreements lists as a pending agreement.
+    // Its history, as capture writes it: a CREATED revision carrying the sentence it was captured from, and a
+    // revision from an earlier wording to the current one. Keyless test database: plaintext envelopes.
     await run.sql(
-      `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after, reason)
-       VALUES ($1, $2, $3, 'REVISED', '{"legacyAgreement": true}', 'LEGACY_PROPOSED')`,
-      [commitment, ids.session, ada.id],
+      `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, after)
+       VALUES ($1, $2, $3, 'CREATED', $4::jsonb)`,
+      [
+        commitment,
+        ids.session,
+        ada.id,
+        JSON.stringify({ description: EARLIER_WORDING, capturedQuote: PRIVATE_SENTENCE }),
+      ],
+    );
+    await run.sql(
+      `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, before, after)
+       VALUES ($1, $2, $3, 'REVISED', $4::jsonb, $5::jsonb)`,
+      [
+        commitment,
+        ids.session,
+        ada.id,
+        JSON.stringify({ description: EARLIER_WORDING }),
+        JSON.stringify({ description: COMMITMENT }),
+      ],
     );
   });
   afterAll(async () => {
     if (run) await run.drop();
   });
 
-  const sharedAt = async () =>
-    (await run.sql<{ shared_at: Date | null }>(`SELECT shared_at FROM proposal WHERE id = $1`, [commitment]))[0]
-      .shared_at;
-  const agreementIds = async (who: { id: string; email: string }) => {
-    const res = await http(who, 'get', `/sessions/${ids.session}/agreements`);
-    expect(res.status).toBe(200);
-    return (res.body.data.agreements as Array<{ id: string; description: string }>).map(a => a.id);
-  };
-  const commitmentIds = async (who: { id: string; email: string }) => {
+  const sharedAt = async (id = commitment) =>
+    (await run.sql<{ shared_at: Date | null }>(`SELECT shared_at FROM proposal WHERE id = $1`, [id]))[0].shared_at;
+  const stage4 = async (who: { id: string; email: string }) => {
     const res = await http(who, 'get', `/sessions/${ids.session}/stage4`);
     expect(res.status).toBe(200);
-    return (res.body.data.inventory.individualCommitments as Array<{ id: string }>).map(p => p.id);
+    return res.body.data;
   };
+  const commitmentCards = async (who: { id: string; email: string }): Promise<Card[]> =>
+    (await stage4(who)).inventory.individualCommitments;
+  const share = (who: { id: string; email: string }, id: string) =>
+    http(who, 'post', `/sessions/${ids.session}/stage4/commitments/${id}/share`);
+  /** Everything Bob's Stage 4 and agreement reads return, as text. */
+  const bobReads = async () =>
+    JSON.stringify([await stage4(bob), (await http(bob, 'get', `/sessions/${ids.session}/agreements`)).body]);
 
-  it('before the share: Bob reads it through no route; Ada cannot propose it as an agreement', async () => {
-    expect(await sharedAt()).toBeNull();
-    expect(await agreementIds(ada)).toContain(commitment);
-    expect(await agreementIds(bob)).not.toContain(commitment);
-    const bobRaw = JSON.stringify((await http(bob, 'get', `/sessions/${ids.session}/agreements`)).body);
-    expect(bobRaw).not.toContain(COMMITMENT);
-    expect(await commitmentIds(ada)).toContain(commitment);
-    expect(await commitmentIds(bob)).not.toContain(commitment);
-    // Bob cannot confirm what he cannot see
-    const confirm = await http(bob, 'post', `/sessions/${ids.session}/agreements/${commitment}/confirm`, {
-      confirmed: true,
+  it('sharing her stances shares no commitment: Bob reads it through no route; Ada’s card says it is private', async () => {
+    const proposals = await run.sql<{ id: string }>(
+      `SELECT id::text FROM proposal WHERE session_id = $1 AND status = 'ACTIVE' AND kind = 'SHARED_PROPOSAL'`,
+      [ids.session],
+    );
+    const chose = await http(ada, 'post', `/sessions/${ids.session}/stage4/selections`, {
+      selections: proposals.map(p => ({ proposalId: p.id, decision: 'WILLING' })),
     });
-    expect(confirm.status).toBe(404);
-    // Proposing it as an agreement asks Bob to confirm what he cannot read: refused until shared
+    expect(chose.status).toBe(200);
+    for (const need of (await stage4(ada)).coverageAudit.open as Array<{ id: string }>) {
+      expect((await http(ada, 'post', `/sessions/${ids.session}/stage4/needs/${need.id}/decline`)).status).toBe(200);
+    }
+    expect((await http(ada, 'post', `/sessions/${ids.session}/stage4/share-selections`)).status).toBe(200);
+
+    expect(await sharedAt()).toBeNull();
+    expect((await commitmentCards(bob)).map(c => c.id)).not.toContain(commitment);
+    expect(await bobReads()).not.toContain(COMMITMENT);
+    expect((await commitmentCards(ada)).find(c => c.id === commitment)).toMatchObject({
+      ownerLabel: 'You',
+      isShared: false,
+    });
+  });
+
+  it('only its creator shares it, and only a live individual commitment is shared this way', async () => {
+    expect((await share(bob, commitment)).status).toBe(404); // not his, and not visible to him
+    const [{ id: checkin }] = await run.sql<{ id: string }>(
+      `SELECT id::text FROM proposal WHERE session_id = $1 AND description LIKE 'Try a Sunday%'`,
+      [ids.session],
+    );
+    const sharedProposal = await share(ada, checkin);
+    expect(sharedProposal.status).toBe(400);
+    expect(sharedProposal.body.error.code).toBe('VALIDATION_ERROR');
+    const [{ id: removed }] = await run.sql<{ id: string }>(
+      `INSERT INTO proposal (session_id, created_by_user_id, kind, status, description, removed_at, removed_by_user_id)
+       VALUES ($1, $2, 'INDIVIDUAL_COMMITMENT', 'REMOVED', 'PROBE_REMOVED_COMMITMENT', now(), $2) RETURNING id::text`,
+      [ids.session, ada.id],
+    );
+    expect((await share(ada, removed)).status).toBe(400);
+    expect(await sharedAt(removed)).toBeNull();
+    expect((await share(ada, 'not-a-proposal')).status).toBe(404);
+    expect(await sharedAt()).toBeNull();
+  });
+
+  it('Ada shares it with its own action: Bob reads its current text and nothing of its history', async () => {
+    const res = await share(ada, commitment);
+    expect(res.status).toBe(200);
+    expect(
+      (res.body.data.state.inventory.individualCommitments as Card[]).find(c => c.id === commitment),
+    ).toMatchObject({ isShared: true });
+    expect(await sharedAt()).not.toBeNull();
+
+    const bobsCard = (await commitmentCards(bob)).find(c => c.id === commitment);
+    expect(bobsCard).toMatchObject({
+      description: COMMITMENT,
+      duration: 'This week',
+      measureOfSuccess: 'Stress is named before withdrawal',
+      ownerLabel: 'Partner',
+      isShared: true,
+    });
+    const raw = await bobReads();
+    expect(raw).not.toContain('PROBE_EARLIER_WORDING');
+    expect(raw).not.toContain('PROBE_PRIVATE_SENTENCE');
+  });
+
+  it('set once: sharing again changes nothing; pulling the stances back leaves it shared', async () => {
+    const first = await sharedAt();
+    expect((await share(ada, commitment)).status).toBe(200);
+    expect(await sharedAt()).toEqual(first);
+    expect((await http(ada, 'post', `/sessions/${ids.session}/stage4/unshare-selections`)).status).toBe(200);
+    expect(await sharedAt()).toEqual(first);
+    expect((await commitmentCards(bob)).map(c => c.id)).toContain(commitment);
+  });
+
+  it('an individual commitment is never proposed as an agreement, shared or not (Bob could not confirm it)', async () => {
     const propose = await http(ada, 'post', `/sessions/${ids.session}/agreements`, {
       strategyId: commitment,
       description: COMMITMENT,
@@ -84,29 +175,26 @@ describeTarget('Stage 4: an individual commitment is private until its creator s
     expect(propose.body.error.code).toBe('VALIDATION_ERROR');
   });
 
-  it('sharing her stances shares it, once: Bob reads it after; pulling the stances back leaves it shared', async () => {
-    const proposals = await run.sql<{ id: string }>(
-      `SELECT id::text FROM proposal WHERE session_id = $1 AND status = 'ACTIVE'`,
+  it('a shared proposal Ada makes her own commitment is hidden from Bob until she shares it with its own action', async () => {
+    const [{ id: checkin }] = await run.sql<{ id: string }>(
+      `SELECT id::text FROM proposal WHERE session_id = $1 AND description LIKE 'Try a Sunday%'`,
       [ids.session],
     );
-    const chose = await http(ada, 'post', `/sessions/${ids.session}/stage4/selections`, {
-      selections: proposals.map(p => ({ proposalId: p.id, decision: 'WILLING' })),
+    // What Stage 4 capture writes when Ada's edit makes it her own commitment (owner connection: the app's
+    // creator move is t_proposal_app_moves' to allow, and rls-cross-user covers it).
+    await run.sql(
+      `UPDATE proposal SET kind = 'INDIVIDUAL_COMMITMENT', created_by_user_id = $2, description = 'PROBE_MINE_NOW'
+       WHERE id = $1`,
+      [checkin, ada.id],
+    );
+    expect((await commitmentCards(bob)).map(c => c.id)).not.toContain(checkin);
+    expect((await stage4(bob)).inventory.sharedProposals.map((p: Card) => p.id)).not.toContain(checkin);
+    expect((await commitmentCards(ada)).find(c => c.id === checkin)).toMatchObject({ isShared: false });
+
+    expect((await share(ada, checkin)).status).toBe(200);
+    expect((await commitmentCards(bob)).find(c => c.id === checkin)).toMatchObject({
+      description: 'PROBE_MINE_NOW',
+      isShared: true,
     });
-    expect(chose.status).toBe(200);
-    expect(await sharedAt()).toBeNull(); // a stance alone shares nothing
-
-    const share = await http(ada, 'post', `/sessions/${ids.session}/stage4/share-selections`);
-    expect(share.status).toBe(200);
-    const first = await sharedAt();
-    expect(first).not.toBeNull();
-    expect(await agreementIds(bob)).toContain(commitment);
-    expect(await commitmentIds(bob)).toContain(commitment);
-
-    // Set once: unsharing the stances (to revise) and sharing again leave the first instant
-    expect((await http(ada, 'post', `/sessions/${ids.session}/stage4/unshare-selections`)).status).toBe(200);
-    expect(await sharedAt()).toEqual(first);
-    expect(await commitmentIds(bob)).toContain(commitment);
-    expect((await http(ada, 'post', `/sessions/${ids.session}/stage4/share-selections`)).status).toBe(200);
-    expect(await sharedAt()).toEqual(first);
   });
 });

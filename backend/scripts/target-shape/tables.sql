@@ -1239,7 +1239,7 @@ CREATE INDEX ON proposal (session_id, removed_by_user_id);
 COMMENT ON TABLE proposal IS 'A Stage-4 repair idea: a shared proposal for the needs both see, or one participant''s individual commitment.';
 COMMENT ON COLUMN proposal.created_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, created_by_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN proposal.removed_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, removed_by_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when its creator shared it with the co-participants (until then it is the creator''s alone: proposal app_select). Written once, by app.proposal_share only; never cleared (work-k5fk.32 S1).';
+COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when its creator shared it with the co-participants (until then it is the creator''s alone: proposal app_select), by its own action (POST /stage4/commitments/:proposalId/share; work-k5fk.37). Releases its current text only — its revisions stay the creator''s (proposal_revision app_select). Written once, by app.proposal_share only; never cleared (work-k5fk.32 S1).';
 COMMENT ON COLUMN proposal.description IS 'encrypted (session): what the proposal is, AI-proposed or typed (POST /strategies: 10 to 1000).';
 COMMENT ON COLUMN proposal.duration IS 'encrypted (session): free text for how long, e.g. 3 days or 10 minutes, once this week (AI or user; max 100 on POST /strategies). NOT a true interval: nothing parses it.';
 COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text: how the participants will know it worked (max 500 on POST /strategies).';
@@ -2362,7 +2362,7 @@ COMMENT ON COLUMN proposal_revision.session_id IS 'The session of every particip
 COMMENT ON COLUMN proposal_revision.actor_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, actor_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN proposal_revision.reason IS 'An app marker or NULL; never user or model text (R47).';
 COMMENT ON COLUMN proposal_revision.before IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields before the change.';
-COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it.';
+COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it. A CREATED revision of an INDIVIDUAL_COMMITMENT captured from chat carries capturedQuote, the sentence of its creator''s private chat — readable by its creator alone (proposal_revision app_select; work-k5fk.37).';
 -- mwf_app: the audit row of a caller's edit (controllers/stage4.ts, stage4-capture, stage4-subchat). Append-only.
 GRANT SELECT ON proposal_revision TO app_access;
 GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason, created_at)

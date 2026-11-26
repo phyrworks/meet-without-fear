@@ -170,7 +170,7 @@ type ProposalAccessFacts = Pick<ProposalRow, 'kind' | 'createdByUserId' | 'share
  * May `viewer` see the proposal (loadProposals' rule, spec §1.4): every
  * SHARED_PROPOSAL — shared with every member from birth — and an
  * INDIVIDUAL_COMMITMENT only to its creator, or once shared (shared_at, which
- * shareChoices stamps through app.proposal_share). The proposal app_select
+ * shareCommitment stamps through app.proposal_share). The proposal app_select
  * policy is the same rule in the database (work-k5fk.32 S1).
  */
 export function proposalVisibleTo(p: ProposalAccessFacts, viewer: Seat): boolean {
@@ -441,15 +441,9 @@ export async function shareChoices(seat: Seat): Promise<boolean> {
   // Share moment (writer-principal rule): the participant's choices — their
   // notes — become the co-participant's to read with the milestone, so the
   // hook runs in the milestone's transaction. W13 re-encrypts here.
+  // Shares no individual commitment: each is shared by its own action (shareCommitment; owner decision 2026-11-25,
+  // work-k5fk.37 — was: every one of the participant's commitments, with their stances).
   return prisma.$transaction(async tx => {
-    // Sharing one's stances shares one's own individual commitments with them (work-k5fk.32 S1, owner decision
-    // 2026-11-25: private until shared): each one not removed nor shared yet gets its shared_at from
-    // app.proposal_share, the only writer. Set once — pulling the stances back to revise leaves them shared. The
-    // description is session-encrypted, so nothing re-encrypts.
-    await tx.$queryRaw`
-      SELECT app.proposal_share(p.id) FROM proposal p
-      WHERE p.session_id = ${seat.sessionId}::uuid AND p.created_by_user_id = ${seat.userId}::uuid
-        AND p.kind = 'INDIVIDUAL_COMMITMENT' AND p.status <> 'REMOVED' AND p.shared_at IS NULL`;
     const reached = await reachMilestone(seat, 'choices_shared', new Date(), tx);
     await reencryptForSession(
       {
@@ -462,6 +456,19 @@ export async function shareChoices(seat: Seat): Promise<boolean> {
     );
     return reached;
   });
+}
+
+/**
+ * Share one of the participant's own individual commitments with the co-participants (owner decision 2026-11-25,
+ * work-k5fk.37): app.proposal_share, identity-bound (the request's user; it must be the creator, present) — stamps its
+ * shared_at once; never cleared. It releases only the commitment's current text: its revisions (earlier wordings, the
+ * captured quote) stay the creator's (proposal_revision app_select). The description is session-encrypted, so
+ * nothing re-encrypts. True when stamped now, false when it was already shared.
+ */
+export async function shareCommitment(proposalId: string): Promise<boolean> {
+  const [row] = await prisma.$queryRaw<Array<{ stamped: boolean }>>`
+    SELECT app.proposal_share(${proposalId}::uuid) AS stamped`;
+  return row.stamped;
 }
 
 /**

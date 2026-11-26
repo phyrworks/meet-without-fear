@@ -87,6 +87,46 @@ test.describe('Stage 4 redesign: deterministic two-user coverage', () => {
     expect(state.data.coverageAudit.open.map((row: any) => row.label)).toContain('Appreciation');
   });
 
+  // work-k5fk.37 (owner decision 2026-11-25): Alice's individual commitment is hers until she shares it with its
+  // own action; sharing her stances shares none. Bob then reads its current text.
+  test('an individual commitment is shared by its own action, not with the stances', async ({ request }) => {
+    const seeded = await seedSession(request, 'STAGE4_REDESIGN_INVENTORY');
+    const apiA = apiFor(request, users.a.email, seeded.userAId);
+    const apiB = apiFor(request, users.b.email, seeded.userBId);
+    const base = `/api/sessions/${seeded.sessionId}`;
+    const commitmentText = 'I will name when I am overloaded before I disappear';
+
+    const stateA = await readJson<any>(await apiA.get(`${base}/stage4`), 'get Stage 4 state for Alice');
+    const commitment = stateA.data.inventory.individualCommitments.find((p: any) => p.description === commitmentText);
+    expect(commitment, 'Alice sees her own commitment').toMatchObject({ ownerLabel: 'You', isShared: false });
+
+    await readJson(
+      await apiA.post(`${base}/stage4/selections`, {
+        selections: stateA.data.inventory.sharedProposals.map((p: any) => ({ proposalId: p.id, decision: 'WILLING' })),
+      }),
+      'Alice takes her stances'
+    );
+    const afterSelect = await readJson<any>(await apiA.get(`${base}/stage4`), 're-read Stage 4 state for Alice');
+    for (const need of afterSelect.data.coverageAudit.open) {
+      await readJson(await apiA.post(`${base}/stage4/needs/${need.id}/decline`), `Alice sets aside "${need.label}"`);
+    }
+    await readJson(await apiA.post(`${base}/stage4/share-selections`), 'Alice shares her stances');
+    const bobBefore = await readJson<any>(await apiB.get(`${base}/stage4`), 'get Stage 4 state for Bob');
+    expect(JSON.stringify(bobBefore.data)).not.toContain(commitmentText);
+
+    const shared = await readJson<any>(
+      await apiA.post(`${base}/stage4/commitments/${commitment.id}/share`),
+      'Alice shares her commitment'
+    );
+    expect(
+      shared.data.state.inventory.individualCommitments.find((p: any) => p.id === commitment.id)
+    ).toMatchObject({ isShared: true });
+    const bobAfter = await readJson<any>(await apiB.get(`${base}/stage4`), 're-read Stage 4 state for Bob');
+    expect(bobAfter.data.inventory.individualCommitments).toEqual([
+      expect.objectContaining({ id: commitment.id, description: commitmentText, ownerLabel: 'Partner', isShared: true }),
+    ]);
+  });
+
   test('selection privacy holds while one partner is inactive and shared closure is rejected', async ({ request }) => {
     const seeded = await seedSession(request, 'STAGE4_REDESIGN_PARTNER_INACTIVE');
     const apiA = apiFor(request, users.a.email, seeded.userAId);

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
-import { MinusCircle, Send, RotateCcw, Share2, XCircle } from 'lucide-react-native';
+import { Lock, MinusCircle, Send, RotateCcw, Share2, XCircle } from 'lucide-react-native';
 import {
   GetStage4StateResponse,
   ProposalCardDTO,
@@ -25,6 +25,10 @@ interface Stage4RedesignPanelProps {
   hideFooter?: boolean;
   onSelectProposal: (proposalId: string, decision: Stage4SelectionDecision) => void;
   onShareSelections?: () => void;
+  /** Share one of the viewer's own individual commitments with the partner (work-k5fk.37). */
+  onShareCommitment?: (proposalId: string) => void;
+  /** The commitment whose share is in flight, if any. */
+  sharingCommitmentId?: string | null;
   onReviseSelections?: () => void;
   onSuggestOptions?: (needLabel: string, needId: string) => void;
   onBrainstormNeed?: (needLabel: string, needId: string) => void;
@@ -94,16 +98,6 @@ function outcomeReasonLabel(reason: Stage4ClosureReason): string {
     default:
       return reason;
   }
-}
-
-/**
- * Whether the viewer has an individual commitment of their own still live. Sharing one's stances shares those
- * commitments with the partner too (work-k5fk.32 S1: private until shared), so the share CTA says so.
- */
-function hasOwnCommitments(state: GetStage4StateResponse): boolean {
-  return state.inventory.individualCommitments.some(
-    (p) => p.ownerLabel === 'You' && p.status !== Stage4ProposalStatus.REMOVED
-  );
 }
 
 function proposalKindLabel(kind: Stage4ProposalKind): string {
@@ -354,22 +348,81 @@ function partnerStateLabel(
   return `${who}: ${decisionLabels[decision].toLowerCase()}`;
 }
 
+/**
+ * Who can read one of the viewer's own individual commitments, and the action that shares it (owner decision
+ * 2026-11-25, work-k5fk.37): private until its own "Share with {partner}" — sharing stances shares none — and never
+ * unshared. The partner then reads its current text only. Nothing for a shared proposal or the partner's commitment.
+ */
+function CommitmentVisibility({
+  proposal,
+  partnerName,
+  readOnly,
+  isSharing,
+  onShareCommitment,
+}: {
+  proposal: ProposalCardDTO;
+  partnerName: string;
+  readOnly?: boolean;
+  isSharing?: boolean;
+  onShareCommitment?: (proposalId: string) => void;
+}) {
+  const { palette } = useAppAppearance();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  if (proposal.kind !== Stage4ProposalKind.INDIVIDUAL_COMMITMENT || proposal.ownerLabel !== 'You') return null;
+  if (proposal.isShared) {
+    return (
+      <View style={styles.commitmentVisibility} testID={`stage4-commitment-shared-${proposal.id}`}>
+        <Share2 size={13} color={palette.textMuted} />
+        <Text style={styles.commitmentVisibilityText}>Shared with {partnerName}</Text>
+      </View>
+    );
+  }
+  const canShare = Boolean(onShareCommitment) && !readOnly && proposal.status !== Stage4ProposalStatus.REMOVED;
+  return (
+    <View style={styles.commitmentVisibility} testID={`stage4-commitment-private-${proposal.id}`}>
+      <Lock size={13} color={palette.textMuted} />
+      <Text style={styles.commitmentVisibilityText}>Private — only you can see this</Text>
+      {canShare && (
+        <TouchableOpacity
+          onPress={() => {
+            if (!isSharing) onShareCommitment?.(proposal.id);
+          }}
+          disabled={isSharing}
+          accessibilityRole="button"
+          accessibilityLabel={`Share this commitment with ${partnerName}`}
+          accessibilityState={{ disabled: Boolean(isSharing) }}
+          testID={`stage4-commitment-share-${proposal.id}`}
+          style={styles.refineButton}
+          hitSlop={8}
+        >
+          <Share2 size={14} color={palette.accent} />
+          <Text style={styles.refineButtonText}>{isSharing ? 'Sharing…' : `Share with ${partnerName}`}</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 function ProposalCard({
   proposal,
   partnerName,
   isSelecting,
   readOnly,
   showStance = true,
+  sharingCommitmentId,
   onSelectProposal,
   onRefineProposal,
+  onShareCommitment,
 }: {
   proposal: ProposalCardDTO;
   partnerName: string;
   isSelecting?: boolean;
   readOnly?: boolean;
   showStance?: boolean;
+  sharingCommitmentId?: string | null;
   onSelectProposal: (proposalId: string, decision: Stage4SelectionDecision) => void;
   onRefineProposal?: (proposalId: string, description: string) => void;
+  onShareCommitment?: (proposalId: string) => void;
 }) {
   const { palette } = useAppAppearance();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -408,6 +461,14 @@ function ProposalCard({
         )}
       </View>
       <Text style={styles.proposalDescription}>{proposal.description}</Text>
+
+      <CommitmentVisibility
+        proposal={proposal}
+        partnerName={partnerName}
+        readOnly={readOnly}
+        isSharing={sharingCommitmentId === proposal.id}
+        onShareCommitment={onShareCommitment}
+      />
 
       {metaLines.map((line) => (
         <Text key={line} style={styles.proposalMeta}>
@@ -643,11 +704,6 @@ export function Stage4RedesignFooter({
               There are still needs unaddressed — brainstorm or set them aside first.
             </Text>
           )}
-          {hasOwnCommitments(state) && (
-            <Text style={styles.actionHint} testID="stage4-share-commitments-hint">
-              Your own commitments are shared with {who} too.
-            </Text>
-          )}
         </View>
       </View>
     );
@@ -707,6 +763,8 @@ export function Stage4RedesignPanel({
   hideFooter = false,
   onSelectProposal,
   onShareSelections,
+  onShareCommitment,
+  sharingCommitmentId = null,
   onReviseSelections,
   onSuggestOptions,
   onBrainstormNeed,
@@ -805,8 +863,10 @@ export function Stage4RedesignPanel({
                   isSelecting={isSelecting}
                   readOnly={proposalSelectionsReadOnly || Boolean(group.readOnly)}
                   showStance={false}
+                  sharingCommitmentId={sharingCommitmentId}
                   onSelectProposal={onSelectProposal}
                   onRefineProposal={group.readOnly ? undefined : onRefineProposal}
+                  onShareCommitment={onShareCommitment}
                 />
               ))
             )}
@@ -936,8 +996,10 @@ export function Stage4RedesignPanel({
                     partnerName={partnerLabel}
                     isSelecting={isSelecting}
                     readOnly={proposalSelectionsReadOnly}
+                    sharingCommitmentId={sharingCommitmentId}
                     onSelectProposal={onSelectProposal}
                     onRefineProposal={onRefineProposal}
+                    onShareCommitment={onShareCommitment}
                   />
                   {warning && (
                     <Text style={styles.actionHint}>{warning.warning} {warning.suggestedRevision}</Text>
@@ -982,8 +1044,10 @@ export function Stage4RedesignPanel({
               partnerName={partnerLabel}
               isSelecting={isSelecting}
               readOnly={proposalSelectionsReadOnly}
+              sharingCommitmentId={sharingCommitmentId}
               onSelectProposal={onSelectProposal}
               onRefineProposal={onRefineProposal}
+              onShareCommitment={onShareCommitment}
             />
           ))
         )}
@@ -1085,11 +1149,6 @@ export function Stage4RedesignPanel({
               {allMyDecisionsMade && !needsGated && (
                 <Text style={styles.actionHint} testID="stage4-needs-gate-hint-inline">
                   There are still needs unaddressed — brainstorm or set them aside first.
-                </Text>
-              )}
-              {hasOwnCommitments(state) && (
-                <Text style={styles.actionHint} testID="stage4-share-commitments-hint-inline">
-                  Your own commitments are shared with {who} too.
                 </Text>
               )}
             </View>
@@ -1233,6 +1292,19 @@ const makeStyles = (palette: Palette) => StyleSheet.create({
     color: palette.textMuted,
     fontSize: 12,
     fontWeight: '600',
+  },
+  commitmentVisibility: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  commitmentVisibilityText: {
+    color: palette.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    flexShrink: 1,
   },
   proposalDescription: {
     color: palette.text,

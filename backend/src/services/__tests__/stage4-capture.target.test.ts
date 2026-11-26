@@ -88,6 +88,56 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
     expect(await revisions(added[0].id)).toEqual([{ action: 'CREATED', actor: ids.adaUser }]);
   });
 
+  // work-k5fk.37 (owner decision 2026-11-25): the sentence of the participant's chat a proposal was captured from
+  // (capturedQuote) is kept only on an individual commitment, whose revisions are its creator's alone; a shared
+  // proposal's revisions are every member's, so its CREATED revision carries none. And a commitment stays one: no
+  // edit reclassifies it as shared (that would release its history).
+  const createdQuote = async (proposalId: string) =>
+    (
+      await run.sql<{ quote: string | null }>(
+        `SELECT after->>'capturedQuote' AS quote FROM proposal_revision WHERE proposal_id = $1 AND action = 'CREATED'`,
+        [proposalId],
+      )
+    )[0].quote;
+
+  it('a captured quote is kept on Ada’s commitment only, never on a shared proposal (work-k5fk.37)', async () => {
+    const before = await proposals();
+    const result = await turn({
+      userMessage: 'We could cook dinner together every Thursday this month. I will text before I leave work each day.',
+    });
+    expect(result.appliedOperationCount).toBeGreaterThanOrEqual(2);
+    const added = (await proposals()).filter(p => !before.some(b => b.id === p.id));
+    const shared = added.find(p => p.kind === 'SHARED_PROPOSAL')!;
+    const mine = added.find(p => p.kind === 'INDIVIDUAL_COMMITMENT')!;
+    expect(shared).toBeDefined();
+    expect(mine).toBeDefined();
+    expect(await createdQuote(shared.id)).toBeNull();
+    expect(await createdQuote(mine.id)).toMatch(/I will text before I leave work/i);
+  });
+
+  it('a typed REVISE of Ada’s commitment as a shared proposal keeps it her commitment (work-k5fk.37)', async () => {
+    const target = (await proposals()).find(p => p.description.startsWith('I will name when I am overloaded'))!;
+    const result = await turn({
+      userMessage: 'Let us both name it when we are overloaded, before either of us disappears.',
+      structuredProposals: [
+        {
+          action: 'REVISE',
+          targetProposalId: target.id,
+          classification: 'PROPOSAL',
+          description: 'name when we are overloaded before either of us disappears',
+          kind: 'SHARED_PROPOSAL',
+          needsAddressed: [],
+        },
+      ] as never,
+    });
+    expect(result.appliedOperationCount).toBe(1);
+    expect((await proposals()).find(p => p.id === target.id)).toMatchObject({
+      kind: 'INDIVIDUAL_COMMITMENT',
+      owner: ids.adaUser,
+      description: 'name when we are overloaded before either of us disappears',
+    });
+  });
+
   it('observations, caveats, topic-frame restatements and an empty typed block write nothing', async () => {
     const before = await proposals();
     for (const over of [
