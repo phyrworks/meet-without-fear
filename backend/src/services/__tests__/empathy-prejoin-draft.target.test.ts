@@ -346,6 +346,10 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
       const { sessionId, invitationId, adaParticipant } = await soloStage2Session('Ivy');
       const ivy = { id: randomUuidV7(), email: `ivy-99k2-${process.pid}@e2e.test` };
       await http(ada, 'post', `/sessions/${sessionId}/empathy/draft`, { content: 'before the join' });
+      // "Before the join" is updated_at < joined_at at millisecond precision (ts_ms): on a fast run the save and the
+      // accept's transaction could start in the same millisecond, and the draft then read as written at the join
+      // (measured 1 ms apart, work-k5fk.33).
+      await new Promise(r => setTimeout(r, 20));
 
       const store = await import('../empathy-store');
       const real = store.repointInvitationDrafts;
