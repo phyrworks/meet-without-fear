@@ -183,7 +183,6 @@ model ConversationReadState {
   lastSeenSeq            Int?      @map("last_seen_seq")
   lastViewedShareTabAt   DateTime? @map("last_viewed_share_tab_at") @db.Timestamptz(3)
   lastActiveAt           DateTime? @map("last_active_at") @db.Timestamptz(3)
-  archivedAt             DateTime? @map("archived_at") @db.Timestamptz(3)
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1180,7 +1179,7 @@ model UserDevice {
 
 model UserPreferences {
   userId           String   @id @map("user_id") @db.Uuid
-  doc              Json     @default(dbgenerated("('{}'::jsonb)::preferences_json_schema"))
+  doc              Json
   docSchemaVersion Int      @default(1) @map("doc_schema_version") @db.SmallInt
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)

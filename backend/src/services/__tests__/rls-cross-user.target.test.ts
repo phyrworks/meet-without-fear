@@ -327,7 +327,9 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       );
       expect(await count('mwf_ai', ada, 'brain_activity', 'id = $1', [id])).toBe(1);
       expect(
-        await as('mwf_ai', ada, `UPDATE brain_activity SET status = 'COMPLETED' WHERE id = $1 RETURNING id::text`, [id]),
+        await as('mwf_ai', ada, `UPDATE brain_activity SET status = 'COMPLETED' WHERE id = $1 RETURNING id::text`, [
+          id,
+        ]),
       ).toEqual([{ id }]);
       // the AI acting for Bob, or for no one, neither reads nor completes it
       expect(await count('mwf_ai', bob, 'brain_activity', 'id = $1', [id])).toBe(0);
@@ -351,9 +353,9 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       ).toBe('rls');
       // (and the CHECK refuses an ownerless one from any writer, the superuser included)
       expect(
-        await run.sql(`INSERT INTO brain_activity (activity_type, model) VALUES ('LLM_CALL', 'm')`).catch(
-          (e: { code?: string }) => e.code,
-        ),
+        await run
+          .sql(`INSERT INTO brain_activity (activity_type, model) VALUES ('LLM_CALL', 'm')`)
+          .catch((e: { code?: string }) => e.code),
       ).toBe('23514');
       // a session's row has no user owner
       expect(
@@ -863,7 +865,13 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
           count('mwf_app', bob, 'proposal_need', 'proposal_id = $1', [commitment]),
           count('mwf_app', bob, 'proposal_revision', 'proposal_id = $1', [commitment]),
           count('mwf_app', bob, 'proposal_choice', 'proposal_id = $1', [commitment]),
-          count('mwf_app', bob, 'v_session_closure_items', 'session_id = $1 AND $2::uuid = ANY (individual_commitment_ids)', [session, commitment]),
+          count(
+            'mwf_app',
+            bob,
+            'v_session_closure_items',
+            'session_id = $1 AND $2::uuid = ANY (individual_commitment_ids)',
+            [session, commitment],
+          ),
         ]);
       expect(await bobSees()).toEqual([0, 0, 0, 0, 0]);
       expect(await count('mwf_app', ada, 'proposal', 'id = $1', [commitment])).toBe(1);
@@ -881,14 +889,17 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await as('mwf_app', ada, `SELECT app.proposal_share($1) AS stamped`, [commitment])).toEqual([
         { stamped: true },
       ]);
-      const [{ shared_at: first }] = await run.sql<{ shared_at: Date }>(`SELECT shared_at FROM proposal WHERE id = $1`, [
-        commitment,
-      ]);
+      const [{ shared_at: first }] = await run.sql<{ shared_at: Date }>(
+        `SELECT shared_at FROM proposal WHERE id = $1`,
+        [commitment],
+      );
       expect(first).not.toBeNull();
       expect(await as('mwf_app', ada, `SELECT app.proposal_share($1) AS stamped`, [commitment])).toEqual([
         { stamped: false },
       ]);
-      expect(await run.sql(`SELECT shared_at FROM proposal WHERE id = $1`, [commitment])).toEqual([{ shared_at: first }]);
+      expect(await run.sql(`SELECT shared_at FROM proposal WHERE id = $1`, [commitment])).toEqual([
+        { shared_at: first },
+      ]);
       // ... all but its revision history: sharing releases only the current text (work-k5fk.37, owner decision
       // 2026-11-25) — the before/after of a co-participant's commitment are never Bob's to read.
       expect(await bobSees()).toEqual([1, 1, 0, 1, 1]);
@@ -1032,7 +1043,12 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
       await run.sql(`UPDATE follow_up SET status = 'COMPLETED', completed_at = now() WHERE id = $1`, [shared]);
       expect(await count('mwf_app', bob, 'follow_up_checkin', 'follow_up_id = $1', [shared])).toBe(0);
-      expect(await count('mwf_app', bob, 'v_follow_up_cycle', `follow_up_id = $1 AND $2 = ANY (submitted_user_ids)`, [shared, ada])).toBe(0);
+      expect(
+        await count('mwf_app', bob, 'v_follow_up_cycle', `follow_up_id = $1 AND $2 = ANY (submitted_user_ids)`, [
+          shared,
+          ada,
+        ]),
+      ).toBe(0);
       await run.sql(
         `INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id, payload) VALUES ($1, $2, $3, '{}')`,
         [shared, session, bob],
@@ -1127,9 +1143,9 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         [session, ada],
       );
       await run.sql(
-        `INSERT INTO conversation_read_state (session_id, user_id, last_viewed_at, last_active_at, archived_at)
-         VALUES ($1, $2, now(), now(), now())
-         ON CONFLICT (session_id, user_id) DO UPDATE SET last_viewed_at = now(), last_active_at = now(), archived_at = now()`,
+        `INSERT INTO conversation_read_state (session_id, user_id, last_viewed_at, last_active_at)
+         VALUES ($1, $2, now(), now())
+         ON CONFLICT (session_id, user_id) DO UPDATE SET last_viewed_at = now(), last_active_at = now()`,
         [session, ada],
       );
       const prefs = (show: boolean) =>
@@ -1142,13 +1158,13 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
         as<Record<string, unknown>>(
           'mwf_app',
           who,
-          `SELECT last_mood, last_viewed_at, last_seen_seq, archived_at, last_active_at FROM v_participant
+          `SELECT last_mood, last_viewed_at, last_seen_seq, last_active_at FROM v_participant
            WHERE session_id = $1 AND user_id = $2`,
           [session, ada],
         );
       await prefs(false);
       expect(await row(bob)).toEqual([
-        { last_mood: null, last_viewed_at: null, last_seen_seq: null, archived_at: null, last_active_at: null },
+        { last_mood: null, last_viewed_at: null, last_seen_seq: null, last_active_at: null },
       ]);
       await prefs(true);
       const [shown] = await row(bob);
@@ -1157,7 +1173,7 @@ describeTarget('row-level security: one cross-user test per table (work-k5fk.10.
       // Ada's own row keeps all of it
       const [own] = await row(ada);
       expect(own.last_mood).toBe(7);
-      expect(own.archived_at).not.toBeNull();
+      expect(own.last_viewed_at).not.toBeNull();
     });
 
     it('F3: an expired invitation cannot be accepted by back-dating the answer', async () => {

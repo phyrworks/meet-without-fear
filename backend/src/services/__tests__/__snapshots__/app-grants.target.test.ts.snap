@@ -377,7 +377,7 @@ column public.conversation SELECT: id, session_id, user_id, kind (ai_access)
 column public.conversation SELECT: id, session_id, user_id, kind (ops_access)
 column public.conversation SELECT: id, session_id, user_id, kind, next_seq (mwf_definer)
 column public.conversation UPDATE: next_seq (mwf_definer)
-column public.conversation_read_state SELECT: session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at (mwf_definer)
+column public.conversation_read_state SELECT: session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at (mwf_definer)
 column public.draft INSERT: id, session_id, user_id, kind, about_user_id, content, ready_to_share, version, created_at, updated_at, reopened_at (mwf_definer)
 column public.empathy_attempt INSERT: session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status (mwf_definer)
 column public.empathy_attempt UPDATE: status, status_version, revealed_at, delivery_status, delivered_at, seen_at (mwf_definer)
@@ -407,7 +407,7 @@ column public.need SELECT: id, session_id, user_id, category, superseded_by_need
 column public.need_disposition SELECT: session_id, user_id (mwf_definer)
 column public.need_share INSERT: need_id, session_id, user_id, category, shared_text (mwf_definer)
 column public.need_share SELECT: need_id, revoked_at (mwf_definer)
-column public.need_share UPDATE: revoked_at (mwf_definer)
+column public.need_share UPDATE: category, shared_text, shared_at, revoked_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, added_by_user_id, display_name, joined_at, left_at (mwf_definer)
 column public.participant SELECT: session_id, user_id, kind, display_name, joined_at (ops_access)
 column public.participant SELECT: session_id, user_id, kind, display_name, joined_at, left_at (ai_access)
@@ -565,7 +565,7 @@ routine app.t_message_immutable(): EXECUTE (mwf_migrator)
 routine app.t_message_seq(): EXECUTE (mwf_definer)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_definer)
-routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
+routine app.t_participant_cardinality(): EXECUTE (mwf_definer)
 routine app.t_participant_human_limit(): EXECUTE (mwf_definer)
 routine app.t_proposal_app_moves(): EXECUTE (mwf_migrator)
 routine app.t_reflection_unlink(): EXECUTE (mwf_migrator)
@@ -744,7 +744,7 @@ routine owner app.t_message_immutable(): mwf_migrator
 routine owner app.t_message_seq(): mwf_definer
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_definer
-routine owner app.t_participant_cardinality(): mwf_migrator
+routine owner app.t_participant_cardinality(): mwf_definer
 routine owner app.t_participant_human_limit(): mwf_definer
 routine owner app.t_proposal_app_moves(): mwf_migrator
 routine owner app.t_reflection_unlink(): mwf_migrator
@@ -930,7 +930,7 @@ column public.brain_activity SELECT: id, session_id, reflection_id, participant_
 column public.consent SELECT: id, session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id, decided_at, revoked_at, created_at, updated_at, target_kind (diag_access)
 column public.context_share_offer SELECT: id, attempt_id, result_id, session_id, subject_user_id, iteration, status, shared_at, declined_at, offered_at, delivery_status, delivered_at, seen_at, delivery_notified_at, seen_notified_at, created_at, updated_at (diag_access)
 column public.conversation SELECT: id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at (diag_access)
-column public.conversation_read_state SELECT: session_id, user_id, last_seen_conversation_id, last_seen_seq, archived_at, created_at (diag_access)
+column public.conversation_read_state SELECT: session_id, user_id, last_seen_conversation_id, last_seen_seq, created_at (diag_access)
 column public.draft SELECT: id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at (diag_access)
 column public.empathy_attempt SELECT: id, session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, status_version, submitted_at, revealed_at, delivery_status, delivered_at, seen_at, created_at, updated_at (diag_access)
 column public.empathy_review SELECT: id, attempt_id, session_id, reviewer_user_id, feedback_sent_at, created_at, updated_at (diag_access)

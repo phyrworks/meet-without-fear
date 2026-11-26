@@ -724,21 +724,20 @@ GRANT EXECUTE ON FUNCTION app.session_invitee_access(uuid) TO app_access;
 -- work-k5fk.10.7), so the view reads them here — for a participant of a session the caller is in, and nothing else.
 CREATE FUNCTION app.participant_presence(session uuid, "user" uuid)
   RETURNS TABLE (main_conversation_id public.uuid7, last_viewed_at public.ts_ms, last_seen_conversation_id public.uuid7,
-                 last_seen_seq integer, last_viewed_share_tab_at public.ts_ms, archived_at public.ts_ms,
+                 last_seen_seq integer, last_viewed_share_tab_at public.ts_ms,
                  last_active_at public.ts_ms, last_mood integer, user_name text, is_tombstone boolean)
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
     -- review F2: a co-participant gets only what the app reads about a partner — the MAIN conversation's id, the
     -- shared-frame seen instant (reconciler/sharing.ts: the author saw the context shared with them) and the last
-    -- activity when their privacy preference shows it. Their read state, archive flag and mood are the caller's own
+    -- activity when their privacy preference shows it. Their read state and mood are the caller's own
     -- only (own-row tables), never a partner's.
     SELECT c.id,
            CASE WHEN v_self THEN r.last_viewed_at END,
            CASE WHEN v_self THEN r.last_seen_conversation_id END,
            CASE WHEN v_self THEN r.last_seen_seq END,
            r.last_viewed_share_tab_at,
-           CASE WHEN v_self THEN r.archived_at END,
            CASE WHEN v_self OR coalesce((up.doc -> 'privacy' ->> 'showActivityStatus')::boolean, true)
                 THEN r.last_active_at END,
            CASE WHEN v_self THEN
@@ -856,6 +855,7 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     v_worker boolean := pg_catalog.pg_has_role(session_user, 'worker_access', 'USAGE')
                         AND coalesce(app.session_scope() = session_set_status.session, false);
     v_job  boolean := session_user = 'mwf_migrator' OR v_worker;
+    v_arm  boolean;
   BEGIN
     -- review F6: the worker only ends a session (retention, the Stage 4 closure, tending): it never starts one.
     IF v_worker AND session_user <> 'mwf_migrator'
@@ -863,10 +863,17 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
       RAISE EXCEPTION 'the worker only ends a session (ABANDONED, ARCHIVED, RESOLVED), not %', session_set_status.status
         USING ERRCODE = 'insufficient_privilege';
     END IF;
-    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR NO KEY UPDATE;
-    IF NOT FOUND OR NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
+    v_arm := v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
           SELECT 1 FROM public.participant p
-          WHERE p.session_id = session_set_status.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL))) THEN
+          WHERE p.session_id = session_set_status.session AND p.user_id = app.current_user_id() AND p.left_at IS NULL));
+    -- Review schema S4: a session that ends ABANDONED withdraws its PENDING invitations (below). They are locked FOR
+    -- UPDATE before the session — the accept's lock order, invitation then session — as app.session_archive does.
+    IF v_arm AND session_set_status.status = 'ABANDONED' THEN
+      PERFORM 1 FROM public.invitation i
+      WHERE i.session_id = session_set_status.session AND i.status = 'PENDING' ORDER BY i.id FOR UPDATE;
+    END IF;
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR NO KEY UPDATE;
+    IF NOT FOUND OR NOT v_arm THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
     END IF;
     IF v_from = session_set_status.status THEN
@@ -888,9 +895,14 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
         resolved_at = CASE WHEN session_set_status.status = 'RESOLVED' THEN coalesce(s.resolved_at, now()) ELSE s.resolved_at END,
         archived_at = CASE WHEN session_set_status.status = 'ARCHIVED' THEN now() ELSE s.archived_at END
     WHERE s.id = session_set_status.session;
+    IF session_set_status.status = 'ABANDONED' THEN
+      -- the link no longer claims, previews as open or holds a seat; an accept answers 410
+      UPDATE public.invitation i SET status = 'EXPIRED'
+      WHERE i.session_id = session_set_status.session AND i.status = 'PENDING';
+    END IF;
   END
   $$;
-COMMENT ON FUNCTION app.session_set_status(uuid, public.session_status) IS 'The writer of session.status (spec §1.1 transition set) but for a participant''s archive (app.session_archive): a current participant''s move on the app capability, or a worker task scoped to the session (the Stage 4 closure; retention''s RESOLVED / ABANDONED -> ARCHIVED, archived_at stamped with no archiver). Locks the session row FOR NO KEY UPDATE (lock order: session, then attempt). A caller with no arm is refused as not found (P0002). (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.session_set_status(uuid, public.session_status) IS 'The writer of session.status (spec §1.1 transition set) but for a participant''s archive (app.session_archive): a current participant''s move on the app capability, or a worker task scoped to the session (the Stage 4 closure; retention''s RESOLVED / ABANDONED -> ARCHIVED, archived_at stamped with no archiver). Locks the session row FOR NO KEY UPDATE (lock order: session, then attempt). A move to ABANDONED withdraws the session''s PENDING invitations (EXPIRED), locked FOR UPDATE before the session (review schema S4). A caller with no arm is refused as not found (P0002). (work-k5fk.10.16)';
 -- mwf_app (app_access): invitations.ts accept, topic-frame / invitation confirm (→ INVITED), messages / stage0 (→ ACTIVE),
 -- sessions.ts resolve and tending's closure / new process (→ RESOLVED), as a current participant. mwf_worker
 -- (worker_access): session-retention (→ ABANDONED → ARCHIVED) and the Stage 4 closure (→ RESOLVED), scoped to the session.
@@ -1011,6 +1023,7 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     v_is_subject   boolean;
     v_gate         boolean;
     v_new          uuid;
+    v_declined     boolean;
   BEGIN
     SELECT e.session_id INTO v_session FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt;
     IF NOT FOUND THEN
@@ -1054,6 +1067,11 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
         RAISE EXCEPTION 'resubmission needs the new round''s content' USING ERRCODE = 'null_value_not_allowed';
       END IF;
       UPDATE public.empathy_attempt SET status = 'SUPERSEDED', status_version = status_version + 1 WHERE id = a.id;
+      -- review services (resubmit from AWAITING_SHARING): the retired round's open share offers expire with it, in the
+      -- same transaction — the subject is no longer asked to share for a round nobody reads (lock order: the session,
+      -- the attempt, then its offers).
+      UPDATE public.context_share_offer o SET status = 'EXPIRED'
+      WHERE o.attempt_id = a.id AND o.status IN ('PENDING', 'OFFERED');
       INSERT INTO public.empathy_attempt (session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status)
       VALUES (a.session_id, a.author_user_id, a.subject_user_id, a.round + 1, a.id, empathy_set_status.content, 'HELD')
       RETURNING id INTO v_new;
@@ -1064,11 +1082,24 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
       RETURN a.id;
     END IF;
 
+    -- review services#4 (the decline is one transaction, as on the base): the SUBJECT who declined their share offer
+    -- on this round makes its AWAITING_SHARING -> READY in the decline's own transaction (sharing.ts
+    -- respondToShareSuggestion). Only that move, only after their DECLINED offer on this round, and only while no other
+    -- offer on it is open; on a round that moved on (resubmitted, re-analysed) the call is a no-op, never an error.
+    v_declined := v_is_subject AND empathy_set_status.status = 'READY'
+                  AND EXISTS (SELECT 1 FROM public.context_share_offer o
+                              WHERE o.attempt_id = a.id AND o.subject_user_id = v_me AND o.status = 'DECLINED');
+    IF v_declined AND (a.status <> 'AWAITING_SHARING'
+                       OR EXISTS (SELECT 1 FROM public.context_share_offer o
+                                  WHERE o.attempt_id = a.id AND o.status IN ('PENDING', 'OFFERED'))) THEN
+      RETURN a.id;
+    END IF;
+
     IF (a.status, empathy_set_status.status) IN (
          ('HELD'::public.empathy_status, 'AWAITING_SHARING'::public.empathy_status), ('HELD', 'READY'),
          ('AWAITING_SHARING', 'REFINING'), ('AWAITING_SHARING', 'READY'),
          ('REFINING', 'READY'), ('REFINING', 'AWAITING_SHARING')) THEN
-      IF NOT (v_job OR v_is_author) THEN
+      IF NOT (v_job OR v_is_author OR v_declined) THEN
         RAISE EXCEPTION 'only the author or the AI moves this attempt' USING ERRCODE = 'insufficient_privilege';
       END IF;
     ELSIF (a.status, empathy_set_status.status) = ('READY'::public.empathy_status, 'REVEALED'::public.empathy_status) THEN
@@ -1118,7 +1149,7 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     RETURN a.id;
   END
   $$;
-COMMENT ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) IS 'The only writer of empathy_attempt.status (spec §1.2 transition table): locks the session, then the attempt; on REVEALED stamps revealed_at once and delivers the EMPATHY_STATEMENT into the subject''s conversation; on SUPERSEDED inserts round n+1 (HELD) with the content and returns its id (a retry returns the same id). (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) IS 'The only writer of empathy_attempt.status (spec §1.2 transition table): locks the session, then the attempt; on REVEALED stamps revealed_at once and delivers the EMPATHY_STATEMENT into the subject''s conversation; on SUPERSEDED expires the round''s open share offers and inserts round n+1 (HELD) with the content and returns its id (a retry returns the same id). The subject moves the round AWAITING_SHARING -> READY only after declining their offer on it (a no-op once the round moved on). (work-k5fk.10.16; review services#4)';
 -- mwf_app (app_access): the request-path writer (work-k5fk.10.2). mwf_ai (ai_access): the reconciler's moves and the reveal
 -- (empathy-store jobMoveIfUnchanged, reconciler/state.ts), scoped to the session.
 REVOKE EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) FROM PUBLIC;
@@ -1132,6 +1163,11 @@ GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, te
 -- superseded; session_id and user_id come from the need, never from the caller
 -- (spec §1.4, N-1, N-7). Idempotent: a need already shared is left as it is.
 -- Until work-k5fk.10.5 the job wrote it for the owner; the owner's request is the principal.
+-- Re-sharing after a revocation (owner decision 2026-11-25, review schema S1): a revoked share is shared again — the
+-- new text, category and shared_at, revoked_at cleared — in place, on the same row (need_id is the key every Stage 4
+-- link hangs off: need_disposition, proposal_need). It is an explicit act: app.need_revoke_share REVOKES every
+-- GRANTED consent of the need, and the consent transitions never make a REVOKED row GRANTED again, so the GRANTED
+-- consent this requires can only be one the owner decided after the revocation. The history is the consent rows.
 CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -1152,6 +1188,15 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
                    WHERE c.need_id = need_share.need AND c.user_id = n.user_id AND c.decision = 'GRANTED') THEN
       RAISE EXCEPTION 'need has no GRANTED consent by its owner' USING ERRCODE = 'check_violation';
     END IF;
+    -- a revoked share, shared again (the new consent above is the explicit act)
+    UPDATE public.need_share s
+    SET shared_text = need_share.shared_text::public.ciphertext,
+        category = (SELECT n.category FROM public.need n WHERE n.id = need_share.need),
+        shared_at = now(), revoked_at = NULL
+    WHERE s.need_id = need_share.need AND s.revoked_at IS NOT NULL;
+    IF FOUND THEN
+      RETURN;
+    END IF;
     INSERT INTO public.need_share (need_id, session_id, user_id, category, shared_text)
     SELECT n.id, n.session_id, n.user_id, n.category, need_share.shared_text
     FROM public.need n
@@ -1159,7 +1204,7 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
     ON CONFLICT (need_id) DO NOTHING;
   END
   $$;
-COMMENT ON FUNCTION app.need_share(uuid, text) IS 'Share a need, by its owner (identity-bound, app_access) after their GRANTED consent, for a need neither deleted nor superseded; session_id and user_id come from the need. The text arrives sealed by the application. Idempotent (spec §1.4, N-1, N-7). (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.need_share(uuid, text) IS 'Share a need, by its owner (identity-bound, app_access) after their GRANTED consent, for a need neither deleted nor superseded; session_id and user_id come from the need. The text arrives sealed by the application. Idempotent for a live share; a revoked share is shared again in place (new text, category and shared_at, revoked_at cleared; owner decision 2026-11-25, review schema S1) — the GRANTED consent it needs can only postdate the revocation (spec §1.4, N-1, N-7). (work-k5fk.10.16)';
 -- mwf_app (app_access): consent.ts (a GRANTED need consent with its text) and needs-share.ts shareNeeds, as the owner.
 REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO app_access;
@@ -1210,9 +1255,16 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS
     -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave). The walk's
     -- own arm (review F8): not through session_set_status, whose participant arm refuses a user who already left
     -- (left_at set) — such a user's account deletion must still end the session. Same lock as session_set_status.
+    -- Review schema S4 (the inviter leaves): the session's PENDING invitations are withdrawn (EXPIRED) with it, so the
+    -- link no longer claims, previews as open or holds a seat. Locked FOR UPDATE before the session (the accept's lock
+    -- order, invitation then session), as app.session_archive does.
+    PERFORM 1 FROM public.invitation i WHERE i.session_id = sid AND i.status = 'PENDING' ORDER BY i.id FOR UPDATE;
     IF (SELECT s.status FROM public.session s WHERE s.id = sid FOR NO KEY UPDATE) IN ('CREATED', 'INVITED', 'ACTIVE') THEN
       UPDATE public.session s SET status = 'ABANDONED' WHERE s.id = sid;
     END IF;
+    UPDATE public.invitation i SET status = 'EXPIRED'
+    WHERE i.session_id = sid AND i.status = 'PENDING'
+      AND (SELECT s.status FROM public.session s WHERE s.id = sid) IN ('ABANDONED', 'ARCHIVED', 'RESOLVED');
     -- 2. the only PII a co-participant sees
     UPDATE public.participant SET display_name = NULL, left_at = coalesce(left_at, now()) WHERE session_id = sid AND user_id = uid;
     -- 3. the leaver's private-only rows (D9)
@@ -1242,7 +1294,7 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS
     UPDATE public.participant_key SET destroyed_at = now() WHERE session_id = sid AND user_id = uid AND destroyed_at IS NULL;
   END
   $$;
-COMMENT ON FUNCTION app.anonymize_user_in_session(uuid, uuid) IS 'The account walk for one session (spec §4 steps 1-4 and 7), by the user themself (identity-bound): a live session ends ABANDONED (decided on the locked status), the participant is tombstoned, and their private-only rows, unrevealed rounds and prompts are deleted. (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.anonymize_user_in_session(uuid, uuid) IS 'The account walk for one session (spec §4 steps 1-4 and 7), by the user themself (identity-bound): a live session ends ABANDONED (decided on the locked status) and its PENDING invitations are withdrawn (EXPIRED; review schema S4), the participant is tombstoned, and their private-only rows, unrevealed rounds and prompts are deleted. (work-k5fk.10.16)';
 -- mwf_app (app_access): session-deletion.ts deleteSessionForUser, the leaver's own request.
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) TO app_access;
@@ -1817,13 +1869,17 @@ CREATE FUNCTION app.session_abandon_declined(invitation uuid) RETURNS void
     IF v_status <> 'DECLINED' THEN
       RAISE EXCEPTION 'invitation is % , not DECLINED', v_status USING ERRCODE = 'check_violation';
     END IF;
+    -- Review schema S4: any other PENDING invitation of the session is withdrawn with it; locked FOR UPDATE before the
+    -- session (the accept's lock order, invitation then session).
+    PERFORM 1 FROM public.invitation i WHERE i.session_id = v_session AND i.status = 'PENDING' ORDER BY i.id FOR UPDATE;
     SELECT s.status INTO v_from FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
     IF v_from IN ('CREATED', 'INVITED') THEN
       UPDATE public.session s SET status = 'ABANDONED' WHERE s.id = v_session;
+      UPDATE public.invitation i SET status = 'EXPIRED' WHERE i.session_id = v_session AND i.status = 'PENDING';
     END IF;
   END
   $$;
-COMMENT ON FUNCTION app.session_abandon_declined(uuid) IS 'A DECLINED invitation ends its still CREATED / INVITED session (→ ABANDONED). The decliner only (identity-bound, app_access: the invitation''s claimer, whom app.invitation_answer records as who declined; work-k5fk.32 S7). work-k5fk.10.5.';
+COMMENT ON FUNCTION app.session_abandon_declined(uuid) IS 'A DECLINED invitation ends its still CREATED / INVITED session (→ ABANDONED), withdrawing any other PENDING invitation of it (EXPIRED; review schema S4). The decliner only (identity-bound, app_access: the invitation''s claimer, whom app.invitation_answer records as who declined; work-k5fk.32 S7). work-k5fk.10.5.';
 -- mwf_app (app_access): invitations.ts declineInvitation.
 REVOKE EXECUTE ON FUNCTION app.session_abandon_declined(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_abandon_declined(uuid) TO app_access;
@@ -1931,8 +1987,11 @@ CREATE TRIGGER t_cardinality_1 BEFORE UPDATE OF status ON public.session
   FOR EACH ROW EXECUTE FUNCTION app.t_session_cardinality();
 
 -- T-cardinality-2 (deferred): a non-terminal session never loses its last present human.
+-- SECURITY DEFINER (owned by mwf_definer, handed over with the k5fk.2 trigger functions below; review schema S8, as
+-- t_agreement_parties): a deferred trigger runs at COMMIT as the session's login, and under that login's RLS a session
+-- or a present participant it may not see would read as absent — the check must read the tables. It only reads.
 CREATE FUNCTION app.t_participant_cardinality() RETURNS trigger
-  LANGUAGE plpgsql
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
@@ -1943,7 +2002,7 @@ CREATE FUNCTION app.t_participant_cardinality() RETURNS trigger
     RETURN NULL;
   END
   $$;
-COMMENT ON FUNCTION app.t_participant_cardinality() IS 'T-cardinality-2 (deferred constraint trigger t_cardinality_2 on participant): a session not RESOLVED, ABANDONED or ARCHIVED never loses its last present human. (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.t_participant_cardinality() IS 'T-cardinality-2 (deferred constraint trigger t_cardinality_2 on participant): a session not RESOLVED, ABANDONED or ARCHIVED never loses its last present human. Definer, so the check reads the tables, not the committing login''s RLS view of them (review schema S8). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_participant_cardinality() FROM PUBLIC;
 CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_id, left_at ON public.participant
@@ -2385,23 +2444,32 @@ REVOKE EXECUTE ON FUNCTION app.t_consent_transitions() FROM PUBLIC;
 CREATE TRIGGER t_consent_transitions BEFORE INSERT OR UPDATE ON public.consent
   FOR EACH ROW EXECUTE FUNCTION app.t_consent_transitions();
 
--- T-need-share-terminal: the delivered text and its pins never change;
--- revoked_at moves only NULL → value (P3 §4, re-homed).
+-- T-need-share-terminal: the pins (need, session, owner) never change. A live
+-- share's text, category and shared_at never change, and revoked_at moves
+-- NULL → value (P3 §4, re-homed). A revoked share changes only by being shared
+-- again (app.need_share; owner decision 2026-11-25, review schema S1):
+-- revoked_at back to NULL with a shared_at no earlier than the revocation, and
+-- then the text and category may be new.
 CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
   AS $$
+  DECLARE
+    v_reshare boolean := OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL AND NEW.shared_at >= OLD.revoked_at;
   BEGIN
-    IF NEW.need_id IS DISTINCT FROM OLD.need_id OR NEW.shared_text IS DISTINCT FROM OLD.shared_text
+    IF NEW.need_id IS DISTINCT FROM OLD.need_id
        OR NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.session_id IS DISTINCT FROM OLD.session_id
-       OR NEW.category IS DISTINCT FROM OLD.category OR NEW.shared_at IS DISTINCT FROM OLD.shared_at
-       OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at) THEN
-      RAISE EXCEPTION 'a shared need is immutable; revocation is terminal' USING ERRCODE = 'check_violation';
+       OR (NOT v_reshare AND (NEW.shared_text IS DISTINCT FROM OLD.shared_text
+                              OR NEW.category IS DISTINCT FROM OLD.category
+                              OR NEW.shared_at IS DISTINCT FROM OLD.shared_at
+                              OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at))) THEN
+      RAISE EXCEPTION 'a shared need is immutable; a revoked one changes only by being shared again'
+        USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-COMMENT ON FUNCTION app.t_need_share_terminal() IS 'T-need-share-terminal: a delivered need_share''s text and pins never change; revoked_at moves only NULL -> value (P3 §4). (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.t_need_share_terminal() IS 'T-need-share-terminal: a need_share''s pins never change; a live share''s text, category and shared_at never change and revoked_at moves only NULL -> value (P3 §4); a revoked share changes only by a re-share (revoked_at -> NULL, shared_at no earlier than the revocation, new text and category; review schema S1). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_need_share_terminal() FROM PUBLIC;
 CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
@@ -2418,14 +2486,18 @@ CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.empathy_attempt a
-                   WHERE a.id = NEW.attempt_id AND a.status <> 'SUPERSEDED') THEN
+    -- Review schema S2: the attempt is read FOR SHARE, so a resubmit in flight (app.empathy_set_status holds the
+    -- attempt FOR NO KEY UPDATE) is waited for and its SUPERSEDED seen, and one that starts after this row waits for
+    -- the result's transaction — a result never lands on a round retired at the same moment.
+    PERFORM 1 FROM public.empathy_attempt a
+    WHERE a.id = NEW.attempt_id AND a.status <> 'SUPERSEDED' FOR SHARE;
+    IF NOT FOUND THEN
       RAISE EXCEPTION 'a reconciler result needs a live attempt' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-COMMENT ON FUNCTION app.t_result_live_attempt() IS 'T-result-live-attempt: no reconciler_result on a SUPERSEDED round. Definer, so the existence check reads the table, not the writer''s RLS view of it (work-k5fk.10.33). (work-k5fk.10.16)';
+COMMENT ON FUNCTION app.t_result_live_attempt() IS 'T-result-live-attempt: no reconciler_result on a SUPERSEDED round; the attempt is locked FOR SHARE, so a concurrent resubmit is serialised with the insert (review schema S2). Definer, so the existence check reads the table, not the writer''s RLS view of it (work-k5fk.10.33). (work-k5fk.10.16)';
 -- No caller needs EXECUTE on a trigger function.
 REVOKE EXECUTE ON FUNCTION app.t_result_live_attempt() FROM PUBLIC;
 CREATE TRIGGER t_result_live_attempt BEFORE INSERT ON public.reconciler_result
@@ -2769,6 +2841,7 @@ GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_result_live_attempt() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_agreement_parties() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_participant_cardinality() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_leave() OWNER TO mwf_definer;
@@ -2882,9 +2955,21 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON participant_key FOR EACH ROW EX
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON proposal FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON proposal_choice FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reconciler_result FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reflection FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+-- reflection: not when the update is the C6 key's ON DELETE SET NULL (linked_session_id) — the linked session's purge
+-- is not an edit of the reflection, and must not reorder it (review schema S6). A referential action runs inside its
+-- trigger (pg_trigger_depth() > 0); the app's own unlink (depth 0) still stamps.
+CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reflection
+  FOR EACH ROW WHEN (NOT (pg_trigger_depth() > 0 AND OLD.linked_session_id IS NOT NULL AND NEW.linked_session_id IS NULL))
+  EXECUTE FUNCTION app.touch_updated_at();
+COMMENT ON TRIGGER touch_updated_at ON reflection IS 'Stamps updated_at on every UPDATE but the referential SET NULL of linked_session_id (review schema S6).';
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reminder FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-CREATE TRIGGER touch_updated_at BEFORE UPDATE ON session FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+-- session: not when the update is previous_session_id's ON DELETE SET NULL — purging the earlier session must not
+-- re-stamp the follow-on session, whose updated_at is its retention clock (review schema S6). A referential action runs
+-- inside its trigger (pg_trigger_depth() > 0).
+CREATE TRIGGER touch_updated_at BEFORE UPDATE ON session
+  FOR EACH ROW WHEN (NOT (pg_trigger_depth() > 0 AND OLD.previous_session_id IS NOT NULL AND NEW.previous_session_id IS NULL))
+  EXECUTE FUNCTION app.touch_updated_at();
+COMMENT ON TRIGGER touch_updated_at ON session IS 'Stamps updated_at on every UPDATE but the referential SET NULL of previous_session_id (review schema S6).';
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON session_key FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON takeaway FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON "user" FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -2917,7 +3002,7 @@ SELECT p.session_id, p.user_id, p.kind,
        coalesce(x.is_tombstone, false) AS is_tombstone,
        p.joined_at, p.left_at,
        x.main_conversation_id,
-       x.last_viewed_at, x.last_seen_conversation_id, x.last_seen_seq, x.last_viewed_share_tab_at, x.archived_at,
+       x.last_viewed_at, x.last_seen_conversation_id, x.last_seen_seq, x.last_viewed_share_tab_at,
        x.last_active_at, x.last_mood
 FROM participant p
 LEFT JOIN LATERAL app.participant_presence(p.session_id, p.user_id) x ON true;
@@ -2932,6 +3017,9 @@ JOIN participant o ON o.session_id = p.session_id AND o.user_id <> p.user_id;
 GRANT SELECT ON v_co_participant TO app_access;
 
 -- Session-scoped milestones: reached by every present human participant?
+-- Vacuously true for a session with no present human (left as it is, review schema S8): every writer that acts on
+-- all_reached also needs two present humans (needs-share completeNeedsSharingIfReady, the stage shim), and
+-- T-cardinality-2 keeps a live session from losing its last one.
 -- The array_agg(… uuid7 column …)::uuid[] casts in the views below keep the
 -- array columns uuid[]: uncast they are uuid7[] (see the uuid7 domain, tables.sql).
 CREATE VIEW v_session_readiness WITH (security_invoker = true) AS
@@ -3790,7 +3878,7 @@ CREATE POLICY diag_read ON context_share_offer FOR SELECT TO diag_access USING (
 GRANT SELECT (id, session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, resolved_at, next_seq, created_at, updated_at) ON conversation TO diag_access;
 CREATE POLICY diag_read ON conversation FOR SELECT TO diag_access USING (true);
 -- conversation_read_state
-GRANT SELECT (session_id, user_id, last_seen_conversation_id, last_seen_seq, archived_at, created_at) ON conversation_read_state TO diag_access;
+GRANT SELECT (session_id, user_id, last_seen_conversation_id, last_seen_seq, created_at) ON conversation_read_state TO diag_access;
 CREATE POLICY diag_read ON conversation_read_state FOR SELECT TO diag_access USING (true);
 -- draft
 GRANT SELECT (id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, ready_to_share, version, created_at, updated_at, reopened_at) ON draft TO diag_access;
