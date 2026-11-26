@@ -52,7 +52,7 @@ import { GUIDANCE_AREA_PHRASES, guidancePhrases } from '../services/reconciler/g
 import { isSessionCreator } from '../utils/session';
 import { updateContext } from '../lib/request-context';
 import { routeModel, scoreAmbiguity } from '../services/model-router';
-import { canTransition, transition } from '../services/empathy-state-machine';
+import { transition } from '../services/empathy-state-machine';
 import { cleanVisibleAIText } from '../utils/visible-text';
 import { reachMilestone } from '../services/milestone-writer';
 import { loadCurrentStages } from '../services/stage-shim';
@@ -95,6 +95,9 @@ import { withMessageId } from '../services/message-store';
 
 /** app.deliver_message's refusal of a second VALIDATION_FEEDBACK for the same round (trailer.sql). */
 const FEEDBACK_ALREADY_DELIVERED_SQLSTATE = 'MWE01';
+const FEEDBACK_ALREADY_SENT_MESSAGE = 'Feedback on this empathy statement was already sent';
+/** validateEmpathy: this round's feedback was already sent (found under the attempt's lock); rolls the send back. */
+class FeedbackAlreadySent extends Error {}
 
 // ============================================================================
 // Helpers
@@ -788,68 +791,102 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
       return;
     }
 
-    const now = new Date();
-    const sentFeedback = validated ? null : (trimmedFeedback ?? null);
-    const review = await recordReview({
-      attemptId: partnerAttempt.id,
-      sessionId,
-      reviewerUserId: me.userId,
-      validated,
-      sentFeedback,
-      at: now,
-    });
-    if (sentFeedback) {
-      // The explicit send's consent (spec §1.3: arc review_id, no requester).
-      await prisma.consent.create({
-        data: {
-          sessionId,
-          userId: me.userId,
-          reviewId: review.id,
-          decision: 'GRANTED',
-          decidedAt: now,
-        },
-        select: { id: true },
-      });
+    // Refused before any write (review services#4 / F7): feedback on a round already validated (the database would
+    // refuse its delivery after the framing note), and a second feedback on the same round — one card per source
+    // attempt (MWE01; a re-revealed round after skip-refinement keeps its attempt id). The second check is repeated
+    // under the attempt's lock in the transaction below, for a concurrent send.
+    if (!validated && partnerAttempt.status === 'VALIDATED') {
+      errorResponse(res, 'CONFLICT', 'This empathy statement was already validated', 409);
+      return;
+    }
+    if (!validated && (await reviewOf(partnerAttempt.id, seat))?.feedbackSentAt) {
+      errorResponse(res, 'CONFLICT', FEEDBACK_ALREADY_SENT_MESSAGE, 409);
+      return;
     }
 
-    if (validated) {
-      if (partnerAttempt.status === 'REVEALED') {
-        await setAttemptStatus(partnerAttempt.id, 'VALIDATED', { actor: 'participant' });
-      }
-      await markAttemptDelivery(partnerAttempt.id, 'SEEN', now);
-    } else if (sentFeedback) {
-      if (canTransition(partnerAttempt.status, 'VALIDATION_FEEDBACK_SENT')) {
+    const now = new Date();
+    const sentFeedback = validated ? null : (trimmedFeedback ?? null);
+    // The AI framing note's text: an LLM call, before any lock is taken.
+    const framingMessage =
+      sentFeedback && partner.mainConversationId
+        ? await generateValidationFeedbackReflection(sessionId, partner.name || 'User', me.name || 'your partner')
+        : null;
+
+    // One transaction on the subject's own connection (review services#4): the review, the feedback's consent, the
+    // round's move, its delivery stamp and the feedback card — all or nothing, so a failure or a 409 leaves none of
+    // them. The move comes first: app.empathy_set_status locks the session and then the attempt until commit, so a
+    // concurrent send waits there and then finds this one's review (and is refused before writing anything).
+    let review: Awaited<ReturnType<typeof recordReview>>;
+    try {
+      review = await prisma.$transaction(async tx => {
+        if (validated) {
+          if (partnerAttempt.status === 'REVEALED') {
+            await setAttemptStatus(partnerAttempt.id, 'VALIDATED', { actor: 'participant', client: tx });
+          }
+          const row = await recordReview({
+            attemptId: partnerAttempt.id,
+            sessionId,
+            reviewerUserId: me.userId,
+            validated,
+            sentFeedback: null,
+            at: now,
+            client: tx,
+          });
+          await markAttemptDelivery(partnerAttempt.id, 'SEEN', now, tx);
+          return row;
+        }
         await setAttemptStatus(partnerAttempt.id, transition(partnerAttempt.status, 'VALIDATION_FEEDBACK_SENT'), {
           actor: 'participant',
+          client: tx,
         });
-      }
-      await markAttemptDelivery(partnerAttempt.id, 'DELIVERED', now);
-
-      const validatorName = me.name || 'your partner';
-      const guesserName = partner.name || 'User';
-      const framingMessage = await generateValidationFeedbackReflection(sessionId, guesserName, validatorName);
-      if (partner.mainConversationId) {
-        // Guaranteed ordering (100 ms apart): the framing, then the feedback card.
-        await aiNote(partner.mainConversationId, framingMessage, new Date(now.getTime()));
-        try {
+        const sent = await tx.empathyReview.findUnique({
+          where: {
+            attemptId_sessionId_reviewerUserId: { attemptId: partnerAttempt.id, sessionId, reviewerUserId: me.userId },
+          },
+          select: { feedbackSentAt: true },
+        });
+        if (sent?.feedbackSentAt) throw new FeedbackAlreadySent();
+        const row = await recordReview({
+          attemptId: partnerAttempt.id,
+          sessionId,
+          reviewerUserId: me.userId,
+          validated,
+          sentFeedback,
+          at: now,
+          client: tx,
+        });
+        // The explicit send's consent (spec §1.3: arc review_id, no requester).
+        await tx.consent.create({
+          data: { sessionId, userId: me.userId, reviewId: row.id, decision: 'GRANTED', decidedAt: now },
+          select: { id: true },
+        });
+        await markAttemptDelivery(partnerAttempt.id, 'DELIVERED', now, tx);
+        if (partner.mainConversationId && framingMessage) {
+          // The framing, then the card (seq order; 100 ms apart). The note is the AI's row, written on the AI
+          // connection: it cannot join this transaction, so it is written last, under the attempt's lock, right
+          // before the card — a refused or concurrent send never reaches it.
+          await aiNote(partner.mainConversationId, framingMessage, new Date(now.getTime()));
           await deliver({
             toConversationId: partner.mainConversationId,
             sessionId,
             fromUserId: me.userId,
             kind: 'VALIDATION_FEEDBACK',
-            content: sentFeedback,
+            content: sentFeedback!,
             sourceAttemptId: partnerAttempt.id,
             createdAt: new Date(now.getTime() + 100),
+            client: tx,
           });
-        } catch (error) {
-          // A concurrent send delivered this round's card first (app.deliver_message, work-k5fk.10.29).
-          if (getPgSqlState(error) === FEEDBACK_ALREADY_DELIVERED_SQLSTATE) {
-            errorResponse(res, 'CONFLICT', 'Feedback on this empathy statement was already sent', 409);
-            return;
-          }
-          throw error;
         }
+        return row;
+      });
+    } catch (error) {
+      // Feedback on this round was already sent: by an earlier request, or a concurrent one that committed first
+      // (app.deliver_message refuses a second card with MWE01, work-k5fk.10.29).
+      if (error instanceof FeedbackAlreadySent || getPgSqlState(error) === FEEDBACK_ALREADY_DELIVERED_SQLSTATE) {
+        errorResponse(res, 'CONFLICT', FEEDBACK_ALREADY_SENT_MESSAGE, 409);
+        return;
       }
+      throw error;
     }
 
     // Content-free (I1/R36): no status DTO, no feedback text. The addressed
@@ -876,6 +913,18 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
       },
       { excludeUserId: userId },
     );
+
+    // The reveal check after a validation (review services#2): my own round may be READY (I skipped refinement or
+    // resubmitted) beside this direction, now VALIDATED. Idempotent; a failure is logged, never this request's — the
+    // review is committed, and the next skip / resubmit / analysis re-runs the check.
+    if (validated) {
+      try {
+        const { checkAndRevealBothIfReady } = await import('../services/reconciler');
+        await checkAndRevealBothIfReady(sessionId);
+      } catch (err) {
+        logger.warn('[validateEmpathy] reveal check after validation failed', { error: (err as Error).message });
+      }
+    }
 
     // Has the partner validated MY attempt? My own round's status says so.
     const myAttempt = await currentAttempt(sessionId, me.userId, partner.userId);

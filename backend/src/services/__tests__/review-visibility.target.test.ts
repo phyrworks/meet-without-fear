@@ -155,8 +155,9 @@ describeTarget('the review of an attempt: what the author sees, and a sent feedb
     const res = await post('userA', '/empathy/validate', { validated: true });
     jest.restoreAllMocks();
     expect(res.status).toBe(500);
-    // Ada's verdict row exists (her own), unsent; Bob's round is still REVEALED.
-    expect(await reviewBy('ada@e2e.test')).toEqual([{ validated: true, feedback: null, sent: null }]);
+    // The verdict and the move are one transaction (review services#4, work-k5fk.33): no verdict row either;
+    // Bob's round is still REVEALED.
+    expect(await reviewBy('ada@e2e.test')).toEqual([]);
     expect(await roundOf('bob@e2e.test')).toBe('REVEALED');
     expect(await myAttempt('userB')).toMatchObject({ status: 'REVEALED', validatedAt: null });
   });

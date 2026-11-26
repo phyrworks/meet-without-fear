@@ -31,6 +31,10 @@ import { ErrorCode, ConsentContentType } from '@meet-without-fear/shared';
 import { notifyPartner } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { partyOf, sessionParties, type SessionParty } from '../services/empathy-store';
+import { getPgSqlState } from '../middleware/errors';
+
+/** decideConsent: the row was decided by a concurrent request (rolls the decision back). */
+class ConsentAlreadyDecided extends Error {}
 
 type ConsentTargetKind = 'NEED' | 'EMPATHY_ATTEMPT' | 'PROPOSAL' | 'SHARE_OFFER' | 'REVIEW';
 
@@ -161,11 +165,50 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
     }
 
     const now = new Date();
-    const updated = (await prisma.consent.update({
-      where: { id: record.id },
-      data: { decision: decision as 'GRANTED' | 'DENIED', decidedAt: now },
-      select: CONSENT_SELECT,
-    })) as ConsentRow;
+    const sharesNeed =
+      decision === 'GRANTED' &&
+      record.targetKind === 'NEED' &&
+      !!record.needId &&
+      typeof editedContent === 'string' &&
+      editedContent.trim().length > 0;
+
+    // One transaction (review services#4 / lifecycle F1; the base's "must all succeed or all fail together"): the
+    // decision and, for a GRANTED need with its text, the share itself. app.need_share sees the GRANTED row written
+    // here; if it refuses (the need was deleted or superseded meanwhile) the decision rolls back too, so the consent
+    // stays undecided and the caller can decide again — never GRANTED with nothing shared.
+    let updated: ConsentRow;
+    try {
+      updated = await prisma.$transaction(async tx => {
+        // Only an undecided row (a concurrent decision on the same row finds none and answers 404).
+        const moved = await tx.consent.updateMany({
+          where: { id: record.id, decision: null },
+          data: { decision: decision as 'GRANTED' | 'DENIED', decidedAt: now },
+        });
+        if (moved.count === 0) throw new ConsentAlreadyDecided();
+        if (sharesNeed) {
+          // need_share.shared_text is written under the session key (ciphertext in; TS-13) through app.need_share,
+          // the owner's own definer call (work-k5fk.10.5: was the job's). Share moment (writer-principal rule): the
+          // hook runs in the share's own transaction; W13 re-encrypts here.
+          await tx.$executeRaw`SELECT app.need_share(${record.needId}::uuid, ${encryptColumnValue('need_share', 'shared_text', editedContent)})`;
+          await reencryptForSession(
+            { moment: 'need-share', sessionId, rows: [{ table: 'need_share', id: record.needId! }] },
+            tx,
+          );
+        }
+        return (await tx.consent.findUniqueOrThrow({ where: { id: record.id }, select: CONSENT_SELECT })) as ConsentRow;
+      });
+    } catch (error) {
+      if (error instanceof ConsentAlreadyDecided) {
+        errorResponse(res, ErrorCode.NOT_FOUND, 'Consent request not found', 404);
+        return;
+      }
+      if (getPgSqlState(error) === 'P0002') {
+        // app.need_share: the need was deleted or superseded since the request was made.
+        errorResponse(res, ErrorCode.NOT_FOUND, 'The need this consent is for no longer exists', 404);
+        return;
+      }
+      throw error;
+    }
 
     let sharedContent: {
       id: string;
@@ -174,25 +217,9 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
       consentedAt: string;
       consentActive: boolean;
     } | null = null;
-    if (
-      decision === 'GRANTED' &&
-      record.targetKind === 'NEED' &&
-      record.needId &&
-      typeof editedContent === 'string' &&
-      editedContent.trim()
-    ) {
-      // need_share.shared_text is written under the session key (ciphertext in; TS-13) through
-      // app.need_share, the owner's own definer call (work-k5fk.10.5: was the job's). Share moment
-      // (writer-principal rule): the hook runs in the share's own transaction; W13 re-encrypts here.
-      await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT app.need_share(${record.needId}::uuid, ${encryptColumnValue('need_share', 'shared_text', editedContent)})`;
-        await reencryptForSession(
-          { moment: 'need-share', sessionId, rows: [{ table: 'need_share', id: record.needId! }] },
-          tx,
-        );
-      });
+    if (sharesNeed) {
       sharedContent = {
-        id: record.needId,
+        id: record.needId!,
         sourceUserId: me.userId,
         transformedContent: editedContent,
         consentedAt: now.toISOString(),
@@ -253,7 +280,7 @@ export async function revokeConsent(req: Request, res: Response): Promise<void> 
 
     let revokedAt = new Date();
     if (record.targetKind === 'NEED' && record.needId) {
-      await prisma.$queryRaw`SELECT app.need_revoke_share(${record.needId}::uuid)`;
+      await prisma.$executeRaw`SELECT app.need_revoke_share(${record.needId}::uuid)`;
       const after = await prisma.consent.findUnique({ where: { id: record.id }, select: { revokedAt: true } });
       revokedAt = after?.revokedAt ?? revokedAt;
     } else {

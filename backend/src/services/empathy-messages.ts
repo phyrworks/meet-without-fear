@@ -16,7 +16,7 @@
  */
 
 import type { MessageDTO } from '@meet-without-fear/shared';
-import { prisma } from '../lib/prisma';
+import { prisma, type DbClient } from '../lib/prisma';
 import type { PrismaClient } from '../generated/prisma/client';
 import {
   createFacilitatorMessage,
@@ -56,6 +56,8 @@ export function deliver(opts: {
   content: string;
   sourceAttemptId?: string | null;
   createdAt?: Date;
+  /** The author's own connection by default; a transaction of it when the delivery is one write of several. */
+  client?: DbClient;
 }): Promise<StoredMessage> {
   return deliverMessage(opts);
 }
