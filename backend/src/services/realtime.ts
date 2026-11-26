@@ -308,45 +308,34 @@ export async function publishUserEvent<E extends UserEventType, T extends UserEv
  * Publishes to each member's user channel so their session list updates.
  * Also touches session.updatedAt so the unread count calculation picks up the change.
  *
+ * On the WORKER connection, in a task scoped to the session (review platform M1 / security S3, work-k5fk.34): the
+ * events come from jobs with no request identity (tending's open-due entries and reminders) and from actors who are
+ * no current member (a decliner, an account being deleted), so the app connection's RLS would match no row. The
+ * worker's grant is the one column (session.updated_at) of the scoped session (policy worker_touch,
+ * t_session_scope_worker), and it reads only the members' user ids — no content.
+ *
  * @param sessionId - The session ID
  * @param excludeUserId - Optional user ID to exclude (e.g., the user who caused the update)
  */
 export async function notifySessionMembers(sessionId: string, excludeUserId?: string): Promise<void> {
-  logger.info(`[notifySessionMembers] Called for session ${sessionId}, excludeUserId=${excludeUserId}`);
   try {
-    // Import prisma here to avoid circular dependency
-    const { prisma } = await import('../lib/prisma');
+    // Imported here to avoid a circular dependency
+    const { getWorkerPrisma } = await import('../lib/prisma');
+    const { withSessionScope } = await import('../lib/request-context');
 
-    // Touch session.updatedAt so unread count calculation picks up the change
-    // Also fetch session members in the same query
-    const now = new Date();
-    logger.info(`[notifySessionMembers] Updating session.updatedAt to ${now.toISOString()}`);
-
-    // TS-10: the members are the session's participants (user-keyed channels).
-    const session = await prisma.session.update({
-      where: { id: sessionId },
-      data: { updatedAt: now },
-      select: {
-        updatedAt: true,
+    const members = await withSessionScope(sessionId, () =>
+      getWorkerPrisma().$transaction(async tx => {
+        // touch_updated_at stamps updated_at; the SET names the one column the worker may write.
+        await tx.$executeRaw`UPDATE session SET updated_at = CURRENT_TIMESTAMP WHERE id = ${sessionId}::uuid`;
         // Humans only: a modeled seat (the AI, a persona) has a user id but no client (work-k5fk.2 review F7).
-        participants: { where: { kind: 'human', leftAt: null }, select: { userId: true } },
-      },
-    });
+        return tx.$queryRaw<Array<{ user_id: string }>>`
+          SELECT user_id::text AS user_id FROM participant
+          WHERE session_id = ${sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY user_id`;
+      }),
+    );
 
-    logger.info(`[notifySessionMembers] Session updated, new updatedAt: ${session.updatedAt.toISOString()}`);
-
-    if (!session?.participants) {
-      logger.warn(`[notifySessionMembers] Session ${sessionId} not found or has no members`);
-      return;
-    }
-
-    // Publish to each member's user channel (except the excluded user)
-    const memberIds = session.participants.map(m => m.userId).filter(id => id !== excludeUserId);
-
-    logger.info(`[notifySessionMembers] Publishing to ${memberIds.length} members: ${memberIds.join(', ')}`);
-
+    const memberIds = members.map(m => m.user_id).filter(id => id !== excludeUserId);
     await Promise.all(memberIds.map((userId: string) => publishUserEvent(userId, 'session.updated', { sessionId })));
-
     logger.info(`[notifySessionMembers] Notified ${memberIds.length} members of session ${sessionId}`);
   } catch (error) {
     logger.error('[notifySessionMembers] Error:', error);
