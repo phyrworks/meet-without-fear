@@ -111,22 +111,19 @@ describeTarget('memory and preferences on the target, as mwf_app (and notificati
     );
   });
 
-  it('mood: a reading on the live participant; lastMoodIntensity is the latest reading', async () => {
-    const before = await run.sql<{ n: number }>(
-      `SELECT count(*)::int AS n FROM mood_reading WHERE session_id = $1 AND user_id = $2`,
-      [ids.session, ids.adaUser],
-    );
+  it('mood: PATCH /auth/me/mood stores no reading in any session; lastMoodIntensity is the latest session reading', async () => {
+    // Review services LC-2 (work-k5fk.34): it used to add a reading to the user's most recently active live session —
+    // a different session than the one being entered, whose AI then read it as current intensity.
+    const count = () => run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM mood_reading WHERE user_id = $1`, [ids.adaUser]);
+    const before = await count();
     expect((await http(ada, 'patch', '/auth/me/mood', { intensity: 7 })).body.data).toEqual({ lastMoodIntensity: 7 });
-    expect(
-      await run.sql(`SELECT count(*)::int AS n FROM mood_reading WHERE session_id = $1 AND user_id = $2`, [
-        ids.session,
-        ids.adaUser,
-      ]),
-    ).toEqual([{ n: before[0].n + 1 }]);
+    expect(await count()).toEqual(before);
+    expect((await http(ada, 'patch', '/auth/me/mood', { intensity: 11 })).status).toBe(400);
+    // The session-entry check's reading is the session's own (the barometer), and the last mood follows it.
+    expect((await http(ada, 'post', `/sessions/${ids.session}/emotions`, { intensity: 7 })).status).toBe(200);
     expect((await http(ada, 'get', '/auth/me')).body.data.user.lastMoodIntensity).toBe(7);
-    // The latest reading wins, not the first
     await new Promise(r => setTimeout(r, 5));
-    expect((await http(ada, 'patch', '/auth/me/mood', { intensity: 4 })).status).toBe(200);
+    expect((await http(ada, 'post', `/sessions/${ids.session}/emotions`, { intensity: 4 })).status).toBe(200);
     expect((await http(ada, 'get', '/auth/me')).body.data.user.lastMoodIntensity).toBe(4);
 
     // The session endpoint: own readings only, with a derived stage

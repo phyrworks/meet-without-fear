@@ -197,7 +197,10 @@ router.patch('/me/privacy-preferences', updatePrivacyPreferences);
 /**
  * PATCH /auth/me/mood
  *
- * Update the user's last mood intensity (used as default for new sessions).
+ * Validates the user's mood intensity and echoes it. Stores nothing: the last mood (GET /auth/me
+ * lastMoodIntensity, the default for the next session's mood check) is the user's latest
+ * mood_reading, which the session-entry check records for its own session via
+ * POST /sessions/:id/emotions (work-k5fk.34).
  *
  * Request: { intensity: number } (1-10)
  *
