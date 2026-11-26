@@ -107,12 +107,11 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
     const pausedWhere = { some: { leftAt: null, milestones: { some: { milestoneKey: 'paused' } } } };
 
     // Target shape (TS-9): the list is the caller's participants — one per
-    // session — that they have not archived (conversation_read_state).
+    // session. (An archived session is session.status ARCHIVED, filtered by status.)
     const mine = await prisma.participant.findMany({
       where: {
         userId: user.id,
         leftAt: null,
-        OR: [{ readState: null }, { readState: { archivedAt: null } }],
         ...(filter.kind === 'status' && {
           session: {
             status: filter.status,
@@ -709,6 +708,15 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       errorResponse(res, 'CONFLICT', SESSION_FULL_MESSAGE, 409);
       return;
     }
+    if (getPgSqlState(error) === '23514') {
+      // app.invitation_answer found it no longer PENDING under its lock: withdrawn (EXPIRED) by an archive or an
+      // abandon that committed between the peek and the accept (review schema S4) — the expired answer, as above.
+      const now = await peekInvitation(req.params.id).catch(() => null);
+      if (now?.status === 'EXPIRED') {
+        errorResponse(res, 'EXPIRED', 'Invitation has expired', 410);
+        return;
+      }
+    }
     logger.error('[acceptInvitation] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to accept invitation', 500);
   }
@@ -762,13 +770,16 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Update invitation status: the inviter's row, written for the invitee (app.invitation_answer, work-k5fk.10.7)
-    await answerInvitation(prisma, id, 'DECLINED', new Date(), reason ?? null);
+    await prisma.$transaction(async tx => {
+      // Update invitation status: the inviter's row, written for the invitee (app.invitation_answer, work-k5fk.10.7)
+      await answerInvitation(tx, id, 'DECLINED', new Date(), reason ?? null);
 
-    // The session ends (INVITED/CREATED → ABANDONED). The decliner is no participant, so
-    // app.session_abandon_declined moves it on the strength of the DECLINED invitation just
-    // written (work-k5fk.10.5: was the job's session_set_status, R35).
-    await prisma.$executeRaw`SELECT app.session_abandon_declined(${id}::uuid)`;
+      // The session ends (INVITED/CREATED → ABANDONED) in the same transaction (review lifecycle F5: a failure
+      // between the two left the invitation DECLINED on a session nothing would end). The decliner is no
+      // participant, so app.session_abandon_declined moves it on the strength of the DECLINED invitation just
+      // written (work-k5fk.10.5: was the job's session_set_status, R35).
+      await tx.$executeRaw`SELECT app.session_abandon_declined(${id}::uuid)`;
+    });
 
     // Notify inviter via realtime that invitation was declined
     if (inviterUserId) {

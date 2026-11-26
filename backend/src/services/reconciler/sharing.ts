@@ -17,12 +17,12 @@
  */
 
 import { getNickname } from '../contacts';
-import { getAiPrisma, prisma, type DbClient } from '../../lib/prisma';
+import { getAiPrisma, prisma } from '../../lib/prisma';
 import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../../lib/share-moments';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse } from '../../lib/bedrock';
-import { canTransition, transition } from '../empathy-state-machine';
+import { canTransition } from '../empathy-state-machine';
 import { buildShareOfferPrompt, buildStagePrompt, type ShareOfferContext, type PromptContext } from '../stage-prompts';
 import type { ContextBundle } from '../context-assembler';
 import { extractJsonFromResponse } from '../../utils/json-extractor';
@@ -32,8 +32,8 @@ import { createFacilitatorMessage, deliverMessage } from '../message-store';
 import { loadCurrentStages } from '../stage-shim';
 import {
   currentAttempt,
-  jobMoveIfUnchanged,
   partyOf,
+  setAttemptStatus,
   sessionParties,
   withOneAttemptMeta,
   type SessionParty,
@@ -288,34 +288,44 @@ Respond with ONLY the message text, no additional formatting.`;
 
 /**
  * The AI's offer insert (trailer T7, TS-10 block): the next iteration of the
- * attempt's offers.
+ * attempt's offers. One AI transaction that locks the attempt first (review
+ * schema S3; lock order as app.empathy_set_status: the session, then the
+ * attempt), so concurrent inserts number their iterations in turn. Nothing is
+ * inserted — null — for a round that was resubmitted (its offers expired with
+ * it) or that already has an open offer (one open offer per round).
  */
-async function insertOffer(
-  client: DbClient,
-  opts: {
-    attemptId: string;
-    resultId: string;
-    /** The attempt's session; the subject is a participant of it. */
-    sessionId: string;
-    subjectUserId: string;
-    status: 'PENDING' | 'OFFERED';
-    offerMessage?: string | null;
-    suggestedContent: string;
-    suggestedReason: string | null;
-  },
-): Promise<string> {
-  const rows = await client.$queryRaw<
-    Array<{ id: string }>
-  >`INSERT INTO context_share_offer (attempt_id, result_id, session_id, subject_user_id, iteration, status,
-                                     offer_message, suggested_content, suggested_reason, offered_at)
-    VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.sessionId}::uuid, ${opts.subjectUserId}::uuid,
-            coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
-            ${opts.status}::share_offer_status, ${encryptColumnValue('context_share_offer', 'offer_message', opts.offerMessage ?? null)},
-            ${encryptColumnValue('context_share_offer', 'suggested_content', opts.suggestedContent)},
-            ${encryptColumnValue('context_share_offer', 'suggested_reason', opts.suggestedReason)},
-            ${opts.status === 'OFFERED' ? new Date() : null}::timestamptz)
-    RETURNING id`;
-  return rows[0].id;
+export async function insertOffer(opts: {
+  attemptId: string;
+  resultId: string;
+  /** The attempt's session; the subject is a participant of it. */
+  sessionId: string;
+  subjectUserId: string;
+  status: 'PENDING' | 'OFFERED';
+  offerMessage?: string | null;
+  suggestedContent: string;
+  suggestedReason: string | null;
+}): Promise<string | null> {
+  return getAiPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT s.id FROM session s WHERE s.id = ${opts.sessionId}::uuid FOR NO KEY UPDATE`;
+    const [live] = await tx.$queryRaw<Array<{ ok: boolean }>>`
+      SELECT a.status <> 'SUPERSEDED'
+             AND NOT EXISTS (SELECT 1 FROM context_share_offer o
+                             WHERE o.attempt_id = a.id AND o.status IN ('PENDING', 'OFFERED')) AS ok
+      FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid FOR NO KEY UPDATE OF a`;
+    if (!live?.ok) return null;
+    const rows = await tx.$queryRaw<
+      Array<{ id: string }>
+    >`INSERT INTO context_share_offer (attempt_id, result_id, session_id, subject_user_id, iteration, status,
+                                       offer_message, suggested_content, suggested_reason, offered_at)
+      VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.sessionId}::uuid, ${opts.subjectUserId}::uuid,
+              coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
+              ${opts.status}::share_offer_status, ${encryptColumnValue('context_share_offer', 'offer_message', opts.offerMessage ?? null)},
+              ${encryptColumnValue('context_share_offer', 'suggested_content', opts.suggestedContent)},
+              ${encryptColumnValue('context_share_offer', 'suggested_reason', opts.suggestedReason)},
+              ${opts.status === 'OFFERED' ? new Date() : null}::timestamptz)
+      RETURNING id`;
+    return rows[0].id;
+  });
 }
 
 /**
@@ -448,7 +458,7 @@ Respond in JSON:
     select: { id: true },
   });
   if (!open) {
-    await insertOffer(getAiPrisma(), {
+    await insertOffer({
       attemptId: persist.attemptId,
       resultId,
       sessionId,
@@ -613,6 +623,8 @@ export async function respondToShareSuggestion(
       return { status: 'shared', sharedContent: processed.sharedContent, guesserUpdated: false };
     }
     if (processed?.status === 'DECLINED' && response.action === 'decline') {
+      // A retried decline: the decline itself committed whole (below); the reveal check after it may not have run.
+      await checkAndRevealBothIfReady(sessionId);
       return { status: 'declined', sharedContent: null, guesserUpdated: false };
     }
     throw new Error('No pending share offer found');
@@ -624,7 +636,13 @@ export async function respondToShareSuggestion(
 
   if (response.action === 'decline') {
     const now = new Date();
+    // One transaction on the subject's own connection (review services#4; the base's decline was one): the offer
+    // DECLINED, the DENIED consent naming it, the suggestion card gone and the author's round AWAITING_SHARING →
+    // READY — all or nothing. The round's move is the subject's own (app.empathy_set_status's declined-offer arm: only
+    // that move, only after this DECLINED offer, a no-op on a round that moved on). Lock order as the share delivery
+    // (deliverAcceptedShare): the session, then the offer, then the attempt.
     await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT s.id FROM session s WHERE s.id = ${sessionId}::uuid FOR NO KEY UPDATE`;
       const updated = await tx.contextShareOffer.updateMany({
         where: { id: offer.id, status: { in: ['OFFERED', 'PENDING'] } },
         data: { status: 'DECLINED', declinedAt: now },
@@ -644,13 +662,8 @@ export async function respondToShareSuggestion(
       if (me.mainConversationId) {
         await tx.message.deleteMany({ where: { conversationId: me.mainConversationId, kind: 'SHARE_SUGGESTION' } });
       }
+      await setAttemptStatus(attempt.id, 'READY', { actor: 'participant', client: tx });
     });
-
-    if (canTransition(attempt.status, 'DECLINE_SHARING')) {
-      await jobMoveIfUnchanged(attempt.id, attempt.statusVersion, transition(attempt.status, 'DECLINE_SHARING'));
-    } else if (attempt.status !== 'VALIDATED') {
-      transition(attempt.status, 'DECLINE_SHARING');
-    }
 
     await checkAndRevealBothIfReady(sessionId);
     return { status: 'declined', sharedContent: null, guesserUpdated: true };
@@ -1135,7 +1148,7 @@ Respond in JSON:
   const suggestedContent = cleanVisibleAIText(suggestionResult.suggestedContent);
   const suggestedReason = cleanVisibleAIText(suggestionResult.reason);
 
-  await insertOffer(getAiPrisma(), {
+  await insertOffer({
     attemptId: result.attemptId,
     resultId: result.id,
     sessionId,

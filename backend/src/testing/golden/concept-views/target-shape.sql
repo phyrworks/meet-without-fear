@@ -489,7 +489,8 @@ SELECT
     AS last_seen_message_id,
   r.last_viewed_share_tab_at AT TIME ZONE 'UTC' AS last_viewed_share_tab_at,
   r.last_active_at AT TIME ZONE 'UTC' AS last_active_at,
-  r.archived_at    AT TIME ZONE 'UTC' AS archived_at,
+  -- the old concept's archivedAt: never written, and its target column dropped (review schema S8)
+  NULL::timestamp AS archived_at,
   r.updated_at     AT TIME ZONE 'UTC' AS updated_at
 FROM conversation_read_state r;
 

@@ -500,6 +500,12 @@ export async function persistAnalysis(opts: {
   const r = opts.result;
   try {
     return await getAiPrisma().$transaction(async tx => {
+      // Review schema S2/S3: the attempt is locked first (lock order as app.empathy_set_status: the session, then
+      // the attempt), so two concurrent analyses of one round number their iterations in turn (no 23505 on
+      // (attempt_id, iteration)), and a resubmit (which holds the same lock) either retires the round before this
+      // result is written — t_result_live_attempt refuses it — or waits until it is.
+      await tx.$queryRaw`SELECT s.id FROM session s WHERE s.id = ${opts.sessionId}::uuid FOR NO KEY UPDATE`;
+      await tx.$queryRaw`SELECT a.id FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid FOR NO KEY UPDATE`;
       await tx.$executeRaw`UPDATE reconciler_result SET superseded_at = now()
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
       const rows = await tx.$queryRaw<
@@ -530,7 +536,8 @@ export async function persistAnalysis(opts: {
       // Q4 (work-k5fk.9): the area is stored as its guidance_area label; the prompt seed is derived from the type.
       const g = opts.guidance;
       const area = guidanceAreaOf(g.areaHint);
-      if (g.areaHint && !area) logger.warn('Dropped a guidance area outside guidance_area', { attemptId: opts.attemptId });
+      if (g.areaHint && !area)
+        logger.warn('Dropped a guidance area outside guidance_area', { attemptId: opts.attemptId });
       if (area || g.guidanceType) {
         await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id,
                                                          area_hint, guidance_type)

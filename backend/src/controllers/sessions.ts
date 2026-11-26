@@ -909,10 +909,8 @@ export async function getUnreadSessionCount(req: Request, res: Response): Promis
       FROM v_conversation_unread u
       JOIN participant p ON p.session_id = u.session_id AND p.user_id = u.user_id
       JOIN session s ON s.id = p.session_id
-      LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
       WHERE p.user_id = ${user.id}::uuid AND p.left_at IS NULL
         AND s.status IN ('ACTIVE', 'INVITED', 'CREATED')
-        AND r.archived_at IS NULL
         AND u.unread_count > 0`;
 
     successResponse(res, { count: Number(rows[0]?.n ?? 0) });

@@ -299,6 +299,11 @@ export async function respondToShareOfferHandler(req: Request, res: Response): P
       errorResponse(res, 'CONFLICT', 'Share offer has already been processed', 409);
       return;
     }
+    if (error instanceof Error && error.message === 'No pending share offer found') {
+      // None open: never made, or expired (the author resubmitted that round, or Stage 2 closed).
+      errorResponse(res, 'NOT_FOUND', 'No pending share offer', 404);
+      return;
+    }
     logger.error('[respondToShareOfferHandler] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to respond to share offer', 500);
   }

@@ -266,8 +266,9 @@ interface CurrentRound {
 
 /**
  * Reveal every READY current round once every direction of the session is
- * READY or VALIDATED (the refinement path: one direction already validated,
- * the other resubmitted). JOB connection, one Serializable transaction: the
+ * READY or later — READY, REVEALED or VALIDATED, the gate app.empathy_set_status
+ * applies (the refinement path: one direction already revealed or validated,
+ * the other skipped refinement or resubmitted). JOB connection, one Serializable transaction: the
  * read, the `app.empathy_set_status(…, 'REVEALED')` calls (the function
  * re-checks the gate and writes each subject's delivered copy) and the
  * delivery stamps.
@@ -295,7 +296,9 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
           logger.debug('Not enough empathy attempts for mutual reveal', { sessionId, count: rounds.length });
           return null;
         }
-        const ready = rounds.every(r => r.status === 'READY' || r.status === 'VALIDATED');
+        // The DB gate's set (app.empathy_set_status: READY, REVEALED or VALIDATED; review services#2): a round left
+        // READY beside a partner direction that is REVEALED (skip-refinement, a resubmit) is revealed, not stuck.
+        const ready = rounds.every(r => READY_OR_LATER.has(r.status));
         const toReveal = rounds.filter(r => r.status === 'READY');
         if (!ready || toReveal.length === 0) return null;
 

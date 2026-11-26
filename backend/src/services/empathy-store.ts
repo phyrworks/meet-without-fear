@@ -332,7 +332,8 @@ function clientFor(actor: StatusActor): PrismaClient {
 export async function setAttemptStatus(
   attemptId: string,
   status: TargetEmpathyStatus,
-  opts: { actor: StatusActor; content?: string; client?: PrismaClient },
+  /** `client`: a transaction of the actor's own connection, when the move is one write of several. */
+  opts: { actor: StatusActor; content?: string; client?: DbClient },
 ): Promise<string> {
   const client = opts.client ?? clientFor(opts.actor);
   const rows = await client.$queryRaw<
@@ -459,13 +460,16 @@ export async function recordReview(opts: {
   validated: boolean;
   sentFeedback: string | null;
   at: Date;
+  /** The reviewer's own connection or a transaction of it (stage2.ts validateEmpathy: one transaction). */
+  client?: DbClient;
 }): Promise<ReviewRow> {
+  const client = opts.client ?? prisma;
   const data = {
     validated: opts.validated,
     feedback: opts.sentFeedback,
     feedbackSentAt: opts.sentFeedback ? opts.at : null,
   };
-  return prisma.empathyReview.upsert({
+  return client.empathyReview.upsert({
     where: {
       attemptId_sessionId_reviewerUserId: {
         attemptId: opts.attemptId,

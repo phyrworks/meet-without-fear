@@ -1228,6 +1228,8 @@ CREATE TABLE proposal (
     -- §1.4 proposal [P21]
     CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
     CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL),
+    -- review schema S5: only a REMOVED proposal names who removed it (every writer; t_proposal_app_moves binds mwf_app's)
+    CHECK (removed_by_user_id IS NULL OR status = 'REMOVED'),
     -- work-k5fk.3: creator and remover are participants of the proposal's own session
     UNIQUE (id, session_id),
     FOREIGN KEY (session_id, created_by_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
@@ -1537,7 +1539,6 @@ CREATE TABLE conversation_read_state (
     last_seen_seq ordinal_no,
     last_viewed_share_tab_at ts_ms,
     last_active_at ts_ms,
-    archived_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1551,14 +1552,13 @@ CREATE TABLE conversation_read_state (
       ON DELETE SET NULL (last_seen_conversation_id, last_seen_seq)
 );
 CREATE INDEX ON conversation_read_state (last_seen_conversation_id, last_seen_seq, session_id);
-COMMENT ON TABLE conversation_read_state IS 'Per-participant view state: what was last viewed or seen, presence, and whether the session is archived from their list.';
+COMMENT ON TABLE conversation_read_state IS 'Per-participant view state: what was last viewed or seen, and presence. (Archiving a session is session.archived_at, app.session_archive; the per-participant archived_at, never written, was dropped — review schema S8.)';
 COMMENT ON COLUMN conversation_read_state.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN conversation_read_state.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN conversation_read_state.last_seen_conversation_id IS 'With last_seen_seq, the last message this participant has seen: the "new messages" line (work-k5fk.4). Both NULL when there is none or it was deleted.';
 COMMENT ON COLUMN conversation_read_state.last_seen_seq IS 'With last_seen_conversation_id, the seen message''s seq: (last_seen_conversation_id, last_seen_seq, session_id) references message (conversation_id, seq, session_id).';
 COMMENT ON COLUMN conversation_read_state.last_viewed_share_tab_at IS 'When the participant last viewed received shared items ("Seen"); the name predates the Share tab''s removal.';
 COMMENT ON COLUMN conversation_read_state.last_active_at IS 'Presence; shown to the co-participant only when their privacy preferences allow (v_participant).';
-COMMENT ON COLUMN conversation_read_state.archived_at IS 'Set when the participant hid the session from their list.';
 -- mwf_app: the caller's read state — created with the participant, then viewed / active / seen / share-tab stamps.
 GRANT SELECT ON conversation_read_state TO app_access;
 GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq,
@@ -1570,7 +1570,7 @@ GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_se
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
 -- mwf_definer: participant_presence (v_participant: the caller's own read state; a co-participant's shared-frame instant and last activity, review F2)
-GRANT SELECT (last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, archived_at)
+GRANT SELECT (last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at)
   ON conversation_read_state TO mwf_definer;
 GRANT DELETE ON conversation_read_state TO mwf_definer;
 
@@ -2254,7 +2254,8 @@ GRANT SELECT ON need_share TO app_access;
 -- mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
 GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_definer;
 GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
-GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
+-- (and app.need_share's re-share of a revoked share: new text, category and shared_at, revoked_at cleared — review S1)
+GRANT UPDATE (category, shared_text, shared_at, revoked_at) ON need_share TO mwf_definer;
 
 CREATE TABLE need_disposition (
     need_id uuid7 NOT NULL REFERENCES need_share ON DELETE CASCADE,
@@ -2776,7 +2777,8 @@ GRANT UPDATE (push_token, push_provider) ON user_device TO worker_access;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
-    doc preferences_json_schema NOT NULL DEFAULT '{}'::preferences_json_schema,
+    -- no DEFAULT (review schema S8): '{}' would fail its own domain; every writer supplies the document
+    doc preferences_json_schema NOT NULL,
     doc_schema_version schema_version NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP

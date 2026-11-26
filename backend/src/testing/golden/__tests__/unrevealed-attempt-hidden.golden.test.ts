@@ -74,7 +74,9 @@ describe(`golden: ${SCENARIO}`, () => {
   let harness: Harness;
   let steps: StepResult[];
   const phases: Record<string, { bob: StepResult[]; ada: StepResult[] }> = {};
-  const roundThree: { feedback?: StepResult; resubmit?: StepResult; bob: StepResult[] } = { bob: [] };
+  const roundThree: { feedback?: StepResult; adaFeedback?: StepResult; resubmit?: StepResult; bob: StepResult[] } = {
+    bob: [],
+  };
 
   beforeAll(async () => {
     harness = await createHarness({
@@ -137,6 +139,13 @@ describe(`golden: ${SCENARIO}`, () => {
         validated: false,
         feedback: 'TS10_FEEDBACK: it is the evenings I needed you to see.',
       });
+      // Ada sends feedback on Bob's round too (REVEALED → REFINING), so round 3 stays unrevealed once it is READY:
+      // with Bob's direction REVEALED the reveal gate would be met and round 3 revealed at once (review services#2,
+      // work-k5fk.33 — the reveal pre-check now counts REVEALED, as the database gate does).
+      roundThree.adaFeedback = await extra('feedback on bob as ada', ada, `/sessions/${sid}/empathy/validate`, {
+        validated: false,
+        feedback: 'TS10_FEEDBACK: it was the mornings, not the evenings.',
+      });
       roundThree.resubmit = await extra('resubmit round 3 as ada', ada, `/sessions/${sid}/empathy/resubmit`, {
         content: ADA_ROUND_THREE,
       });
@@ -186,6 +195,7 @@ describe(`golden: ${SCENARIO}`, () => {
   // allow-list targetOnly (plan §4 R2 "still present after the author's next round supersedes it").
   targetOnly('after round 3 supersedes the revealed round 2, Bob still reads round 2 and never round 3', async () => {
     expect(roundThree.feedback?.status).toBe(200);
+    expect(roundThree.adaFeedback?.status).toBe(200);
     expect(roundThree.resubmit?.status).toBe(200);
     const rounds = await withClient(
       harness.fixture.target,

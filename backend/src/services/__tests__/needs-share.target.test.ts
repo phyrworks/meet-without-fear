@@ -198,5 +198,103 @@ describeTarget(
         /need not found/,
       );
     });
+
+    // Owner decision 2026-11-25 (review schema S1, work-k5fk.33): sharing a need again after revoking it is allowed,
+    // as an explicit act (a new GRANTED consent). Before, app.need_share's ON CONFLICT DO NOTHING kept the revoked row:
+    // the consent read GRANTED and the partner never saw the need.
+    it('re-sharing a revoked need (a new explicit consent) shows it to the partner again; revoking hides it again', async () => {
+      const [need] = await needsOf(ids.bob);
+      const shareOf = () =>
+        run.sql<{ revoked: boolean }>(`SELECT revoked_at IS NOT NULL AS revoked FROM need_share WHERE need_id = $1`, [
+          need.id,
+        ]);
+      const consentsOf = () =>
+        run.sql<{ decision: string }>(
+          `SELECT decision::text AS decision FROM consent WHERE need_id = $1 ORDER BY created_at, id`,
+          [need.id],
+        );
+      const adaSees = () =>
+        run.as('mwf_app', ids.adaUser, `SELECT need_id FROM v_need_shared WHERE need_id = $1`, [need.id]);
+      expect(await shareOf()).toEqual([{ revoked: true }]);
+      expect(await adaSees()).toEqual([]);
+
+      const needs = await needsOf(ids.bob);
+      await asUser(ids.bobUser, () =>
+        share.shareNeeds({
+          sessionId: ids.session,
+          seat: ids.bob,
+          needs: needs.map(n => ({ id: n.id, label: n.label, category: n.category as never, evidence: n.evidence })),
+        }),
+      );
+      expect(await shareOf()).toEqual([{ revoked: false }]);
+      expect(await consentsOf()).toEqual([{ decision: 'REVOKED' }, { decision: 'GRANTED' }]);
+      expect(await adaSees()).toEqual([{ need_id: need.id }]);
+
+      await asUser(ids.bobUser, () => share.revokeNeedShare(need.id));
+      expect(await shareOf()).toEqual([{ revoked: true }]);
+      expect(await consentsOf()).toEqual([{ decision: 'REVOKED' }, { decision: 'REVOKED' }]);
+      expect(await adaSees()).toEqual([]);
+    });
+
+    it('without a new GRANTED consent app.need_share does not re-share a revoked need', async () => {
+      const [need] = await needsOf(ids.bob);
+      await expect(run.as('mwf_app', ids.bobUser, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
+        /need has no GRANTED consent by its owner/,
+      );
+      expect(
+        await run.sql(`SELECT revoked_at IS NOT NULL AS revoked FROM need_share WHERE need_id = $1`, [need.id]),
+      ).toEqual([{ revoked: true }]);
+    });
+
+    // Review services#4 / lifecycle F1 (work-k5fk.33): the decision and the share are one transaction.
+    it('a GRANTED need consent whose share is refused rolls back: the consent stays undecided, nothing is shared', async () => {
+      const http = await httpAs();
+      const bob = { id: ids.bobUser, email: 'bob@e2e.test' };
+      const pendingFor = async (deleted: boolean) => {
+        const [n] = await run.sql<{ id: string }>(
+          `INSERT INTO need (label, category, ai_confidence, evidence, user_id, session_id, deleted_at)
+           VALUES ('PROBE_PENDING_NEED', 'SAFETY', 0.9, ARRAY['e'], $1::uuid, $2::uuid, CASE WHEN $3 THEN now() END)
+           RETURNING id`,
+          [ids.bobUser, ids.session, deleted],
+        );
+        const [c] = await run.sql<{ id: string }>(
+          `INSERT INTO consent (session_id, user_id, requested_by_user_id, need_id) VALUES ($1, $2, $2, $3) RETURNING id`,
+          [ids.session, ids.bobUser, n.id],
+        );
+        return { need: n.id, consent: c.id };
+      };
+      const decide = (consent: string) =>
+        http(bob, 'post', `/sessions/${ids.session}/consent/decide`, {
+          consentRequestId: consent,
+          decision: 'GRANTED',
+          editedContent: 'I need to feel safe.',
+        });
+
+      // need_share refuses a deleted need (P0002): the decision goes with it.
+      const gone = await pendingFor(true);
+      const refused = await decide(gone.consent);
+      expect(refused.status).toBe(404);
+      expect(await run.sql(`SELECT decision, decided_at FROM consent WHERE id = $1`, [gone.consent])).toEqual([
+        { decision: null, decided_at: null },
+      ]);
+      expect(await run.sql(`SELECT 1 FROM need_share WHERE need_id = $1`, [gone.need])).toEqual([]);
+
+      const live = await pendingFor(false);
+      const granted = await decide(live.consent);
+      expect(granted.status).toBe(200);
+      expect(await run.sql(`SELECT decision::text AS decision FROM consent WHERE id = $1`, [live.consent])).toEqual([
+        { decision: 'GRANTED' },
+      ]);
+      expect(await run.sql(`SELECT 1 AS one FROM need_share WHERE need_id = $1`, [live.need])).toEqual([{ one: 1 }]);
+
+      // And the consent route's revocation of it (app.need_revoke_share returns void: an $executeRaw, not $queryRaw).
+      const revoked = await http(bob, 'post', `/sessions/${ids.session}/consent/revoke`, {
+        consentRecordId: live.consent,
+      });
+      expect(revoked.status).toBe(200);
+      expect(
+        await run.sql(`SELECT revoked_at IS NOT NULL AS revoked FROM need_share WHERE need_id = $1`, [live.need]),
+      ).toEqual([{ revoked: true }]);
+    });
   },
 );
