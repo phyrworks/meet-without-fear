@@ -158,6 +158,83 @@ describe('Stage4RedesignPanel', () => {
     expect(screen.getAllByText('Trust after conflict').length).toBeGreaterThan(0);
   });
 
+  // work-k5fk.37 (owner decision 2026-11-25): each of your own commitments is private until you share it with its
+  // own action; sharing your stances shares none, and a shared commitment is never unshared.
+  describe('commitment sharing (work-k5fk.37)', () => {
+    const withCommitment = (over: Partial<GetStage4StateResponse['inventory']['individualCommitments'][number]>) => ({
+      ...baseState,
+      inventory: {
+        ...baseState.inventory,
+        individualCommitments: [{ ...baseState.inventory.individualCommitments[0], ...over }],
+      },
+    });
+
+    it('marks your unshared commitment private and shares that one commitment with its own button', () => {
+      const onShareCommitment = jest.fn();
+      render(
+        <Stage4RedesignPanel
+          {...defaultProps}
+          state={withCommitment({ isShared: false })}
+          onShareCommitment={onShareCommitment}
+        />
+      );
+      expect(screen.getByTestId('stage4-commitment-private-proposal-2')).toBeTruthy();
+      expect(screen.getByText('Private — only you can see this')).toBeTruthy();
+      expect(screen.queryByTestId('stage4-commitment-shared-proposal-2')).toBeNull();
+      fireEvent.press(screen.getByTestId('stage4-commitment-share-proposal-2'));
+      expect(onShareCommitment).toHaveBeenCalledWith('proposal-2');
+      expect(onShareCommitment).toHaveBeenCalledTimes(1);
+      expect(defaultProps.onSelectProposal).not.toHaveBeenCalled();
+    });
+
+    it('says a shared commitment is shared, with no way to share or unshare it', () => {
+      render(
+        <Stage4RedesignPanel {...defaultProps} state={withCommitment({ isShared: true })} onShareCommitment={jest.fn()} />
+      );
+      expect(screen.getByTestId('stage4-commitment-shared-proposal-2')).toBeTruthy();
+      expect(screen.getByText('Shared with Eve')).toBeTruthy();
+      expect(screen.queryByTestId('stage4-commitment-share-proposal-2')).toBeNull();
+      expect(screen.queryByTestId('stage4-commitment-private-proposal-2')).toBeNull();
+    });
+
+    it('shows nothing of the kind on the partner’s commitment or a shared proposal', () => {
+      render(
+        <Stage4RedesignPanel
+          {...defaultProps}
+          state={withCommitment({ ownerLabel: 'Partner', isShared: true })}
+          onShareCommitment={jest.fn()}
+        />
+      );
+      expect(screen.queryByTestId('stage4-commitment-shared-proposal-2')).toBeNull();
+      expect(screen.queryByTestId('stage4-commitment-share-proposal-2')).toBeNull();
+      expect(screen.queryByTestId('stage4-commitment-private-proposal-1')).toBeNull();
+      expect(screen.queryByTestId('stage4-commitment-share-proposal-1')).toBeNull();
+    });
+
+    it('disables the button while that share is in flight', () => {
+      const onShareCommitment = jest.fn();
+      render(
+        <Stage4RedesignPanel
+          {...defaultProps}
+          state={withCommitment({ isShared: false })}
+          onShareCommitment={onShareCommitment}
+          sharingCommitmentId="proposal-2"
+        />
+      );
+      const button = screen.getByTestId('stage4-commitment-share-proposal-2');
+      expect(button.props.accessibilityState?.disabled).toBe(true);
+      expect(screen.getByText('Sharing…')).toBeTruthy();
+      fireEvent.press(button);
+      expect(onShareCommitment).not.toHaveBeenCalled();
+    });
+
+    it('no longer says sharing your stances shares your commitments', () => {
+      render(<Stage4RedesignPanel {...defaultProps} state={withCommitment({ isShared: false })} />);
+      expect(screen.queryByText(/commitments are shared/i)).toBeNull();
+      expect(screen.queryByTestId('stage4-share-commitments-hint-inline')).toBeNull();
+    });
+  });
+
   it('keeps partner selections private before both submit', () => {
     render(<Stage4RedesignPanel {...defaultProps} />);
 
@@ -639,24 +716,6 @@ describe('Stage4RedesignPanel', () => {
       const share = screen.getByTestId('stage4-share-selections');
       expect(share.props.accessibilityState?.disabled).toBe(true);
       expect(screen.getByTestId('stage4-needs-gate-hint-inline')).toBeTruthy();
-    });
-
-    it('says the share also shows the partner your own commitments, and only when you have one (work-k5fk.32)', () => {
-      const { unmount } = render(<Stage4RedesignPanel {...defaultProps} />);
-      expect(screen.getByTestId('stage4-share-commitments-hint-inline')).toBeTruthy();
-      unmount();
-      const partnerOnly: GetStage4StateResponse = {
-        ...baseState,
-        inventory: {
-          ...baseState.inventory,
-          individualCommitments: baseState.inventory.individualCommitments.map((p) => ({
-            ...p,
-            ownerLabel: 'Partner',
-          })),
-        },
-      };
-      render(<Stage4RedesignPanel {...defaultProps} state={partnerOnly} />);
-      expect(screen.queryByTestId('stage4-share-commitments-hint-inline')).toBeNull();
     });
 
     it('enables Share once every open need is declined', () => {

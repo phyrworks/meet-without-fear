@@ -90,6 +90,7 @@ import { useSharingStatus } from '../hooks/useSharingStatus';
 import {
   useCloseStage4,
   useShareStage4Selections,
+  useShareStage4Commitment,
   useUnshareStage4Selections,
   useDeclineStage4Need,
   useUndeclineStage4Need,
@@ -1824,6 +1825,7 @@ export function UnifiedSessionScreen({
   });
   const shareStage4Selections = useShareStage4Selections();
   const unshareStage4Selections = useUnshareStage4Selections();
+  const shareStage4Commitment = useShareStage4Commitment();
   const declineStage4Need = useDeclineStage4Need();
   const undeclineStage4Need = useUndeclineStage4Need();
   const updateStage4WalkthroughNeed = useUpdateStage4WalkthroughNeed();
@@ -1886,6 +1888,24 @@ export function UnifiedSessionScreen({
       }
     );
   }, [shareStage4Selections, sessionId, showError]);
+  // work-k5fk.37: each of the user's own commitments is shared by its own action
+  const handleShareStage4Commitment = useCallback(
+    (proposalId: string) => {
+      shareStage4Commitment.mutate(
+        { sessionId, proposalId },
+        {
+          onError: (err) => {
+            const detail = err?.message || 'Please try again.';
+            showError('Could not share your commitment', detail);
+          },
+        }
+      );
+    },
+    [shareStage4Commitment, sessionId, showError]
+  );
+  const sharingStage4CommitmentId = shareStage4Commitment.isPending
+    ? (shareStage4Commitment.variables?.proposalId ?? null)
+    : null;
   // Phase 3: brainstorm/no-overlap/refinement happen in a Stage 4 sub-chat
   // (Stage4SubChatDrawer) so they don't pollute the main transcript.
   const [stage4BrainstormPrefill, setStage4BrainstormPrefill] = useState<string | null>(null);
@@ -4022,6 +4042,8 @@ export function UnifiedSessionScreen({
               isRevising={unshareStage4Selections.isPending}
               onSelectProposal={handleStage4Selection}
               onShareSelections={handleShareStage4Selections}
+              onShareCommitment={handleShareStage4Commitment}
+              sharingCommitmentId={sharingStage4CommitmentId}
               onReviseSelections={handleReviseStage4Selections}
               onSuggestOptions={handleSuggestStage4Options}
               onBrainstormNeed={handleBrainstormStage4Need}
@@ -4870,6 +4892,8 @@ export function UnifiedSessionScreen({
                 hideFooter
                 onSelectProposal={handleStage4Selection}
                 onShareSelections={handleShareStage4Selections}
+                onShareCommitment={handleShareStage4Commitment}
+                sharingCommitmentId={sharingStage4CommitmentId}
                 onReviseSelections={handleReviseStage4Selections}
                 onSuggestOptions={handleSuggestStage4Options}
                 onBrainstormNeed={handleBrainstormStage4Need}

@@ -2381,6 +2381,55 @@ export function useShareStage4Selections() {
 }
 
 /**
+ * Share one of the current user's own individual commitments with their partner
+ * (POST /stage4/commitments/:proposalId/share; work-k5fk.37). Each commitment is
+ * private until shared by this action — sharing stances shares none — and a
+ * share is never undone. The partner reads only its current text.
+ * Optimistic: the card shows as shared at once; rolled back on error.
+ */
+export function useShareStage4Commitment() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { state: GetStage4StateResponse },
+    ApiClientError,
+    { sessionId: string; proposalId: string },
+    { previous: GetStage4StateResponse | undefined }
+  >({
+    mutationFn: async ({ sessionId, proposalId }) =>
+      post<{ state: GetStage4StateResponse }, Record<string, never>>(
+        `/sessions/${sessionId}/stage4/commitments/${proposalId}/share`,
+        {} as Record<string, never>
+      ),
+    onMutate: async ({ sessionId, proposalId }) => {
+      const key = stageKeys.stage4(sessionId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<GetStage4StateResponse>(key);
+      if (previous?.inventory) {
+        queryClient.setQueryData<GetStage4StateResponse>(key, {
+          ...previous,
+          inventory: {
+            ...previous.inventory,
+            individualCommitments: previous.inventory.individualCommitments.map((p) =>
+              p.id === proposalId ? { ...p, isShared: true } : p
+            ),
+          },
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, { sessionId }, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(stageKeys.stage4(sessionId), context.previous);
+      }
+    },
+    onSuccess: (data, { sessionId }) => {
+      queryClient.setQueryData(stageKeys.stage4(sessionId), data.state);
+      refreshStage4Caches(queryClient, sessionId);
+    },
+  });
+}
+
+/**
  * Withdraw the current user's shared Stage 4 selections so they can revise.
  */
 export function useUnshareStage4Selections() {

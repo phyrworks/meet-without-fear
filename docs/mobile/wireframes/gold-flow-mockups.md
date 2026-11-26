@@ -458,6 +458,9 @@ State: the user has named several possible strategies and the AI has organized t
 |   | Individual commitments     |   |
 |   | - You: say "I need a       |   |
 |   |   pause" before leaving    |   |
+|   |   Private — only you can   |   |
+|   |   see this [Share with     |   |
+|   |   Partner]                 |   |
 |   | - Partner: write down      |   |
 |   |   schedule changes first   |   |
 |   |                            |   |
@@ -473,6 +476,8 @@ State: the user has named several possible strategies and the AI has organized t
 | [Message...]                  Send |
 +------------------------------------+
 ```
+
+Each of your own individual commitments is private until you share it with its own **Share with {partner}** button; it then reads "Shared with {partner}" and cannot be unshared. Sharing your stances shares no commitment, and your partner reads only the commitment's current wording, never its earlier ones (work-k5fk.37).
 
 Example chat edits:
 

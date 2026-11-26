@@ -28,6 +28,7 @@ import {
   useStage4State,
   useSubmitStage4ProposalSelection,
   useSubmitStage4Selections,
+  useShareStage4Commitment,
   useCloseStage4,
   useTendingEntries,
   useSubmitTendingResponse,
@@ -1001,6 +1002,81 @@ describe('useStages', () => {
             },
           ],
         });
+      });
+
+      // work-k5fk.37: one commitment is shared by its own action
+      it('shares one commitment: shown shared at once, then the server state is cached', async () => {
+        const withCommitment = (isShared: boolean) => ({
+          ...redesignedStage4State,
+          inventory: {
+            ...redesignedStage4State.inventory,
+            individualCommitments: [
+              {
+                id: 'commitment-1',
+                kind: Stage4ProposalKind.INDIVIDUAL_COMMITMENT,
+                description: 'I will name when I am overloaded',
+                ownerLabel: 'You' as const,
+                isShared,
+                needsAddressed: [],
+                duration: null,
+                measureOfSuccess: null,
+                status: Stage4ProposalStatus.ACTIVE,
+              },
+            ],
+          },
+        });
+        const queryClient = createTestQueryClient();
+        queryClient.setQueryData(stageKeys.stage4(sessionId), withCommitment(false));
+        let resolvePost: (v: unknown) => void = () => {};
+        mockPost.mockReturnValueOnce(new Promise((r) => (resolvePost = r)) as never);
+
+        const { result } = renderHook(() => useShareStage4Commitment(), { wrapper: createWrapper(queryClient) });
+        let done: Promise<unknown> = Promise.resolve();
+        act(() => {
+          done = result.current.mutateAsync({ sessionId, proposalId: 'commitment-1' });
+        });
+        await waitFor(() =>
+          expect(
+            (queryClient.getQueryData(stageKeys.stage4(sessionId)) as any).inventory.individualCommitments[0].isShared
+          ).toBe(true)
+        );
+        expect(mockPost).toHaveBeenCalledWith(`/sessions/${sessionId}/stage4/commitments/commitment-1/share`, {});
+        const server = withCommitment(true);
+        await act(async () => {
+          resolvePost({ state: server });
+          await done;
+        });
+        expect(queryClient.getQueryData(stageKeys.stage4(sessionId))).toEqual(server);
+      });
+
+      it('rolls the commitment back to private when the share fails', async () => {
+        const before = {
+          ...redesignedStage4State,
+          inventory: {
+            ...redesignedStage4State.inventory,
+            individualCommitments: [
+              {
+                id: 'commitment-1',
+                kind: Stage4ProposalKind.INDIVIDUAL_COMMITMENT,
+                description: 'I will name when I am overloaded',
+                ownerLabel: 'You' as const,
+                isShared: false,
+                needsAddressed: [],
+                duration: null,
+                measureOfSuccess: null,
+                status: Stage4ProposalStatus.ACTIVE,
+              },
+            ],
+          },
+        };
+        const queryClient = createTestQueryClient();
+        queryClient.setQueryData(stageKeys.stage4(sessionId), before);
+        mockPost.mockRejectedValueOnce(new Error('nope'));
+        const { result } = renderHook(() => useShareStage4Commitment(), { wrapper: createWrapper(queryClient) });
+        await act(async () => {
+          await result.current.mutateAsync({ sessionId, proposalId: 'commitment-1' }).catch(() => undefined);
+        });
+        expect(queryClient.getQueryData(stageKeys.stage4(sessionId))).toEqual(before);
       });
 
       it('closes redesigned Stage 4 through the new closure endpoint', async () => {
