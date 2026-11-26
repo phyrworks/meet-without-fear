@@ -29,6 +29,7 @@ import { logger } from '../lib/logger';
 import { isSupersededStrategy } from '../utils/strategy-dedupe';
 import { resolveParticipant, type Seat } from './participant-resolver';
 import {
+  legacyAgreedProposalIds,
   loadProposals,
   proposalEditableBy,
   resolveNeedLabels,
@@ -1011,7 +1012,19 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
   }
 
   if (selection) {
+    // Never a private move off a stance made public as a legacy agreement (review B1 leftover, work-k5fk.34).
+    const agreed = await legacyAgreedProposalIds(
+      actor,
+      selection.decisions.map(d => d.proposalId),
+    );
     for (const decision of selection.decisions) {
+      if (decision.decision !== Stage4SelectionDecision.WILLING && agreed.has(decision.proposalId)) {
+        logger.info('[stage4-capture] Skipped a choice off WILLING on a proposal the caller agreed to as an agreement', {
+          sessionId: input.sessionId,
+          proposalId: decision.proposalId,
+        });
+        continue;
+      }
       await upsertChoice({
         proposalId: decision.proposalId,
         seat: actor,

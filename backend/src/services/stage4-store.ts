@@ -228,6 +228,27 @@ export async function loadProposal(proposalId: string): Promise<ProposalRow | nu
 }
 
 /**
+ * Of `proposalIds`, those the seat proposed or confirmed as an agreement in the legacy agreement flow (their own
+ * LEGACY_PROPOSED / LEGACY_CONFIRMED revision — a public act every member reads). On these the seat's WILLING is that
+ * act's substance: the legacy flow forms the agreement once every party has acted and is WILLING, so a private move
+ * off WILLING would show the partner, as an agreement that never forms, a stance not yet shared (review B1 leftover,
+ * work-k5fk.34). The Stage 4 selection paths refuse that move.
+ */
+export async function legacyAgreedProposalIds(seat: Seat, proposalIds: string[]): Promise<Set<string>> {
+  if (proposalIds.length === 0) return new Set();
+  const rows = await prisma.proposalRevision.findMany({
+    where: {
+      sessionId: seat.sessionId,
+      actorUserId: seat.userId,
+      proposalId: { in: proposalIds },
+      reason: { in: [PROPOSAL_REVISION_REASONS.LEGACY_PROPOSED, PROPOSAL_REVISION_REASONS.LEGACY_CONFIRMED] },
+    },
+    select: { proposalId: true },
+  });
+  return new Set(rows.map(r => r.proposalId));
+}
+
+/**
  * The choices `viewer` may read: their own, and a co-participant's only once
  * that participant has reached `choices_shared` (the proposal_choice RLS arm).
  */

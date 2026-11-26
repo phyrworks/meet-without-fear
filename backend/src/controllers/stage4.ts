@@ -75,6 +75,7 @@ import {
   setProposalNeeds,
   shareChoices,
   shareCommitment,
+  legacyAgreedProposalIds,
   unshareChoices,
   upsertChoice,
 } from '../services/stage4-store';
@@ -438,6 +439,20 @@ async function submitStage4SelectionsInternal(
   );
   if (ids.some(id => !valid.has(id))) {
     errorResponse(res, 'VALIDATION_ERROR', 'Selections must reference active proposals in this session', 400);
+    return;
+  }
+
+  // A stance the caller made public by proposing or confirming the proposal as an agreement (legacy flow) is not
+  // withdrawn privately: the legacy flow would then never form the agreement, telling the partner what the caller
+  // chose before they shared it (review B1 leftover, work-k5fk.34).
+  const agreed = await legacyAgreedProposalIds(ctx.participant, ids);
+  if (selections.some(s => s.decision !== 'WILLING' && agreed.has(s.proposalId))) {
+    errorResponse(
+      res,
+      'CONFLICT',
+      'You agreed to this proposal as an agreement; your choice on it stays willing',
+      409,
+    );
     return;
   }
 
