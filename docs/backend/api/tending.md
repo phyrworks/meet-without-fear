@@ -79,7 +79,7 @@ interface TendingResponseDTO {
 enum ContinueChoice {
   ANOTHER_ROUND   = 'ANOTHER_ROUND',   // Reset Stage 4 to inventory building
   EXTEND          = 'EXTEND',          // Keep entries SCHEDULED with new follow-up date (28 days)
-  NEW_PROCESS     = 'NEW_PROCESS',     // Create a fresh Session linked via previousSessionId; both users restart at Stage 0
+  NEW_PROCESS     = 'NEW_PROCESS',     // Create a fresh Session linked via previousSessionId, with the caller's invitation for the partner; both start at Stage 0
   PARTIAL_CLOSURE = 'PARTIAL_CLOSURE', // Resolve some entries, continue others (per-TendingEntry granularity)
   FULL_CLOSURE    = 'FULL_CLOSURE',    // Mark all entries COMPLETED, move session to RESOLVED
 }
@@ -224,7 +224,7 @@ interface SubmitTendingCheckinResponse {
 |--------|--------|
 | `ANOTHER_ROUND` | Clears Stage 4 closure, selections, and need coverage — resets to inventory building |
 | `EXTEND` | Keeps all entries SCHEDULED with a new follow-up date (28 days from now) |
-| `NEW_PROCESS` | Creates a new Session linked via `previousSessionId`; both users begin at Stage 0 |
+| `NEW_PROCESS` | Resolves the session and creates a new one linked via `previousSessionId`: the caller's seat, and a PENDING invitation named for the partner, which the caller shares from the new session's Stage 0 (the partner is seated by accepting it, as for any session; work-k5fk.34). Both begin at Stage 0 |
 | `PARTIAL_CLOSURE` | Resolves entries marked RESOLVED; entries marked CONTINUING stay SCHEDULED |
 | `FULL_CLOSURE` | All entries → COMPLETED; session → RESOLVED |
 
