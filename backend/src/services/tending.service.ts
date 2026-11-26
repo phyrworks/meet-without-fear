@@ -74,6 +74,7 @@ import { logger } from '../lib/logger';
 import { publishSessionEvent, publishUserEvent } from './realtime';
 import { createFacilitatorMessage } from './message-store';
 import { resolveParticipant, type Seat } from './participant-resolver';
+import { loadSessionPartner } from './contacts';
 import { loadAgreements, loadClosure, loadClosureItems, loadProposals, loadStage4Needs } from './stage4-store';
 
 // ============================================================================
@@ -1500,10 +1501,22 @@ export async function submitTendingCheckin(args: {
  * NEW_PROCESS: the current session RESOLVED, a new CREATED session linked
  * back to it (previous_session_id) with the caller as its first participant,
  * and the hand-off summary as a SYSTEM message in their MAIN conversation (the AI's, scoped to the new session).
+ *
+ * The partner joins it the one way a human is seated on the target — by accepting an invitation (participant
+ * app_insert: nobody seats another human) — so the new session is created as createSession creates one: the
+ * caller's seat with its display name, MAIN conversation and read state, and a PENDING invitation named for the
+ * partner, which the caller shares from the session's Stage 0 (review services F5, work-k5fk.34). Base put both
+ * members in the new session at once through their shared relationship; the target has none.
  */
 async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): Promise<string> {
   // As the caller, a current participant of the session it resolves (work-k5fk.10.5: was the job's).
   await prisma.$executeRaw`SELECT app.session_set_status(${viewer.sessionId}::uuid, 'RESOLVED'::session_status)`;
+  // What the caller calls the partner (their own nickname, else the name the partner went by): the invite name.
+  const [me, partner] = await Promise.all([
+    prisma.user.findUnique({ where: { id: viewer.userId }, select: { name: true, firstName: true } }),
+    loadSessionPartner(viewer.sessionId, viewer.userId),
+  ]);
+  const inviteeName = partner ? partner.nickname || partner.firstName || partner.name || null : null;
   const { sessionId, conversationId } = await prisma.$transaction(async tx => {
     const session = await tx.session.create({
       data: {
@@ -1515,12 +1528,28 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
     });
     await tx.participant.create({
       // The caller starts the follow-up: its initiator (work-k5fk.2: no adder). The partner
-      // is linked by previous_session_id, not by a relationship row.
-      data: { sessionId: session.id, userId: viewer.userId, kind: 'human', addedByUserId: null },
+      // is linked by previous_session_id, not by a relationship row, and joins by the invitation below.
+      data: {
+        sessionId: session.id,
+        userId: viewer.userId,
+        kind: 'human',
+        addedByUserId: null,
+        displayName: me?.name || me?.firstName || null,
+      },
       select: { userId: true },
     });
     const conversation = await tx.conversation.create({
       data: { sessionId: session.id, userId: viewer.userId, kind: 'MAIN' },
+      select: { id: true },
+    });
+    await tx.conversationReadState.create({ data: { sessionId: session.id, userId: viewer.userId } });
+    await tx.invitation.create({
+      data: {
+        sessionId: session.id,
+        invitedByUserId: viewer.userId,
+        inviteeName,
+        expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      },
       select: { id: true },
     });
     return { sessionId: session.id, conversationId: conversation.id };
