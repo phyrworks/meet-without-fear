@@ -70,6 +70,8 @@ interface ProposalCardDTO {
   kind: Stage4ProposalKind;   // SHARED_PROPOSAL | INDIVIDUAL_COMMITMENT
   description: string;
   ownerLabel: 'You' | string;  // partner display name for partner-owned proposals
+  isShared?: boolean;          // INDIVIDUAL_COMMITMENT only: may the partner read it? Your own: false until you share
+                               // it (POST /stage4/commitments/:proposalId/share); a partner's: always true
   needsAddressed: ProposalNeedCoverageDTO[];
   duration: string | null;
   measureOfSuccess: string | null;
@@ -268,13 +270,35 @@ POST /api/v1/sessions/:id/stage4/share-selections
 
 Returns the full `GetStage4StateResponse`. After sharing, `mySelectionStatus` remains `'SUBMITTED'` (sharing is tracked via a separate visibility flag, not an additional status state).
 
-Sharing stances also shares the caller's own individual commitments (every one not removed and not yet shared): each gets `proposal.shared_at` from `app.proposal_share`, its only writer. Until then an individual commitment is its creator's alone — the `proposal` RLS policy hides it, its need links, revisions and choices from the partner, and GET `/agreements` and GET `/stage4` do not list it (owner decision 2026-11-25, work-k5fk.32). `shared_at` is set once and never cleared: unsharing the stances leaves the commitments shared. POST `/agreements` refuses an unshared commitment (400).
+Sharing stances shares **no** individual commitment: each is shared by its own action, [Share a Commitment](#share-a-commitment) (owner decision 2026-11-25, work-k5fk.37; until then share-selections shared every one of the caller's commitments).
+
+---
+
+### Share a Commitment
+
+Shares one of the caller's own individual commitments with the partner (owner decision 2026-11-25, work-k5fk.37). Each commitment is private until its creator shares it this way; sharing stances shares none.
+
+```
+POST /api/v1/sessions/:id/stage4/commitments/:proposalId/share
+```
+
+Calls `app.proposal_share(proposalId)`, the only writer of `proposal.shared_at`: it stamps it once and it is never cleared — there is no unshare. Returns the full `GetStage4StateResponse` (the card's `isShared` is now `true`). Sharing an already-shared commitment is a 200 that changes nothing.
+
+| Status | When |
+|--------|------|
+| 404 `NOT_FOUND` | Not a proposal the caller can see, or not the caller's own (the partner's commitment) |
+| 400 `VALIDATION_ERROR` | A `SHARED_PROPOSAL` (shared from birth), or a removed commitment |
+| 409 `CONFLICT` | Stage 4 is already closed |
+
+**Only the current text is released.** The partner then reads the commitment's `description`, `duration` and `measureOfSuccess` (and its need links and the creator's shared stance on it) — never its history. The `proposal_revision` RLS policy shows a co-participant's individual commitment's revisions to nobody but its creator, shared or not, so its earlier wordings (`before` / `after`) and `capturedQuote` (in its `CREATED` revision: the sentence of the creator's private chat it was captured from) stay theirs. No route returns revisions to a partner; GET `/stage4` and GET `/agreements` return the current text only.
+
+Until shared, an individual commitment is its creator's alone: the `proposal` RLS policy hides it, its need links, revisions and choices from the partner, and GET `/agreements` and GET `/stage4` do not list it (work-k5fk.32). A shared proposal that becomes the editor's own commitment (Stage 4 capture) is hidden from the partner the same way until its new owner shares it. A commitment never becomes a shared proposal: capture keeps its kind, and the database refuses the move (`t_proposal_app_moves`), since that would release its history. The mobile Stage 4 panel marks each of the user's own commitments "Private — only you can see this" with a **Share with {partner}** button (`stage4-commitment-share-<id>`), or "Shared with {partner}" (`stage4-commitment-shared-<id>`).
 
 ---
 
 ### Unshare Selections
 
-Withdraws the caller's shared selections (allowed while partner has not yet shared). Individual commitments shared with them stay shared.
+Withdraws the caller's shared selections (allowed while partner has not yet shared). Shared commitments stay shared.
 
 ```
 POST /api/v1/sessions/:id/stage4/unshare-selections
@@ -436,6 +460,8 @@ interface Stage4StructuredProposalInput {
 ```
 
 When `structuredProposals` are present the capture service uses them directly and assigns a confidence score of **0.92**. When absent it falls back to free-text heuristics (`inferProposalKind()`) with a confidence of **0.78**.
+
+A captured proposal's `CREATED` revision carries `capturedQuote` (the sentence it was captured from) only for an `INDIVIDUAL_COMMITMENT`, whose revisions are its creator's alone; a shared proposal's revisions are every member's, so it carries none (work-k5fk.37). A `REVISE` (or a superseding `ADD`) of an individual commitment keeps it an individual commitment whatever `kind` the block names.
 
 ### inferProposalKind() fallback rules
 
@@ -767,7 +793,8 @@ POST /api/v1/sessions/:id/agreements
 
 ```typescript
 interface CreateAgreementRequest {
-  strategyId?: string;            // From existing strategy
+  strategyId?: string;            // From existing strategy; never an INDIVIDUAL_COMMITMENT (400, work-k5fk.37):
+                                  // the partner cannot read its revisions, so could not confirm it
   description: string;            // Final agreed description (can refine strategy text)
   type: 'MICRO_EXPERIMENT' | 'COMMITMENT' | 'CHECK_IN';
   duration?: string;

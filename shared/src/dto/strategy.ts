@@ -225,6 +225,12 @@ export interface ProposalCardDTO {
   description: string;
   sourceLabel?: Stage4ProposalSourceLabel;
   ownerLabel?: 'You' | 'Partner';
+  /**
+   * INDIVIDUAL_COMMITMENT only: whether the partner may read it. The viewer's own commitment is private until they
+   * share it (POST /stage4/commitments/:proposalId/share; never unshared); a partner's is always true, since the
+   * viewer sees it only once shared (work-k5fk.37). Undefined on a SHARED_PROPOSAL, which every member sees.
+   */
+  isShared?: boolean;
   needsAddressed: ProposalNeedCoverageDTO[];
   duration: string | null;
   measureOfSuccess: string | null;

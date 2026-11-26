@@ -222,6 +222,8 @@ function buildProposalCard(
           ? 'You'
           : 'Partner'
         : undefined,
+    // Private until its creator shares it (work-k5fk.37); a partner's commitment reaches this card only once shared.
+    isShared: proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? proposal.sharedAt !== null : undefined,
     needsAddressed:
       linked.length > 0
         ? linked

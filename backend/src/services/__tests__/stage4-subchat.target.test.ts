@@ -190,7 +190,7 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
       ).toEqual([{ n: 0 }]);
     });
 
-    it('createAgreement with strategyId: 404 for an unseen commitment, 403 for a seen one, the creator may', async () => {
+    it('createAgreement with strategyId: 404 for an unseen commitment, 403 for a seen one, 400 for its creator', async () => {
       const agree = (user: { id: string; email: string }, strategyId: string) =>
         http(user, 'post', `/sessions/${ids.session}/agreements`, {
           strategyId,
@@ -207,7 +207,9 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
           [individual, ids.bobUser],
         ),
       ).toEqual([{ n: 0 }]);
-      expect((await agree(ada, individual)).status).toBeLessThan(300); // the creator always may
+      // nor its creator: an individual commitment is never proposed as an agreement — Bob could not confirm it, since
+      // a co-participant's commitment's revisions (the agreement's LEGACY_PROPOSED mark) are never his (work-k5fk.37)
+      expect((await agree(ada, individual)).status).toBe(400);
     });
   });
 });

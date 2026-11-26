@@ -5,6 +5,7 @@
  * - GET /sessions/:id/strategies - Get anonymous strategy pool
  * - POST /sessions/:id/strategies - Propose a strategy
  * - GET /sessions/:id/stage4 - Get redesigned Stage 4 state
+ * - POST /sessions/:id/stage4/commitments/:proposalId/share - Share one's own individual commitment
  * - POST /sessions/:id/agreements - Create agreement
  * - POST /sessions/:id/agreements/:agreementId/confirm - Confirm agreement
  */
@@ -25,6 +26,7 @@ import {
   submitStage4Selections,
   updateStage4WalkthroughNeedStatus,
   shareStage4Selections,
+  shareStage4Commitment,
   unshareStage4Selections,
   declineStage4Need,
   undeclineStage4Need,
@@ -72,6 +74,14 @@ router.post(
   requireAuth,
   requireSessionAccess,
   asyncHandler(shareStage4Selections),
+);
+
+// Share one of the caller's own individual commitments with the partner (work-k5fk.37): its current text only
+router.post(
+  '/sessions/:id/stage4/commitments/:proposalId/share',
+  requireAuth,
+  requireSessionAccess,
+  asyncHandler(shareStage4Commitment),
 );
 
 // Mark a need as "leave for now"

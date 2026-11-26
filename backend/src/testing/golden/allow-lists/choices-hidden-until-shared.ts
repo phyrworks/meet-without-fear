@@ -111,6 +111,16 @@ function stage4ComputedRules(): AllowRule[] {
       keys: ['id'],
       why: 'R29: the individual commitment’s need is a proposal_need link (a need_share id) — today a bare label with no id.',
     },
+    {
+      // Only Ada's reads list her commitment (Bob's write responses do not: private until shared). The scenario
+      // shares it at no step, so the value is false at all three.
+      kind: 'addedKeys',
+      at: ADA_STAGE4_READ_STEPS.map(i => `steps.${i}.body.data.inventory.individualCommitments.*`),
+      keys: ['isShared'],
+      why:
+        'work-k5fk.37 (owner decision 2026-11-25): an individual commitment card says whether the partner may read ' +
+        'it — the viewer’s own is private until shared by its own action (POST /stage4/commitments/:id/share).',
+    },
   ];
 }
 
