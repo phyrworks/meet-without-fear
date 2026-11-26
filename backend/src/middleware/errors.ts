@@ -56,6 +56,16 @@ export class AccountLinkConflictError extends AppError {
   }
 }
 
+/**
+ * First login whose verified email the database's `email` domain refuses (length, format or shape: 23514 / 23502
+ * from app.create_user; platform L3, work-k5fk.34). Was a 400 VALIDATION_ERROR the client could not explain.
+ */
+export class EmailNotAcceptedError extends AppError {
+  constructor(message = "This account's email address can't be used here. Contact support.") {
+    super(ErrorCode.EMAIL_NOT_ACCEPTED, message, 403);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(resource = 'Resource', message?: string) {
     super(ErrorCode.NOT_FOUND, message || `${resource} not found`, 404);

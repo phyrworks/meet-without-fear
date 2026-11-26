@@ -17,9 +17,9 @@ export interface User extends UserDTO {
 /**
  * The backend refused the signed-in account (GET /auth/me, work-k5fk.35 C4): Clerk says signed in, but there is
  * no user to be. EMAIL_NOT_VERIFIED: the account's email is not verified. ACCOUNT_LINK_CONFLICT: the email belongs
- * to another account.
+ * to another account. EMAIL_NOT_ACCEPTED: the email is not one an account can hold (work-k5fk.34).
  */
-export type AccountProblem = 'EMAIL_NOT_VERIFIED' | 'ACCOUNT_LINK_CONFLICT';
+export type AccountProblem = 'EMAIL_NOT_VERIFIED' | 'ACCOUNT_LINK_CONFLICT' | 'EMAIL_NOT_ACCEPTED';
 
 /**
  * Authentication context value

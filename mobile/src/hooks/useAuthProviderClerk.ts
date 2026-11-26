@@ -16,7 +16,9 @@ import type { User, AuthContextValue, AccountProblem } from './useAuthTypes';
 /** The /auth/me refusals that mean there is no user to be (the error's API code; ApiClientError carries it). */
 function accountProblemOf(error: unknown): AccountProblem | null {
   const code = (error as { code?: unknown } | null)?.code;
-  return code === 'EMAIL_NOT_VERIFIED' || code === 'ACCOUNT_LINK_CONFLICT' ? code : null;
+  return code === 'EMAIL_NOT_VERIFIED' || code === 'ACCOUNT_LINK_CONFLICT' || code === 'EMAIL_NOT_ACCEPTED'
+    ? code
+    : null;
 }
 
 /**

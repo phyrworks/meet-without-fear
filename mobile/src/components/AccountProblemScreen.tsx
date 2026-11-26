@@ -22,6 +22,10 @@ const COPY: Record<AccountProblem, { title: string; body: string }> = {
     title: 'This email belongs to another account',
     body: `This email address is already linked to a different Meet Without Fear account. Contact support at ${SUPPORT_EMAIL} and we'll help you get into the right one.`,
   },
+  EMAIL_NOT_ACCEPTED: {
+    title: "This email can't be used",
+    body: `Your account's email address can't be used for a Meet Without Fear account. Sign in with another email, or contact support at ${SUPPORT_EMAIL}.`,
+  },
 };
 
 export function AccountProblemScreen({
