@@ -180,24 +180,23 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     if (!participant.leftAt) await ensureOwnStage4TransitionLine(participant, conversationId);
 
     // Fetch core session data in parallel
-    const [session, latestInvitation, linkedReflection, messages, readState, partner] = await Promise.all([
+    const [session, latestInvitation, messages, readState, partner] = await Promise.all([
       prisma.session.findUnique({ where: { id: sessionId } }),
       prisma.invitation.findFirst({
         where: { sessionId },
         orderBy: { createdAt: 'desc' },
       }),
-      // The caller's own reflection linked to this session (Inner Work is
-      // private to its author: filtered by the caller's user id).
-      prisma.reflection.findFirst({
-        where: { linkedSessionId: sessionId, userId: user.id, status: { not: 'ARCHIVED' } },
-        orderBy: { updatedAt: 'desc' },
-        select: { id: true, title: true, summary: true, theme: true, contextSnapshot: true },
-      }),
       // Messages (initial page): the caller's own conversation is the audience.
       listConversationMessages({ conversationId, limit: INITIAL_SESSION_MESSAGE_LIMIT, order: 'desc' }),
       prisma.conversationReadState.findUnique({
         where: { sessionId_userId: { sessionId: me.sessionId, userId: me.userId } },
-        select: { lastViewedAt: true, lastActiveAt: true, lastSeenConversationId: true, lastSeenSeq: true },
+        select: {
+          lastViewedAt: true,
+          lastActiveAt: true,
+          lastSeenConversationId: true,
+          lastSeenSeq: true,
+          feelHeardOfferedAt: true,
+        },
       }),
       getPartnerParticipant(me),
     ]);
@@ -206,6 +205,20 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
+    // The Inner Thoughts reflection this session was started from: the caller's own (Inner Work is private to its
+    // author), linked to it, and written BEFORE the session existed. A reflection opened from inside the session is
+    // linked too, but it is not the origin (review services IW-1, work-k5fk.34; base required linkedTrigger
+    // 'suggestion_start', which the target does not keep).
+    const linkedReflection = await prisma.reflection.findFirst({
+      where: {
+        linkedSessionId: sessionId,
+        userId: user.id,
+        status: { not: 'ARCHIVED' },
+        createdAt: { lt: session.createdAt },
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, title: true, summary: true, theme: true, contextSnapshot: true },
+    });
 
     const paused = await isSessionPaused(sessionId);
     const partnerSeat = partner ? { sessionId, userId: partner.userId } : null;
@@ -222,7 +235,11 @@ export async function getSessionState(req: Request, res: Response): Promise<void
 
     // The caller's progress carries every milestone they reached; the
     // partner's carries none here (the old session view gave no partner gates).
-    const myProgress = progressDTO(myState, { milestones: 'own' });
+    // The AI's unanswered feel-heard offer is the caller's own (work-k5fk.34): the card survives a reload.
+    const myProgress = {
+      ...progressDTO(myState, { milestones: 'own' }),
+      feelHeardCheckOffered: readState?.feelHeardOfferedAt != null,
+    };
     const partnerProgress = progressDTO(partnerState, { milestones: 'none' });
 
     // Partner display name

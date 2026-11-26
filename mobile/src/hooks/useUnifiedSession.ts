@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Stage, MessageRole, StrategyPhase, MemorySuggestion, SessionStatus, ConfirmAgreementResponse, type GetEmpathyDraftResponse } from '@meet-without-fear/shared';
 import { useToast } from '../contexts/ToastContext';
 import { ApiClientError } from '../lib/api';
+import { shouldShowFeelHeardCard } from '../utils/feelHeardCard';
 
 import {
   useSessionState,
@@ -572,19 +573,18 @@ export function useUnifiedSession(
   // Count user messages for barometer trigger
   const userMessageCount = messages.filter((m) => m.role === MessageRole.USER).length;
 
-  // Derive showFeelHeardConfirmation from the feel_heard milestone + stream trigger + dismissal state.
-  // The AI's offer is stream metadata only: the target persists no "check offered" fact
-  // (plan §3 step 7), so it is the stream trigger alone.
+  // Derive showFeelHeardConfirmation from the persisted offer (cached progress) + stream trigger, the
+  // feel_heard milestone and dismissal state (utils/feelHeardCard; work-k5fk.34 restored the persistence).
   // NOTE: Using simple derived expression (not useMemo) to match invitation pattern for reliable updates
-  const feelHeardReached = !!myProgress?.milestones?.feel_heard;
   const isWitnessStage = myProgress?.stage === Stage.WITNESS;
-  const showFeelHeardConfirmation = (
-    isWitnessStage &&
-    streamTriggeredFeelHeard &&
-    !feelHeardReached &&
-    !hasDismissedFeelHeard &&
-    !state.hasConfirmedHeard
-  );
+  const showFeelHeardConfirmation = shouldShowFeelHeardCard({
+    isWitnessStage,
+    offeredPersisted: myProgress?.feelHeardCheckOffered === true,
+    offeredByStream: streamTriggeredFeelHeard,
+    feelHeardReached: !!myProgress?.milestones?.feel_heard,
+    dismissed: hasDismissedFeelHeard,
+    confirmedHere: state.hasConfirmedHeard,
+  });
 
   // Needs confirmation state
   const needs = useMemo(() => needsData?.needs ?? [], [needsData?.needs]);

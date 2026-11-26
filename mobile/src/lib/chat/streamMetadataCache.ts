@@ -52,6 +52,28 @@ export function withProposedEmpathyDraft(
 }
 
 /**
+ * Mark the AI's "Do you feel heard?" offer on the caller's progress — the session state
+ * (`progress.myProgress`) or the progress query (`myProgress`), whichever `old` is. The server
+ * persists the same fact (conversation_read_state.feel_heard_offered_at, work-k5fk.34), so a
+ * reload or another device reads it back from GET /sessions/:id/state; this write shows the card
+ * before that refetch. A cache with no progress yet is left alone.
+ */
+export function withFeelHeardCheckOffered(old: UnknownRecord | undefined): UnknownRecord | undefined {
+  if (!old) return old;
+  const progress = old.progress as UnknownRecord | undefined;
+  if (progress?.myProgress) {
+    return {
+      ...old,
+      progress: { ...progress, myProgress: { ...(progress.myProgress as UnknownRecord), feelHeardCheckOffered: true } },
+    };
+  }
+  if (old.myProgress) {
+    return { ...old, myProgress: { ...(old.myProgress as UnknownRecord), feelHeardCheckOffered: true } };
+  }
+  return old;
+}
+
+/**
  * Keys to refetch because the metadata references state the server owns.
  *
  * Intentionally narrow. Anything that can be written directly is written
@@ -104,10 +126,15 @@ export function streamMetadataCacheWrites(
 ): StreamMetadataCacheWrite[] {
   const writes: StreamMetadataCacheWrite[] = [];
 
-  // `offerFeelHeardCheck` is not written to the cache: the target persists no
-  // "check offered" fact (plan §3 step 7; it was a key in the deleted
-  // gatesSatisfied JSON), so the stream trigger is the only signal —
-  // useUnifiedSession's `streamTriggeredFeelHeard` (work-keq6).
+  // The AI's feel-heard offer: the server persists it (owner decision 2026-11-25,
+  // work-k5fk.34), and the card is derived from the cached progress
+  // (feelHeardCheckOffered) — written here so it shows mid-stream.
+  if (metadata.offerFeelHeardCheck === true) {
+    writes.push(
+      { queryKey: sessionKeys.state(sessionId), update: withFeelHeardCheckOffered },
+      { queryKey: stageKeys.progress(sessionId), update: withFeelHeardCheckOffered }
+    );
+  }
 
   if (metadata.proposedEmpathyStatement) {
     const statement = metadata.proposedEmpathyStatement;
