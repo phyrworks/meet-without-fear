@@ -28,6 +28,7 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client';
 /** A transaction on the JOB connection. */
 export type JobTx = Prisma.TransactionClient;
 import { getWorkerPrisma, prisma } from '../lib/prisma';
+import { getPgSqlState } from '../middleware/errors';
 import { withSessionScope } from '../lib/request-context';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../lib/share-moments';
@@ -46,7 +47,7 @@ import type { Seat } from './participant-resolver';
 export type ProposalKind = 'SHARED_PROPOSAL' | 'INDIVIDUAL_COMMITMENT';
 export type ProposalStatus = 'ACTIVE' | 'REVISED' | 'REMOVED' | 'CONVERTED_TO_AGREEMENT';
 export type ChoiceDecision = 'WILLING' | 'NOT_WILLING';
-export type DispositionStatus = 'OPEN' | 'COVERED' | 'PARTIAL' | 'SKIPPED' | 'DECLINED';
+export type DispositionStatus = 'OPEN' | 'COVERED' | 'PARTIAL' | 'SKIPPED';
 
 export interface ProposalRow {
   id: string;
@@ -91,6 +92,8 @@ export interface DispositionRow {
   needId: string;
   status: DispositionStatus;
   isCurrent: boolean;
+  /** "Leave for now": a fact apart from the walkthrough's status (review services#5). */
+  declinedAt: Date | null;
   updatedAt: Date;
 }
 
@@ -343,7 +346,7 @@ export async function loadStage4Needs(sessionId: string, viewer: Seat): Promise<
 export async function loadDispositions(seat: Seat): Promise<DispositionRow[]> {
   return (await prisma.needDisposition.findMany({
     where: { sessionId: seat.sessionId, userId: seat.userId },
-    select: { userId: true, needId: true, status: true, isCurrent: true, updatedAt: true },
+    select: { userId: true, needId: true, status: true, isCurrent: true, declinedAt: true, updatedAt: true },
   })) as DispositionRow[];
 }
 
@@ -626,9 +629,10 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
 }
 
 /**
- * Close the repair stage on the JOB connection: the `session_closure` row,
- * the session RESOLVED (app.session_set_status), and `closed` for every
- * present human (a session-scoped milestone, written for all at once).
+ * Close the repair stage on the JOB connection: the `session_closure` row and
+ * the session RESOLVED (app.session_set_status), in one transaction; its
+ * t_session_closure_closed trigger reaches `closed` for every present human in
+ * the same transaction (review services#4).
  */
 export interface CloseSessionArgs {
   sessionId: string;
@@ -641,11 +645,15 @@ export interface CloseSessionArgs {
 }
 
 export async function closeSessionAsJob(args: CloseSessionArgs): Promise<void> {
-  await withSessionScope(
-    args.sessionId,
-    async () => await getWorkerPrisma().$transaction(tx => insertClosureTx(tx, args)),
-  );
-  await reachClosedForAll(args.sessionId, args.at ?? new Date());
+  try {
+    await withSessionScope(
+      args.sessionId,
+      async () => await getWorkerPrisma().$transaction(tx => insertClosureTx(tx, args)),
+    );
+  } catch (error) {
+    // A concurrent close committed first (the session_closure primary key): the session is closed, as asked.
+    if (getPgSqlState(error) !== '23505') throw error;
+  }
 }
 
 /** The closure row and the session RESOLVED, inside a caller's worker transaction scoped to the session. */
@@ -658,9 +666,4 @@ export async function insertClosureTx(tx: JobTx, args: CloseSessionArgs): Promis
   await tx.$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
 }
 
-/** `closed` (session-scoped) for every present human, once the closure exists. */
-export async function reachClosedForAll(sessionId: string, at: Date): Promise<void> {
-  for (const h of await presentHumans(sessionId)) {
-    await reachMilestone(h, 'closed', at);
-  }
-}
+

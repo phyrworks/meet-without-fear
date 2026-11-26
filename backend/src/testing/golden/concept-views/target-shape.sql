@@ -313,7 +313,9 @@ CREATE VIEW old_concept_need_disposition AS
 SELECT
   md5('participant:' || d.session_id::text || ':' || d.user_id::text)::uuid AS participant_id,
   d.need_id,
-  d.status::text AS status,
+  -- work-k5fk.34: "leave for now" is declined_at, apart from the walkthrough status; the concept keeps base's one
+  -- status, where a declination wins (current-shape.sql: DECLINED > SKIPPED > COVERED > OPEN)
+  CASE WHEN d.declined_at IS NOT NULL THEN 'DECLINED' ELSE d.status::text END AS status,
   d.is_current,
   -- work-k5fk.9 (Q9): the column is dropped (it had no writer); the concept keeps it, always NULL
   NULL::text AS note

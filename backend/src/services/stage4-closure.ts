@@ -14,6 +14,7 @@
 
 import { AgreementType, MAX_AGREEMENTS, Stage4ClosureKind, Stage4ClosureReason } from '@meet-without-fear/shared';
 import { getWorkerPrisma } from '../lib/prisma';
+import { getPgSqlState } from '../middleware/errors';
 import { withSessionScope } from '../lib/request-context';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import {
@@ -21,7 +22,6 @@ import {
   insertClosureTx,
   loadClosure,
   loadClosureItems,
-  reachClosedForAll,
   type ProposalRow,
 } from './stage4-store';
 import { scheduleIndividualCommitmentTendingEntries, scheduleSharedAgreementTendingEntries } from './tending.service';
@@ -35,6 +35,23 @@ export class Stage4CloseError extends Error {
   ) {
     super(message);
     this.name = 'Stage4CloseError';
+  }
+}
+
+const alreadyClosed = () => new Stage4CloseError('Stage 4 is already closed', 'CONFLICT', 409);
+
+/**
+ * Run a closure transaction; a concurrent close that committed first makes this one fail on a unique key (the
+ * session_closure primary key, agreement.proposal_id) — answered as "already closed", the pre-check's answer, never a
+ * 500 (review services#5; base mapped P2002 to the same 409). The whole transaction rolled back, so nothing of the
+ * losing close stays.
+ */
+async function asCloseOnce<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (getPgSqlState(error) === '23505') throw alreadyClosed();
+    throw error;
   }
 }
 
@@ -145,7 +162,7 @@ async function closeStage4InScope(req: CloseStage4Request): Promise<{
   agreementIds: string[];
   closedAt: Date;
 }> {
-  if (await loadClosure(req.sessionId)) throw new Stage4CloseError('Stage 4 is already closed', 'CONFLICT', 409);
+  if (await loadClosure(req.sessionId)) throw alreadyClosed();
   const [{ humans, sharedBy, proposals, choices }, items] = await Promise.all([
     closureInputsAsJob(req.sessionId),
     loadClosureItems(req.sessionId),
@@ -215,7 +232,7 @@ async function closeStage4InScope(req: CloseStage4Request): Promise<{
   );
   const checkInAt = req.checkInDate ? new Date(req.checkInDate) : new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
 
-  const agreementIds = await getWorkerPrisma().$transaction(async tx => {
+  const agreementIds = await asCloseOnce(() => getWorkerPrisma().$transaction(async tx => {
     const ids =
       kind === Stage4ClosureKind.SHARED_AGREEMENT
         ? await insertAgreementsTx(tx, {
@@ -275,8 +292,9 @@ async function closeStage4InScope(req: CloseStage4Request): Promise<{
       at: now,
     });
     return ids;
-  });
-  await reachClosedForAll(req.sessionId, now);
+  }));
+  // Every present human's `closed` is written with the closure row, in its transaction (t_session_closure_closed;
+  // review services#4): a closed session never leaves its participants at stage 4.
   return { kind, reason, agreementIds, closedAt: now };
 }
 
@@ -292,7 +310,7 @@ export async function closeStage4WithoutAgreement(args: {
   reason: Stage4ClosureReason;
   summary?: string;
 }): Promise<{ individualCount: number; openNeedCount: number }> {
-  if (await loadClosure(args.sessionId)) throw new Stage4CloseError('Stage 4 is already closed', 'CONFLICT', 409);
+  if (await loadClosure(args.sessionId)) throw alreadyClosed();
   const [{ proposals, choices }, items] = await Promise.all([
     closureInputsAsJob(args.sessionId),
     loadClosureItems(args.sessionId),
@@ -301,7 +319,7 @@ export async function closeStage4WithoutAgreement(args: {
   const individual = willing.filter(visibleToCloser(args.seat));
   const individualShared = willing.filter(sharedWithEveryone);
   const now = new Date();
-  await withSessionScope(
+  await asCloseOnce(() => withSessionScope(
     args.sessionId,
     async () =>
       await getWorkerPrisma().$transaction(tx =>
@@ -322,7 +340,6 @@ export async function closeStage4WithoutAgreement(args: {
           at: now,
         }),
       ),
-  );
-  await reachClosedForAll(args.sessionId, now);
+  ));
   return { individualCount: individual.length, openNeedCount: items.openNeedIds.length };
 }

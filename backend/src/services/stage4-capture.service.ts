@@ -790,7 +790,10 @@ async function applyOperationTx(
         description: operation.description,
         duration: operation.duration,
         measureOfSuccess: operation.measureOfSuccess,
-        source: 'AI_SUGGESTED',
+        // The participant's own idea, said in their chat: theirs ("You suggested"), not an AI suggestion — the
+        // source labels a card (stage4-state proposalSourceLabel), and every proposal now has a creator (review
+        // services#1; base labelled by a creator-less AI row).
+        source: 'USER_SUBMITTED',
         kind: operation.kind,
         status: Stage4ProposalStatus.ACTIVE,
       },
@@ -801,7 +804,7 @@ async function applyOperationTx(
       id: created.id,
       sessionId: ctx.sessionId,
       createdByUserId: created.createdByUserId,
-      source: 'AI_SUGGESTED',
+      source: 'USER_SUBMITTED',
       kind: operation.kind,
       status: Stage4ProposalStatus.ACTIVE,
       description: operation.description,

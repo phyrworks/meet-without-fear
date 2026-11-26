@@ -142,6 +142,7 @@ Hot per-participant view state. · core · P · none (timestamps and an id only)
 | last_seen_message_id | uuid | yes | | FK message SET NULL — "new messages" line |
 | last_viewed_share_tab_at | timestamptz | yes | | viewed instant for received shared frames ("Seen"); written by `POST /sessions/:id/shared-context-viewed` (work-2doq). Name predates the Share tab removal |
 | last_active_at | timestamptz | yes | | presence (subject to privacy prefs) |
+| feel_heard_offered_at | timestamptz | yes | | the AI offered the Stage 1 "Do you feel heard?" check and it is not answered yet; cleared by `POST /sessions/:id/feel-heard`. Private to the participant (owner decision 2026-11-25, work-k5fk.34; base `gatesSatisfied.feelHeardCheckOffered`) |
 | archived_at | timestamptz | yes | | hidden from this participant's list |
 | updated_at | timestamptz | no | now() | |
 
@@ -481,14 +482,15 @@ How a participant dispositions a need during repair (own or co-participant's). �
 |---|---|---|---|---|
 | participant_id | uuid | no | | FK participant CASCADE — whose walkthrough |
 | need_id | uuid | no | | FK need_share CASCADE — dispositions are over shared needs (own or co-participant's) |
-| status | need_disposition_status | no | 'OPEN' | `OPEN \| COVERED \| PARTIAL \| SKIPPED \| DECLINED` |
+| status | need_disposition_status | no | 'OPEN' | `OPEN \| COVERED \| PARTIAL \| SKIPPED` — the walkthrough's |
 | is_current | boolean | no | false | the need the walkthrough is on |
+| declined_at | timestamptz | yes | | "leave for now" (a fact apart from `status`, so the walkthrough and the decline never overwrite each other; work-k5fk.34) |
 | note | text | yes | | |
 | created_at, updated_at | timestamptz | no | now() | |
 
 Keys: PK (participant_id, need_id). **Partial unique** `UNIQUE (participant_id) WHERE is_current` — one current need per walkthrough. Index (need_id).
 RLS: S/I/U `mine(participant_id)` · D `mine(participant_id)`.
-Absorbs: `gatesSatisfied.{currentNeedId, coveredNeedIds, skippedNeedIds}` (walkthrough), `Stage4NeedDeclination` (→ DECLINED). `Stage4NeedCoverage` is **not** absorbed: it has no dispositioning user (only the need's `sourceUserId`) and its status is computed from proposals and choices — it becomes `v_need_coverage` only (adversarial P2). The walkthrough `phase` becomes `participant_milestone` keys (`repair_walkthrough_started`, `choices_shared`).
+Absorbs: `gatesSatisfied.{currentNeedId, coveredNeedIds, skippedNeedIds}` (walkthrough), `Stage4NeedDeclination` (→ `declined_at`; was the DECLINED status until work-k5fk.34, which made it a separate fact). `Stage4NeedCoverage` is **not** absorbed: it has no dispositioning user (only the need's `sourceUserId`) and its status is computed from proposals and choices — it becomes `v_need_coverage` only (adversarial P2). The walkthrough `phase` becomes `participant_milestone` keys (`repair_walkthrough_started`, `choices_shared`).
 
 #### `proposal`
 A repair idea for one or more shared needs. · proposals · S (shared proposals) / P (individual commitments until shared) · session
@@ -1001,7 +1003,7 @@ erDiagram
 | `recommender_action` | PROCEED, OFFER_OPTIONAL, OFFER_SHARING | was text |
 | `consent_target` (generated) / `consent_decision` | NEED, EMPATHY_ATTEMPT, PROPOSAL, SHARE_OFFER, REVIEW / GRANTED, DENIED, REVOKED | `ConsentContentType` (7 → 5 real targets) |
 | `need_category` | SAFETY, CONNECTION, AUTONOMY, RECOGNITION, MEANING, FAIRNESS | unchanged |
-| `need_disposition_status` | OPEN, COVERED, PARTIAL, SKIPPED, DECLINED | `coverageStatus` text + declination |
+| `need_disposition_status` | OPEN, COVERED, PARTIAL, SKIPPED | `coverageStatus` text (the declination is `need_disposition.declined_at`, work-k5fk.34) |
 | `proposal_source` / `proposal_kind` / `proposal_status` / `choice_decision` / `revision_action` | as today; `revision_action` normalised to upper snake (8 members) | `Strategy*`, `Stage4*` |
 | `agreement_type` / `agreement_status` | as today / minus PROPOSED | |
 | `closure_kind` / `closure_reason` | unchanged | `Stage4Closure*` |

@@ -974,8 +974,8 @@ CREATE TYPE consent_decision AS ENUM ('GRANTED', 'DENIED', 'REVOKED');
 COMMENT ON TYPE consent_decision IS 'A consent decision: GRANTED or DENIED once, then optionally REVOKED (terminal).';
 CREATE TYPE need_category AS ENUM ('SAFETY', 'CONNECTION', 'AUTONOMY', 'RECOGNITION', 'MEANING', 'FAIRNESS');
 COMMENT ON TYPE need_category IS 'The six need categories the needs mapping uses.';
-CREATE TYPE need_disposition_status AS ENUM ('OPEN', 'COVERED', 'PARTIAL', 'SKIPPED', 'DECLINED');
-COMMENT ON TYPE need_disposition_status IS 'How a participant dispositions a need during the Stage-4 walkthrough.';
+CREATE TYPE need_disposition_status AS ENUM ('OPEN', 'COVERED', 'PARTIAL', 'SKIPPED');
+COMMENT ON TYPE need_disposition_status IS 'How a participant dispositions a need during the Stage-4 walkthrough. "Leave for now" is not one of them: it is need_disposition.declined_at, a separate fact (review services#5, work-k5fk.34).';
 CREATE TYPE proposal_source AS ENUM ('USER_SUBMITTED', 'AI_SUGGESTED', 'CURATED');
 COMMENT ON TYPE proposal_source IS 'Where a proposal came from: typed by a participant, suggested by the AI, or from the curated library.';
 CREATE TYPE proposal_kind AS ENUM ('SHARED_PROPOSAL', 'INDIVIDUAL_COMMITMENT');
@@ -1266,6 +1266,11 @@ GRANT SELECT (topic_frame, topic_frame_confirmed_at) ON session TO mwf_definer;
 -- mwf_worker: session-retention: the ACTIVE candidates, staleness of an ACTIVE session and the purge window of an
 -- ARCHIVED one (status moves through app.session_set_status)
 GRANT SELECT (id, status, updated_at) ON session TO worker_access;
+-- mwf_worker: realtime notifySessionMembers: the session list's touch of updated_at, in a task scoped to the
+-- session (policy worker_touch, t_session_scope_worker) — job-originated events have no request identity, and a
+-- request actor who is not a current member (decline, account deletion) has no app arm (review platform M1 /
+-- security S3, services LC-3; work-k5fk.34). One column, never status.
+GRANT UPDATE (updated_at) ON session TO worker_access;
 -- mwf_worker: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
 -- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
 GRANT DELETE ON session TO worker_access;
@@ -1403,8 +1408,8 @@ COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text
 COMMENT ON COLUMN proposal.removal_reason IS 'encrypted (session): why it was removed: the AI''s REMOVE reason. Never the participant''s chat text — every member who sees the proposal reads it (work-k5fk.32).';
 COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): ciphertext_list, each element encrypted: need labels the proposal addresses that matched no need_share, as given by the AI or the participant.';
 -- mwf_app: Stage 4 capture, the sub-chat and the shared-proposal routes create and edit proposals and their need labels
--- (stage4-capture.service.ts, stage4-subchat.service.ts, controllers/stage4.ts). FINDING: capture can set and re-assign
--- created_by_user_id to the PARTNER (from model output) and edit a partner's proposal. shared_at is
+-- (stage4-capture.service.ts, stage4-subchat.service.ts, controllers/stage4.ts). Capture creates rows for the caller
+-- only and skips what the caller may not edit (review services#3, work-k5fk.34). shared_at is
 -- app.proposal_share's alone (work-k5fk.32 S1); the CONVERTED_TO_AGREEMENT move stays the worker's.
 GRANT SELECT ON proposal TO app_access;
 GRANT INSERT (session_id, created_by_user_id, source, kind, status, description, duration, measure_of_success,
@@ -1694,6 +1699,7 @@ CREATE TABLE conversation_read_state (
     last_seen_seq ordinal_no,
     last_viewed_share_tab_at ts_ms,
     last_active_at ts_ms,
+    feel_heard_offered_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1714,13 +1720,15 @@ COMMENT ON COLUMN conversation_read_state.last_seen_conversation_id IS 'With las
 COMMENT ON COLUMN conversation_read_state.last_seen_seq IS 'With last_seen_conversation_id, the seen message''s seq: (last_seen_conversation_id, last_seen_seq, session_id) references message (conversation_id, seq, session_id).';
 COMMENT ON COLUMN conversation_read_state.last_viewed_share_tab_at IS 'When the participant last viewed received shared items ("Seen"); the name predates the Share tab''s removal.';
 COMMENT ON COLUMN conversation_read_state.last_active_at IS 'Presence; shown to the co-participant only when their privacy preferences allow (v_participant).';
--- mwf_app: the caller's read state — created with the participant, then viewed / active / seen / share-tab stamps.
+COMMENT ON COLUMN conversation_read_state.feel_heard_offered_at IS 'When the AI offered this participant the Stage 1 "Do you feel heard?" check and they have not answered it yet (stream-turn-actions; cleared by POST /sessions/:id/feel-heard); NULL otherwise. The card survives a reload or another device. Private to the participant (app_own), as the offer reads their own chat (owner decision 2026-11-25, review clients C5; base: gatesSatisfied.feelHeardCheckOffered).';
+-- mwf_app: the caller's read state — created with the participant, then viewed / active / seen / share-tab stamps,
+-- and the feel-heard offer (set on the AI's offer, cleared on the answer).
 GRANT SELECT ON conversation_read_state TO app_access;
 GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq,
               last_viewed_share_tab_at, created_at, updated_at)
   ON conversation_read_state TO app_access;
 GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at,
-              updated_at)
+              feel_heard_offered_at, updated_at)
   ON conversation_read_state TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
@@ -2418,6 +2426,7 @@ CREATE TABLE need_disposition (
     user_id uuid7 NOT NULL,
     status need_disposition_status NOT NULL DEFAULT 'OPEN',
     is_current boolean NOT NULL DEFAULT false,
+    declined_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -2432,10 +2441,12 @@ COMMENT ON TABLE need_disposition IS 'How a participant dispositions a shared ne
 COMMENT ON COLUMN need_disposition.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN need_disposition.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
--- mwf_app: the caller's Stage 4 walkthrough dispositions (stage4-walkthrough.ts), including un-declining (DELETE).
+COMMENT ON COLUMN need_disposition.declined_at IS 'When the participant chose "leave for now" for this need (POST /stage4/needs/:needId/decline); NULL when they have not, or brought it back. A fact apart from the walkthrough''s status, so neither writer overwrites the other (review services#5, work-k5fk.34; base kept Stage4NeedDeclination apart from the walkthrough JSON).';
+-- mwf_app: the caller's Stage 4 walkthrough dispositions and "leave for now" (stage4-walkthrough.ts), including
+-- un-declining (declined_at cleared, or a decline-only row DELETEd).
 GRANT SELECT ON need_disposition TO app_access;
-GRANT INSERT (session_id, user_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO app_access;
-GRANT UPDATE (status, is_current, updated_at) ON need_disposition TO app_access;
+GRANT INSERT (session_id, user_id, need_id, status, is_current, declined_at, created_at, updated_at) ON need_disposition TO app_access;
+GRANT UPDATE (status, is_current, declined_at, updated_at) ON need_disposition TO app_access;
 GRANT DELETE ON need_disposition TO app_access;
 -- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON need_disposition TO mwf_definer;
@@ -5458,6 +5469,10 @@ CREATE TRIGGER t_session_scope_worker BEFORE UPDATE ON public.proposal
 -- cycle's next round); its UPDATEs stay cross-session (open-due, step 20's exemptions).
 CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.follow_up
   FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+-- review platform M1 / security S3 (work-k5fk.34): realtime notifySessionMembers' touch of session.updated_at, the
+-- worker's one session UPDATE, is of the one session its task is scoped to.
+CREATE TRIGGER t_session_scope_worker BEFORE UPDATE ON public.session
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('id', 'worker_access');
 
 -- T-session-purge (review F6): the worker's DELETE of a session (session-retention's purge, a cascade of every
 -- session-scoped row) removes only an ARCHIVED session. Exempt, as t_session_scope: any current_user that is not a
@@ -6068,6 +6083,56 @@ CREATE TRIGGER t_live_session_pair_leave AFTER UPDATE OF left_at ON public.parti
   EXECUTE FUNCTION app.t_live_session_pair_leave();
 COMMENT ON TRIGGER t_live_session_pair_leave ON public.participant IS 'A leaver releases their pairs (work-k5fk.18).';
 
+-- T-session-closure-closed (review services#4, work-k5fk.34): a session's closure IS its `closed` milestone for every
+-- present human, in the same transaction — the closure is never left committed with its participants at stage 4
+-- (the stage shim's stage-4 terminal), as it was when stage4-store reached `closed` after the closure committed.
+-- `closed` is session-scoped (a fact of the whole session); app.reach_milestone stays the request path's writer of
+-- it (sessions.ts resolve). The first instant stands.
+CREATE FUNCTION app.t_session_closure_closed() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    INSERT INTO public.participant_milestone (session_id, user_id, milestone_key, reached_at)
+    SELECT p.session_id, p.user_id, 'closed', NEW.closed_at
+    FROM public.participant p
+    WHERE p.session_id = NEW.session_id AND p.kind = 'human' AND p.left_at IS NULL
+    ON CONFLICT (session_id, user_id, milestone_key) DO NOTHING;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_session_closure_closed() IS 'Trigger (review services#4, work-k5fk.34): a session_closure row reaches `closed` for every present human of its session, at closed_at, in the closure''s own transaction.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_closure_closed() FROM PUBLIC;
+CREATE TRIGGER t_session_closure_closed AFTER INSERT ON public.session_closure
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_closure_closed();
+COMMENT ON TRIGGER t_session_closure_closed ON public.session_closure IS 'The closure reaches `closed` for every present human (review services#4).';
+
+-- T-milestone-instant (review B1 leftover, work-k5fk.34): the request path's own INSERT of a self-assertable
+-- milestone (milestone-writer reachMilestone: compact_signed, feel_heard, needs_confirmed, choices_shared) has its
+-- reached_at clamped as app.reach_milestone clamps a system key's (schema S7): at most ten minutes back, never ahead.
+-- The app no longer chooses when a participant reached a milestone. Invoker rights: it rewrites NEW only. Exempt: a
+-- current_user that is not a member of app_access (the definer's own INSERT, already clamped; the migrator), and the
+-- database owner / superusers.
+CREATE FUNCTION app.t_milestone_instant() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
+       AND NOT pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      NEW.reached_at := least(greatest(NEW.reached_at, CURRENT_TIMESTAMP - interval '10 minutes'), CURRENT_TIMESTAMP);
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_milestone_instant() IS 'Trigger (review B1 leftover, work-k5fk.34): an app_access INSERT of a milestone has reached_at clamped to the last ten minutes, never ahead — as app.reach_milestone''s (schema S7).';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_milestone_instant() FROM PUBLIC;
+CREATE TRIGGER t_milestone_instant BEFORE INSERT ON public.participant_milestone
+  FOR EACH ROW EXECUTE FUNCTION app.t_milestone_instant();
+COMMENT ON TRIGGER t_milestone_instant ON public.participant_milestone IS 'The request path''s instant of a self-assertable milestone is clamped (review B1 leftover).';
+
 -- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
@@ -6079,6 +6144,7 @@ ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_leave() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_participant_human_limit() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_invitation_human_limit() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_session_closure_closed() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
 
 -- ---------------------------------------------------------------------------
@@ -6381,7 +6447,8 @@ SELECT s.id AS session_id,
        coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)::uuid[]
                  FROM need_share ns
                  WHERE ns.session_id = s.id AND ns.revoked_at IS NULL
-                   AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN')
+                   AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN'
+                                  AND d.declined_at IS NULL)
                         OR NOT EXISTS (SELECT 1 FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
                                        WHERE pn.need_id = ns.need_id))),
                 '{}') AS open_need_ids
@@ -6890,6 +6957,9 @@ COMMENT ON POLICY app_update ON session IS 'A participant''s session: the topic 
 CREATE POLICY ai_session ON session TO ai_access
   USING (id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY worker_read ON session FOR SELECT TO worker_access USING (true);
+CREATE POLICY worker_touch ON session FOR UPDATE TO worker_access
+  USING (id = (SELECT app.session_scope()) AND status <> 'ARCHIVED') WITH CHECK (id = (SELECT app.session_scope()));
+COMMENT ON POLICY worker_touch ON session IS 'The worker touches updated_at (its one UPDATE column) of the session its task is scoped to, never an ARCHIVED one (that would push back its purge): realtime notifySessionMembers, whose events a job or a non-member actor raises (review platform M1 / security S3, work-k5fk.34).';
 CREATE POLICY worker_purge ON session FOR DELETE TO worker_access
   USING (status = 'ARCHIVED' AND updated_at < CURRENT_TIMESTAMP - interval '90 days');
 COMMENT ON POLICY worker_purge ON session IS 'The worker hard-deletes only a session ARCHIVED and untouched for the purge window (90 days: session-retention.ts ARCHIVED_SESSION_PURGE_MS, by updated_at, which the archive''s status write stamps — the call site''s own filter) — never one it archived in the same transaction (work-k5fk.10.29 R3; t_session_purge refuses a non-ARCHIVED one).';

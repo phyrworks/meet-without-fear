@@ -183,6 +183,7 @@ model ConversationReadState {
   lastSeenSeq            Int?      @map("last_seen_seq")
   lastViewedShareTabAt   DateTime? @map("last_viewed_share_tab_at") @db.Timestamptz(3)
   lastActiveAt           DateTime? @map("last_active_at") @db.Timestamptz(3)
+  feelHeardOfferedAt     DateTime? @map("feel_heard_offered_at") @db.Timestamptz(3)
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -702,13 +703,14 @@ model NeedShare {
 
 /// sql_disposition_one_current: UNIQUE (session_id, user_id) WHERE is_current — sql-only.sql.
 model NeedDisposition {
-  needId    String                @map("need_id") @db.Uuid
-  sessionId String                @map("session_id") @db.Uuid
-  userId    String                @map("user_id") @db.Uuid
-  status    NeedDispositionStatus @default(OPEN)
-  isCurrent Boolean               @default(false) @map("is_current")
-  createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  needId     String                @map("need_id") @db.Uuid
+  sessionId  String                @map("session_id") @db.Uuid
+  userId     String                @map("user_id") @db.Uuid
+  status     NeedDispositionStatus @default(OPEN)
+  isCurrent  Boolean               @default(false) @map("is_current")
+  declinedAt DateTime?             @map("declined_at") @db.Timestamptz(3)
+  createdAt  DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant Participant @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
   need        NeedShare   @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
@@ -1499,7 +1501,6 @@ enum NeedDispositionStatus {
   COVERED
   PARTIAL
   SKIPPED
-  DECLINED
 
   @@map("need_disposition_status")
 }
