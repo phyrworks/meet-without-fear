@@ -16,7 +16,9 @@
  *     participant reached may be the partner (work-k5fk.10.5: was the job's INSERT).
  *
  * Reaching a milestone twice is a no-op (the PK is (participant, key)); the
- * first instant stands.
+ * first instant stands. Either way the database clamps the instant to the last
+ * ten minutes, never ahead (app.reach_milestone; t_milestone_instant for the
+ * self-assertable INSERT, work-k5fk.34): `at` is a hint, not a choice.
  */
 
 import type { Seat } from './participant-resolver';
