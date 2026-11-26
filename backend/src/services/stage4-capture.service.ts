@@ -1019,10 +1019,13 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
     );
     for (const decision of selection.decisions) {
       if (decision.decision !== Stage4SelectionDecision.WILLING && agreed.has(decision.proposalId)) {
-        logger.info('[stage4-capture] Skipped a choice off WILLING on a proposal the caller agreed to as an agreement', {
-          sessionId: input.sessionId,
-          proposalId: decision.proposalId,
-        });
+        logger.info(
+          '[stage4-capture] Skipped a choice off WILLING on a proposal the caller agreed to as an agreement',
+          {
+            sessionId: input.sessionId,
+            proposalId: decision.proposalId,
+          },
+        );
         continue;
       }
       await upsertChoice({

@@ -89,11 +89,23 @@ describeTarget('job-originated session fan-out (review platform M1 / security S3
     await run.as('mwf_worker', null, `UPDATE session SET updated_at = now() WHERE id = $1`, [ids.session], ids.session);
     // Another session than the scope: no row (worker_touch), and the trigger refuses a write outside it.
     await expect(
-      run.as('mwf_worker', null, `UPDATE session SET updated_at = now() WHERE id = $1 RETURNING id`, [other], ids.session),
+      run.as(
+        'mwf_worker',
+        null,
+        `UPDATE session SET updated_at = now() WHERE id = $1 RETURNING id`,
+        [other],
+        ids.session,
+      ),
     ).resolves.toEqual([]);
     // Unscoped: no row.
     await expect(
-      run.as('mwf_worker', null, `UPDATE session SET updated_at = now() WHERE id = $1 RETURNING id`, [ids.session], null),
+      run.as(
+        'mwf_worker',
+        null,
+        `UPDATE session SET updated_at = now() WHERE id = $1 RETURNING id`,
+        [ids.session],
+        null,
+      ),
     ).resolves.toEqual([]);
     await expect(
       run.as('mwf_worker', null, `UPDATE session SET status = 'ABANDONED' WHERE id = $1`, [ids.session], ids.session),

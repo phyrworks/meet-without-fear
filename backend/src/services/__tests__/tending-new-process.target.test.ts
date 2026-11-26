@@ -72,7 +72,9 @@ describeTarget('Tending NEW_PROCESS: the follow-up session can seat the partner 
     // then ready to share), and the partner accepts it and is seated — the follow-up is then in his session list.
     const ada = { id: ids.adaUser, email: 'ada@e2e.test' };
     expect((await http(ada, 'post', `/sessions/${linked}/topic-frame/confirm`)).status).toBe(200);
-    expect((await http(ada, 'post', `/sessions/${linked}/invitation/confirm`, { message: 'Shall we start again?' })).status).toBe(200);
+    expect(
+      (await http(ada, 'post', `/sessions/${linked}/invitation/confirm`, { message: 'Shall we start again?' })).status,
+    ).toBe(200);
     const bob = { id: ids.bobUser, email: 'bob@e2e.test' };
     const accepted = await http(bob, 'post', `/invitations/${invitation.id}/accept`);
     expect(accepted.status).toBe(200);

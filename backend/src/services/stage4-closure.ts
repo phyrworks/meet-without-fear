@@ -17,13 +17,7 @@ import { getWorkerPrisma } from '../lib/prisma';
 import { getPgSqlState } from '../middleware/errors';
 import { withSessionScope } from '../lib/request-context';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
-import {
-  insertAgreementsTx,
-  insertClosureTx,
-  loadClosure,
-  loadClosureItems,
-  type ProposalRow,
-} from './stage4-store';
+import { insertAgreementsTx, insertClosureTx, loadClosure, loadClosureItems, type ProposalRow } from './stage4-store';
 import { scheduleIndividualCommitmentTendingEntries, scheduleSharedAgreementTendingEntries } from './tending.service';
 import type { Seat } from './participant-resolver';
 
@@ -46,11 +40,12 @@ const alreadyClosed = () => new Stage4CloseError('Stage 4 is already closed', 'C
  * 500 (review services#5; base mapped P2002 to the same 409). The whole transaction rolled back, so nothing of the
  * losing close stays.
  */
-async function asCloseOnce<T>(fn: () => Promise<T>): Promise<T> {
+async function asCloseOnce<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (error) {
-    if (getPgSqlState(error) === '23505') throw alreadyClosed();
+    // Only when the session is in fact closed now: any other unique violation is a real error.
+    if (getPgSqlState(error) === '23505' && (await loadClosure(sessionId))) throw alreadyClosed();
     throw error;
   }
 }
@@ -232,67 +227,69 @@ async function closeStage4InScope(req: CloseStage4Request): Promise<{
   );
   const checkInAt = req.checkInDate ? new Date(req.checkInDate) : new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
 
-  const agreementIds = await asCloseOnce(() => getWorkerPrisma().$transaction(async tx => {
-    const ids =
-      kind === Stage4ClosureKind.SHARED_AGREEMENT
-        ? await insertAgreementsTx(tx, {
-            sessionId: req.sessionId,
-            actorUserId: req.seat.userId,
-            partyUserIds: humans,
-            at: now,
-            agreements: mutual.map(p => {
-              const legacy = req.followUpDatesByProposalId?.[p.id];
-              return {
-                proposalId: p.id,
-                type: AgreementType.MICRO_EXPERIMENT,
-                description: p.description,
-                duration: p.duration,
-                measureOfSuccess: p.measureOfSuccess,
-                followUpAt: legacy ? new Date(legacy) : checkInAt,
-                fromStatus: p.status,
-              };
-            }),
-          })
-        : [];
-    if (ids.length) {
-      await scheduleSharedAgreementTendingEntries(
-        req.sessionId,
-        ids.map((id, i) => ({
-          id,
-          description: mutual[i].description,
-          followUpDate: req.followUpDatesByProposalId?.[mutual[i].id]
-            ? new Date(req.followUpDatesByProposalId[mutual[i].id])
-            : checkInAt,
-        })),
-        now,
-        tx,
-      );
-    }
-    const owned = individual.filter(p => p.createdByUserId);
-    if (owned.length) {
-      await scheduleIndividualCommitmentTendingEntries(
-        req.sessionId,
-        owned.map(p => ({
-          proposalId: p.id,
-          ownerUserId: p.createdByUserId as string,
-          description: p.description,
-        })),
+  const agreementIds = await asCloseOnce(req.sessionId, () =>
+    getWorkerPrisma().$transaction(async tx => {
+      const ids =
+        kind === Stage4ClosureKind.SHARED_AGREEMENT
+          ? await insertAgreementsTx(tx, {
+              sessionId: req.sessionId,
+              actorUserId: req.seat.userId,
+              partyUserIds: humans,
+              at: now,
+              agreements: mutual.map(p => {
+                const legacy = req.followUpDatesByProposalId?.[p.id];
+                return {
+                  proposalId: p.id,
+                  type: AgreementType.MICRO_EXPERIMENT,
+                  description: p.description,
+                  duration: p.duration,
+                  measureOfSuccess: p.measureOfSuccess,
+                  followUpAt: legacy ? new Date(legacy) : checkInAt,
+                  fromStatus: p.status,
+                };
+              }),
+            })
+          : [];
+      if (ids.length) {
+        await scheduleSharedAgreementTendingEntries(
+          req.sessionId,
+          ids.map((id, i) => ({
+            id,
+            description: mutual[i].description,
+            followUpDate: req.followUpDatesByProposalId?.[mutual[i].id]
+              ? new Date(req.followUpDatesByProposalId[mutual[i].id])
+              : checkInAt,
+          })),
+          now,
+          tx,
+        );
+      }
+      const owned = individual.filter(p => p.createdByUserId);
+      if (owned.length) {
+        await scheduleIndividualCommitmentTendingEntries(
+          req.sessionId,
+          owned.map(p => ({
+            proposalId: p.id,
+            ownerUserId: p.createdByUserId as string,
+            description: p.description,
+          })),
+          checkInAt,
+          now,
+          tx,
+        );
+      }
+      await insertClosureTx(tx, {
+        sessionId: req.sessionId,
+        kind,
+        reason,
+        summary,
+        closedByUserId: req.seat.userId,
         checkInAt,
-        now,
-        tx,
-      );
-    }
-    await insertClosureTx(tx, {
-      sessionId: req.sessionId,
-      kind,
-      reason,
-      summary,
-      closedByUserId: req.seat.userId,
-      checkInAt,
-      at: now,
-    });
-    return ids;
-  }));
+        at: now,
+      });
+      return ids;
+    }),
+  );
   // Every present human's `closed` is written with the closure row, in its transaction (t_session_closure_closed;
   // review services#4): a closed session never leaves its participants at stage 4.
   return { kind, reason, agreementIds, closedAt: now };
@@ -319,27 +316,29 @@ export async function closeStage4WithoutAgreement(args: {
   const individual = willing.filter(visibleToCloser(args.seat));
   const individualShared = willing.filter(sharedWithEveryone);
   const now = new Date();
-  await asCloseOnce(() => withSessionScope(
-    args.sessionId,
-    async () =>
-      await getWorkerPrisma().$transaction(tx =>
-        insertClosureTx(tx, {
-          sessionId: args.sessionId,
-          kind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
-          reason: args.reason,
-          summary: buildClosureSummary(
-            Stage4ClosureKind.NO_SHARED_AGREEMENT,
-            0,
-            individualShared.length,
-            items.openNeedIds.length,
-            args.summary,
-          ),
-          closedByUserId: args.seat.userId,
+  await asCloseOnce(args.sessionId, () =>
+    withSessionScope(
+      args.sessionId,
+      async () =>
+        await getWorkerPrisma().$transaction(tx =>
+          insertClosureTx(tx, {
+            sessionId: args.sessionId,
+            kind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
+            reason: args.reason,
+            summary: buildClosureSummary(
+              Stage4ClosureKind.NO_SHARED_AGREEMENT,
+              0,
+              individualShared.length,
+              items.openNeedIds.length,
+              args.summary,
+            ),
+            closedByUserId: args.seat.userId,
 
-          checkInAt: null,
-          at: now,
-        }),
-      ),
-  ));
+            checkInAt: null,
+            at: now,
+          }),
+        ),
+    ),
+  );
   return { individualCount: individual.length, openNeedCount: items.openNeedIds.length };
 }

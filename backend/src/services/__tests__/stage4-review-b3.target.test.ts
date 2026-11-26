@@ -77,10 +77,12 @@ describeTarget('Stage 4 review B3 (work-k5fk.34)', () => {
         .map((n: { id: string }) => n.id);
     };
     const skippedIds = async () =>
-      (await run.sql<{ need_id: string }>(
-        `SELECT need_id::text FROM need_disposition WHERE session_id = $1 AND user_id = $2 AND status = 'SKIPPED'`,
-        [ids.session, ada.id],
-      )).map(r => r.need_id);
+      (
+        await run.sql<{ need_id: string }>(
+          `SELECT need_id::text FROM need_disposition WHERE session_id = $1 AND user_id = $2 AND status = 'SKIPPED'`,
+          [ids.session, ada.id],
+        )
+      ).map(r => r.need_id);
 
     // Skip, then set aside: still skipped, and set aside
     expect((await walk('skip')).status).toBe(200);
@@ -115,9 +117,9 @@ describeTarget('Stage 4 review B3 (work-k5fk.34)', () => {
     const results = await Promise.all([close(), closeBob()]);
     expect(results.map(r => r.status).sort()).toEqual([200, 409]);
     expect(results.find(r => r.status === 409)!.body.error.code).toBe('CONFLICT');
-    expect(await run.sql(`SELECT count(*)::int AS n FROM session_closure WHERE session_id = $1`, [ids.session])).toEqual(
-      [{ n: 1 }],
-    );
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM session_closure WHERE session_id = $1`, [ids.session]),
+    ).toEqual([{ n: 1 }]);
     expect(
       await run.sql(
         `SELECT user_id::text AS u FROM participant_milestone WHERE session_id = $1 AND milestone_key = 'closed' ORDER BY 1`,

@@ -447,12 +447,7 @@ async function submitStage4SelectionsInternal(
   // chose before they shared it (review B1 leftover, work-k5fk.34).
   const agreed = await legacyAgreedProposalIds(ctx.participant, ids);
   if (selections.some(s => s.decision !== 'WILLING' && agreed.has(s.proposalId))) {
-    errorResponse(
-      res,
-      'CONFLICT',
-      'You agreed to this proposal as an agreement; your choice on it stays willing',
-      409,
-    );
+    errorResponse(res, 'CONFLICT', 'You agreed to this proposal as an agreement; your choice on it stays willing', 409);
     return;
   }
 

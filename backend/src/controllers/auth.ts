@@ -460,7 +460,7 @@ interface UpdateMoodResponse {
 }
 
 export const updateMood = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const user = getUser(req);
+  getUser(req); // authenticated (requireAuth); nothing of the user is written
 
   // Validate intensity
   const { intensity } = req.body;

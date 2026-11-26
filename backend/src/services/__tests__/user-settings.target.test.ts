@@ -114,7 +114,8 @@ describeTarget('memory and preferences on the target, as mwf_app (and notificati
   it('mood: PATCH /auth/me/mood stores no reading in any session; lastMoodIntensity is the latest session reading', async () => {
     // Review services LC-2 (work-k5fk.34): it used to add a reading to the user's most recently active live session —
     // a different session than the one being entered, whose AI then read it as current intensity.
-    const count = () => run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM mood_reading WHERE user_id = $1`, [ids.adaUser]);
+    const count = () =>
+      run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM mood_reading WHERE user_id = $1`, [ids.adaUser]);
     const before = await count();
     expect((await http(ada, 'patch', '/auth/me/mood', { intensity: 7 })).body.data).toEqual({ lastMoodIntensity: 7 });
     expect(await count()).toEqual(before);

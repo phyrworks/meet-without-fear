@@ -57,8 +57,12 @@ describeTarget('a legacy-agreed stance is not withdrawn privately (work-k5fk.34)
       ]),
     ).toEqual([{ decision: 'WILLING' }]);
 
-    const confirmed = await http(ada, 'post', `/sessions/${ids.session}/agreements/${p.id}/confirm`, { confirmed: true });
+    const confirmed = await http(ada, 'post', `/sessions/${ids.session}/agreements/${p.id}/confirm`, {
+      confirmed: true,
+    });
     expect(confirmed.status).toBe(200);
-    expect(await run.sql(`SELECT count(*)::int AS n FROM agreement WHERE proposal_id = $1`, [p.id])).toEqual([{ n: 1 }]);
+    expect(await run.sql(`SELECT count(*)::int AS n FROM agreement WHERE proposal_id = $1`, [p.id])).toEqual([
+      { n: 1 },
+    ]);
   });
 });

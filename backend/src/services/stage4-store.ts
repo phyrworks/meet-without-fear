@@ -686,5 +686,3 @@ export async function insertClosureTx(tx: JobTx, args: CloseSessionArgs): Promis
             ${args.closedByUserId}::uuid, ${args.checkInAt}, ${at})`;
   await tx.$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
 }
-
-
