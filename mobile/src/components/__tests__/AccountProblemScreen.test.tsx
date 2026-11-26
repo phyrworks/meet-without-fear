@@ -23,6 +23,12 @@ describe('AccountProblemScreen', () => {
     expect(screen.getByText(new RegExp(`Contact support at ${SUPPORT_EMAIL}`))).toBeTruthy();
   });
 
+  it('EMAIL_NOT_ACCEPTED: says the email cannot be used, and how to reach support (work-k5fk.34)', () => {
+    render(<AccountProblemScreen problem="EMAIL_NOT_ACCEPTED" onSignOut={jest.fn()} />);
+    expect(screen.getByText("This email can't be used")).toBeTruthy();
+    expect(screen.getByText(new RegExp(`contact support at ${SUPPORT_EMAIL}`))).toBeTruthy();
+  });
+
   it('signs out', () => {
     const onSignOut = jest.fn();
     render(<AccountProblemScreen problem="EMAIL_NOT_VERIFIED" onSignOut={onSignOut} />);

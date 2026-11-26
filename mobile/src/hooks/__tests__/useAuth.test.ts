@@ -159,6 +159,8 @@ describe('useAuthProvider', () => {
   describe.each([
     ['EMAIL_NOT_VERIFIED', 403],
     ['ACCOUNT_LINK_CONFLICT', 409],
+    // work-k5fk.34 (platform L3): a verified email the database refuses
+    ['EMAIL_NOT_ACCEPTED', 403],
   ])('when /auth/me refuses the account with %s', (code, status) => {
     it('builds no user and reports the account problem', async () => {
       mockApiGet.mockRejectedValueOnce(Object.assign(new Error('refused'), { code, status }));

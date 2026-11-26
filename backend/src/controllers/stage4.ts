@@ -8,7 +8,7 @@
  * - POST /sessions/:id/stage4/walkthrough/needs/:needId        - walkthrough (need_disposition)
  * - POST /sessions/:id/stage4/share-selections                 - choices_shared
  * - POST /sessions/:id/stage4/unshare-selections               - withdraw choices_shared
- * - POST|DELETE /sessions/:id/stage4/needs/:needId/decline     - need_disposition DECLINED
+ * - POST|DELETE /sessions/:id/stage4/needs/:needId/decline     - need_disposition.declined_at
  * - POST /sessions/:id/stage4/close                            - closure (job path)
  * Legacy strategy pool / agreements:
  * - GET|POST /sessions/:id/strategies                          - proposals
@@ -75,6 +75,7 @@ import {
   setProposalNeeds,
   shareChoices,
   shareCommitment,
+  legacyAgreedProposalIds,
   unshareChoices,
   upsertChoice,
 } from '../services/stage4-store';
@@ -441,6 +442,15 @@ async function submitStage4SelectionsInternal(
     return;
   }
 
+  // A stance the caller made public by proposing or confirming the proposal as an agreement (legacy flow) is not
+  // withdrawn privately: the legacy flow would then never form the agreement, telling the partner what the caller
+  // chose before they shared it (review B1 leftover, work-k5fk.34).
+  const agreed = await legacyAgreedProposalIds(ctx.participant, ids);
+  if (selections.some(s => s.decision !== 'WILLING' && agreed.has(s.proposalId))) {
+    errorResponse(res, 'CONFLICT', 'You agreed to this proposal as an agreement; your choice on it stays willing', 409);
+    return;
+  }
+
   const submittedAt = new Date();
   for (const s of selections) {
     await upsertChoice({
@@ -493,7 +503,7 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
         select: { proposalId: true, decision: true },
       }),
       loadStage4Needs(sessionId, me),
-      prisma.needDisposition.findMany({ where: { ...me, status: 'DECLINED' }, select: { needId: true } }),
+      prisma.needDisposition.findMany({ where: { ...me, declinedAt: { not: null } }, select: { needId: true } }),
     ]);
     const activeShared = proposals.filter(p => p.status === 'ACTIVE' && p.kind === 'SHARED_PROPOSAL');
     if (activeShared.length === 0) {
@@ -692,6 +702,12 @@ export async function closeStage4(req: Request, res: Response): Promise<void> {
       return;
     }
     const ctx = await stage4Context(req, sessionId, user.id);
+    // A close after a close is "already closed" (409), whether it lost the race in the transaction
+    // (Stage4CloseError) or came after the first committed and RESOLVED the session (review services#5).
+    if (ctx?.closed) {
+      errorResponse(res, 'CONFLICT', 'Stage 4 is already closed', 409);
+      return;
+    }
     if (refuse(res, ctx, 'close Stage 4')) return;
 
     const result = await closeStage4Service({ sessionId, seat: seatOf(ctx.participant), ...parseResult.data });
@@ -1216,24 +1232,30 @@ export async function requestSuggestions(req: Request, res: Response): Promise<v
     }
 
     const drafts = await generateStage4SuggestionDrafts({ sessionId, needLabel, count });
-    const created = [];
-    for (const draft of drafts) {
-      const p = await prisma.proposal.create({
-        data: {
-          sessionId,
-          createdByUserId: null,
-          description: draft.description,
-          duration: draft.duration,
-          measureOfSuccess: draft.measureOfSuccess,
-          source: 'AI_SUGGESTED',
-          kind: 'SHARED_PROPOSAL',
-        },
-        select: { id: true, description: true, duration: true, measureOfSuccess: true },
-      });
-      if (target) await setProposalNeeds(prisma, p.id, [target.id]);
-      else await setProposalNeeds(prisma, p.id, [], [needLabel]);
-      created.push({ ...p, needsAddressed: [needLabel] });
-    }
+    // The caller asked for them, so they are the caller's (the proposal app_insert policy creates a proposal for
+    // its caller only; review services#1): source AI_SUGGESTED is what labels them "AI" (stage4-state
+    // proposalSourceLabel). SHARED_PROPOSALs, as on base: offered to both, so both see and may refine them.
+    const created = await prisma.$transaction(async tx => {
+      const rows = [];
+      for (const draft of drafts) {
+        const p = await tx.proposal.create({
+          data: {
+            sessionId,
+            createdByUserId: user.id,
+            description: draft.description,
+            duration: draft.duration,
+            measureOfSuccess: draft.measureOfSuccess,
+            source: 'AI_SUGGESTED',
+            kind: 'SHARED_PROPOSAL',
+          },
+          select: { id: true, description: true, duration: true, measureOfSuccess: true },
+        });
+        if (target) await setProposalNeeds(tx, p.id, [target.id]);
+        else await setProposalNeeds(tx, p.id, [], [needLabel]);
+        rows.push({ ...p, needsAddressed: [needLabel] });
+      }
+      return rows;
+    });
     successResponse(res, { suggestions: created, source: 'AI_GENERATED', count: created.length });
   } catch (error) {
     logger.error('[requestSuggestions] Error:', error);

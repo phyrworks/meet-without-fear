@@ -236,6 +236,11 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
       advancedToStage2 = await reachMilestone(participant, 'feel_heard', now);
       if (advancedToStage2) logger.info(`[confirmFeelHeard] Advanced user ${user.id} to Stage 2`);
     }
+    // Answered either way: the AI's offer is no longer pending (work-k5fk.34; conversation_read_state.feel_heard_offered_at).
+    await prisma.conversationReadState.updateMany({
+      where: { sessionId: participant.sessionId, userId: participant.userId, feelHeardOfferedAt: { not: null } },
+      data: { feelHeardOfferedAt: null },
+    });
 
     const partner = await getPartnerParticipant(participant);
     const partnerState = partner
@@ -581,11 +586,12 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Check if this session originated from an Inner Thoughts session
     let innerThoughtsContext: { summary: string; themes: string[]; fullContext?: string } | undefined;
     if (!isInvitee && isInvitationPhase) {
-      // The caller's OWN reflection linked to this session (Inner Work never
-      // crosses participants). `linkedTrigger` is not in the target
-      // (reflection drops it); any linked reflection of theirs qualifies.
+      // The caller's OWN reflection this session was started from (Inner Work never crosses participants):
+      // linked to it and written before the session existed. `linkedTrigger` is not in the target; a reflection
+      // opened from inside the session is linked too, but it is not the origin and its transcript must not draft
+      // the invitation (review services IW-1, work-k5fk.34).
       const originInnerThoughts = await prisma.reflection.findFirst({
-        where: { linkedSessionId: sessionId, userId: user.id },
+        where: { linkedSessionId: sessionId, userId: user.id, createdAt: { lt: session.createdAt } },
         orderBy: { createdAt: 'asc' },
         select: {
           summary: true,

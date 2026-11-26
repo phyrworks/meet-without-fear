@@ -177,21 +177,7 @@ export async function lastMoodIntensity(userId: string): Promise<number | null> 
   return row?.intensity ?? null;
 }
 
-/**
- * A mood set outside a session's own endpoint (PATCH /auth/me/mood). A
- * reading belongs to a participant (spec §1.1 mood_reading), so it is recorded
- * on the user's most recently active present participant in a live session.
- * Returns false when the user has none (nothing is stored).
- */
-export async function recordUserMood(userId: string, intensity: number): Promise<boolean> {
-  const participant = await prisma.participant.findFirst({
-    where: { userId, leftAt: null, session: { status: { in: ['CREATED', 'INVITED', 'ACTIVE'] } } },
-    orderBy: [{ readState: { lastActiveAt: { sort: 'desc', nulls: 'last' } } }, { joinedAt: 'desc' }],
-    select: { sessionId: true },
-  });
-  if (!participant) return false;
-  await prisma.moodReading.create({
-    data: { sessionId: participant.sessionId, userId, intensity },
-  });
-  return true;
-}
+// No account-level mood writer (review services LC-2 / IW-2, work-k5fk.34): a reading belongs to a participant
+// (spec §1.1 mood_reading), and the session-entry mood check records it for the session being entered (POST
+// /sessions/:id/emotions, the barometer). PATCH /auth/me/mood used to add a second reading into the user's most
+// recently active live session — another session, whose AI then read it as current intensity.

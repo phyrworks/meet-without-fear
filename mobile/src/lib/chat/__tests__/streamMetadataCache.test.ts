@@ -82,8 +82,21 @@ describe('streamMetadataCacheWrites', () => {
     expect(streamMetadataCacheWrites(SESSION, {} as StreamMetadata)).toEqual([]);
   });
 
-  it('writes nothing for the feel-heard check (no persisted fact; the stream trigger is the signal)', () => {
-    expect(streamMetadataCacheWrites(SESSION, { offerFeelHeardCheck: true } as StreamMetadata)).toEqual([]);
+  it('marks the feel-heard offer on the cached progress: session state and progress (work-k5fk.34)', () => {
+    const writes = streamMetadataCacheWrites(SESSION, { offerFeelHeardCheck: true } as StreamMetadata);
+    expect(serialize(writes.map((w) => w.queryKey))).toEqual(
+      serialize([sessionKeys.state(SESSION), stageKeys.progress(SESSION)])
+    );
+    const state = { session: { id: SESSION }, progress: { myProgress: { stage: 1, milestones: {} } } };
+    expect(writes[0].update(state)).toEqual({
+      session: { id: SESSION },
+      progress: { myProgress: { stage: 1, milestones: {}, feelHeardCheckOffered: true } },
+    });
+    expect(writes[1].update({ myProgress: { stage: 1 } })).toEqual({
+      myProgress: { stage: 1, feelHeardCheckOffered: true },
+    });
+    // Nothing cached yet: left alone (the refetch brings the persisted offer).
+    expect(writes[0].update(undefined)).toBeUndefined();
   });
 
   it('targets the empathy draft key that useEmpathyDraft reads', () => {
@@ -98,13 +111,15 @@ describe('streamMetadataCacheWrites', () => {
     });
   });
 
-  it('emits only the empathy draft write when the metadata also offers the feel-heard check', () => {
+  it('emits the feel-heard writes and the empathy draft write when the metadata carries both', () => {
     const writes = streamMetadataCacheWrites(SESSION, {
       offerFeelHeardCheck: true,
       proposedEmpathyStatement: 'text',
     } as StreamMetadata);
 
-    expect(serialize(writes.map((w) => w.queryKey))).toEqual(serialize([stageKeys.empathyDraft(SESSION)]));
+    expect(serialize(writes.map((w) => w.queryKey))).toEqual(
+      serialize([sessionKeys.state(SESSION), stageKeys.progress(SESSION), stageKeys.empathyDraft(SESSION)])
+    );
   });
 
   it('ignores an empty proposed statement', () => {

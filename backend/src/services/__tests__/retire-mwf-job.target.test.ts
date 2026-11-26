@@ -84,6 +84,8 @@ const WORKER_GRANTS = [
   'reminder:UPDATE(remind_at,status)',
   'session:DELETE',
   'session:SELECT(id,status,updated_at)',
+  // work-k5fk.34 (platform M1): realtime notifySessionMembers' touch, of the scoped session only (worker_touch)
+  'session:UPDATE(updated_at)',
   'session_closure:INSERT(check_in_at,closed_at,closed_by_user_id,kind,reason,session_id,summary)',
   'user_device:SELECT(last_seen_at,push_provider,push_token,user_id)',
   'user_device:UPDATE(push_provider,push_token)',

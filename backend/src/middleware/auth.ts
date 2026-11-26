@@ -19,6 +19,8 @@ import {
   NotFoundError,
   EmailNotVerifiedError,
   AccountLinkConflictError,
+  EmailNotAcceptedError,
+  getPgConstraintViolation,
 } from './errors';
 import { prisma, getAuthPrisma, getE2EToolingPrisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode, canonicalEmail, isUuidV7 } from '@meet-without-fear/shared';
@@ -257,6 +259,9 @@ function pgRaise(error: unknown): { code?: string; detail?: string } {
 
 /** app.create_user's refusal: the email belongs to another account (DETAIL: the holder's id). */
 const EMAIL_HELD_ELSEWHERE = 'MWF01';
+/** The `email` domain's refusals of a canonical address (its CHECKs, and NOT NULL). */
+const CHECK_VIOLATION = '23514';
+const NOT_NULL_VIOLATION = '23502';
 
 /**
  * Create the user and its Clerk identity for a first-seen subject, through
@@ -277,6 +282,17 @@ async function createFirstLoginUser(
     return rows[0].id;
   } catch (error) {
     const { code, detail } = pgRaise(error);
+    if (code === CHECK_VIOLATION || code === NOT_NULL_VIOLATION) {
+      // The verified email fails the `email` domain (length, format, shape): the account cannot be created with it.
+      // The constraint's name is for support; never the email (platform L3, work-k5fk.34).
+      logger.warn('[Auth] auth.email_not_accepted: first login refused, the email fails a database constraint', {
+        event: 'auth.email_not_accepted',
+        incomingClerkUserId: clerkUserId,
+        sqlState: code,
+        constraint: getPgConstraintViolation(error)?.constraint ?? null,
+      });
+      throw new EmailNotAcceptedError();
+    }
     if (code !== EMAIL_HELD_ELSEWHERE) throw error;
     // The holder's id is for the support log only: it decides nothing.
     logIdentityConflict(clerkUserId, detail ?? null);
@@ -442,7 +458,10 @@ export function getUser(req: Request): AuthUser {
 export async function requireSessionAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
   const user = req.user;
   if (!user) {
-    throw new UnauthorizedError();
+    // To next(), not thrown: Express 4 does not catch an async middleware's rejection, so a throw here left the
+    // request hanging (platform L6, work-k5fk.34).
+    next(new UnauthorizedError());
+    return;
   }
 
   // Support both :id and :sessionId (prefer :id for consistency)

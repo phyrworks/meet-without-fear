@@ -11,7 +11,13 @@ const calls: string[] = [];
 const sqlOf = (strings: TemplateStringsArray, values: unknown[]) =>
   strings.reduce((acc, s, i) => acc + s + (i < values.length ? `{${String(values[i])}}` : ''), '');
 
+// The old session's status as the transaction reads it under its lock (work-k5fk.34).
+let oldStatus = 'ACTIVE';
 const tx = {
+  $queryRaw: jest.fn(() => {
+    calls.push('lock old session');
+    return Promise.resolve([{ status: oldStatus }]);
+  }),
   $executeRaw: jest.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
     calls.push(`sql:${sqlOf(strings, values)}`);
     return Promise.resolve(1);
@@ -73,6 +79,7 @@ describe('createSession with a live session already shared with that person', ()
   beforeEach(() => {
     jest.clearAllMocks();
     calls.length = 0;
+    oldStatus = 'ACTIVE';
     findLiveSessionWith.mockResolvedValue(LIVE);
   });
 
@@ -91,12 +98,23 @@ describe('createSession with a live session already shared with that person', ()
     expect(body.data.endedSessionId).toBe('old-session');
     expect($transaction).toHaveBeenCalledTimes(1);
     // The end comes first: the new session is written only after the old one is ABANDONED.
-    expect(calls[0]).toMatch(/app\.session_set_status\(\{old-session\}::uuid, 'ABANDONED'/);
+    expect(calls[0]).toBe('lock old session');
+    expect(calls[1]).toMatch(/app\.session_set_status\(\{old-session\}::uuid, 'ABANDONED'/);
     expect(calls.indexOf('session.create')).toBeGreaterThan(0);
     // After commit, the old session's other side hears that it ended (content-free).
     expect(publishSessionEvent).toHaveBeenCalledWith('old-session', 'session.abandoned', {
       reason: 'partner_started_new_session',
     });
+  });
+
+  it('forceCreate when the old session ended meanwhile (RESOLVED): creates the new one, ends nothing (work-k5fk.34)', async () => {
+    oldStatus = 'RESOLVED';
+    const { status, body } = await call({ personId: 'partner', forceCreate: true });
+    expect(status).toBe(201);
+    expect(body.data.session.id).toBe('new-session');
+    expect(body.data.endedSessionId).toBeUndefined();
+    expect(calls.some(c => c.includes('session_set_status'))).toBe(false);
+    expect(publishSessionEvent).not.toHaveBeenCalled();
   });
 
   it('forceCreate with no live session: just creates (nothing to end)', async () => {

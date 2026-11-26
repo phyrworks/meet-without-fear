@@ -157,7 +157,7 @@ export async function getStage4OpenNeedsForPrompt(
         select: { proposalId: true },
       }),
       prisma.needDisposition.findMany({
-        where: { sessionId, userId: me.userId, status: 'DECLINED' },
+        where: { sessionId, userId: me.userId, declinedAt: { not: null } },
         select: { needId: true },
       }),
     ]);

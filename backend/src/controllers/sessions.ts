@@ -281,7 +281,15 @@ export async function getProgress(req: Request, res: Response): Promise<void> {
     const myState = states.get(participant);
     const partnerState = partnerSeat ? states.get(partnerSeat) : undefined;
 
-    const myProgress = progressDTO(myState, { milestones: 'own' });
+    // The AI's unanswered feel-heard offer is the caller's own read state (work-k5fk.34).
+    const readState = await prisma.conversationReadState.findUnique({
+      where: { sessionId_userId: { sessionId, userId: participant.userId } },
+      select: { feelHeardOfferedAt: true },
+    });
+    const myProgress = {
+      ...progressDTO(myState, { milestones: 'own' }),
+      feelHeardCheckOffered: readState?.feelHeardOfferedAt != null,
+    };
     const partnerProgress = progressDTO(partnerState, { milestones: 'partner' });
 
     successResponse(res, {

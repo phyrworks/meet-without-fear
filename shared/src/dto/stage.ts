@@ -21,6 +21,12 @@ export interface StageProgressDetailDTO {
   startedAt: string;
   completedAt: string | null;
   milestones: MilestoneMap;
+  /**
+   * The AI offered the Stage 1 "Do you feel heard?" check and the caller has not answered it yet
+   * (conversation_read_state.feel_heard_offered_at; the caller's own, never the partner's). Lets the card
+   * survive a reload or another device (owner decision 2026-11-25, work-k5fk.34).
+   */
+  feelHeardCheckOffered?: boolean;
 }
 
 /**

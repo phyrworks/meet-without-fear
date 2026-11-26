@@ -2226,6 +2226,10 @@ CREATE TRIGGER t_session_scope_worker BEFORE UPDATE ON public.proposal
 -- cycle's next round); its UPDATEs stay cross-session (open-due, step 20's exemptions).
 CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.follow_up
   FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+-- review platform M1 / security S3 (work-k5fk.34): realtime notifySessionMembers' touch of session.updated_at, the
+-- worker's one session UPDATE, is of the one session its task is scoped to.
+CREATE TRIGGER t_session_scope_worker BEFORE UPDATE ON public.session
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('id', 'worker_access');
 
 -- T-session-purge (review F6): the worker's DELETE of a session (session-retention's purge, a cascade of every
 -- session-scoped row) removes only an ARCHIVED session. Exempt, as t_session_scope: any current_user that is not a
@@ -2836,6 +2840,56 @@ CREATE TRIGGER t_live_session_pair_leave AFTER UPDATE OF left_at ON public.parti
   EXECUTE FUNCTION app.t_live_session_pair_leave();
 COMMENT ON TRIGGER t_live_session_pair_leave ON public.participant IS 'A leaver releases their pairs (work-k5fk.18).';
 
+-- T-session-closure-closed (review services#4, work-k5fk.34): a session's closure IS its `closed` milestone for every
+-- present human, in the same transaction — the closure is never left committed with its participants at stage 4
+-- (the stage shim's stage-4 terminal), as it was when stage4-store reached `closed` after the closure committed.
+-- `closed` is session-scoped (a fact of the whole session); app.reach_milestone stays the request path's writer of
+-- it (sessions.ts resolve). The first instant stands.
+CREATE FUNCTION app.t_session_closure_closed() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    INSERT INTO public.participant_milestone (session_id, user_id, milestone_key, reached_at)
+    SELECT p.session_id, p.user_id, 'closed', NEW.closed_at
+    FROM public.participant p
+    WHERE p.session_id = NEW.session_id AND p.kind = 'human' AND p.left_at IS NULL
+    ON CONFLICT (session_id, user_id, milestone_key) DO NOTHING;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_session_closure_closed() IS 'Trigger (review services#4, work-k5fk.34): a session_closure row reaches `closed` for every present human of its session, at closed_at, in the closure''s own transaction.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_closure_closed() FROM PUBLIC;
+CREATE TRIGGER t_session_closure_closed AFTER INSERT ON public.session_closure
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_closure_closed();
+COMMENT ON TRIGGER t_session_closure_closed ON public.session_closure IS 'The closure reaches `closed` for every present human (review services#4).';
+
+-- T-milestone-instant (review B1 leftover, work-k5fk.34): the request path's own INSERT of a self-assertable
+-- milestone (milestone-writer reachMilestone: compact_signed, feel_heard, needs_confirmed, choices_shared) has its
+-- reached_at clamped as app.reach_milestone clamps a system key's (schema S7): at most ten minutes back, never ahead.
+-- The app no longer chooses when a participant reached a milestone. Invoker rights: it rewrites NEW only. Exempt: a
+-- current_user that is not a member of app_access (the definer's own INSERT, already clamped; the migrator), and the
+-- database owner / superusers.
+CREATE FUNCTION app.t_milestone_instant() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
+       AND NOT pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
+      NEW.reached_at := least(greatest(NEW.reached_at, CURRENT_TIMESTAMP - interval '10 minutes'), CURRENT_TIMESTAMP);
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_milestone_instant() IS 'Trigger (review B1 leftover, work-k5fk.34): an app_access INSERT of a milestone has reached_at clamped to the last ten minutes, never ahead — as app.reach_milestone''s (schema S7).';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_milestone_instant() FROM PUBLIC;
+CREATE TRIGGER t_milestone_instant BEFORE INSERT ON public.participant_milestone
+  FOR EACH ROW EXECUTE FUNCTION app.t_milestone_instant();
+COMMENT ON TRIGGER t_milestone_instant ON public.participant_milestone IS 'The request path''s instant of a self-assertable milestone is clamped (review B1 leftover).';
+
 -- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_definer;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_definer;
@@ -2847,6 +2901,7 @@ ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_live_session_pair_leave() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_participant_human_limit() OWNER TO mwf_definer;
 ALTER FUNCTION app.t_invitation_human_limit() OWNER TO mwf_definer;
+ALTER FUNCTION app.t_session_closure_closed() OWNER TO mwf_definer;
 REVOKE CREATE ON SCHEMA app FROM mwf_definer;
 
 -- ---------------------------------------------------------------------------
@@ -3149,7 +3204,8 @@ SELECT s.id AS session_id,
        coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)::uuid[]
                  FROM need_share ns
                  WHERE ns.session_id = s.id AND ns.revoked_at IS NULL
-                   AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN')
+                   AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN'
+                                  AND d.declined_at IS NULL)
                         OR NOT EXISTS (SELECT 1 FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
                                        WHERE pn.need_id = ns.need_id))),
                 '{}') AS open_need_ids
@@ -3658,6 +3714,9 @@ COMMENT ON POLICY app_update ON session IS 'A participant''s session: the topic 
 CREATE POLICY ai_session ON session TO ai_access
   USING (id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member())) WITH CHECK (id = (SELECT app.session_scope()) AND (SELECT app.scope_actor_is_member()));
 CREATE POLICY worker_read ON session FOR SELECT TO worker_access USING (true);
+CREATE POLICY worker_touch ON session FOR UPDATE TO worker_access
+  USING (id = (SELECT app.session_scope()) AND status <> 'ARCHIVED') WITH CHECK (id = (SELECT app.session_scope()));
+COMMENT ON POLICY worker_touch ON session IS 'The worker touches updated_at (its one UPDATE column) of the session its task is scoped to, never an ARCHIVED one (that would push back its purge): realtime notifySessionMembers, whose events a job or a non-member actor raises (review platform M1 / security S3, work-k5fk.34).';
 CREATE POLICY worker_purge ON session FOR DELETE TO worker_access
   USING (status = 'ARCHIVED' AND updated_at < CURRENT_TIMESTAMP - interval '90 days');
 COMMENT ON POLICY worker_purge ON session IS 'The worker hard-deletes only a session ARCHIVED and untouched for the purge window (90 days: session-retention.ts ARCHIVED_SESSION_PURGE_MS, by updated_at, which the archive''s status write stamps — the call site''s own filter) — never one it archived in the same transaction (work-k5fk.10.29 R3; t_session_purge refuses a non-ARCHIVED one).';

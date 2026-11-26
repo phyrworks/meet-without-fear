@@ -375,7 +375,17 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       // The pair rule's one live session ends first: ABANDONED through app.session_set_status, its sole writer (the
       // caller is a current participant of it; ACTIVE -> ABANDONED). t_live_session_pair_end releases the pair.
       if (endingSessionId) {
-        await tx.$executeRaw`SELECT app.session_set_status(${endingSessionId}::uuid, 'ABANDONED'::session_status)`;
+        // Read again under the session's lock: between the pre-check and here the old session may have ended
+        // (RESOLVED by a close, ABANDONED by the partner), which releases the pair already — then there is nothing
+        // to end, and the new session is created (review B4 leftover, work-k5fk.34; was a 500 on the refused
+        // RESOLVED -> ABANDONED move).
+        const [old] = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT status::text AS status FROM session WHERE id = ${endingSessionId}::uuid FOR NO KEY UPDATE`;
+        if (old && ['CREATED', 'INVITED', 'ACTIVE'].includes(old.status)) {
+          await tx.$executeRaw`SELECT app.session_set_status(${endingSessionId}::uuid, 'ABANDONED'::session_status)`;
+        } else {
+          endingSessionId = null;
+        }
       }
       const sess = await tx.session.create({
         data: { status: 'CREATED' },

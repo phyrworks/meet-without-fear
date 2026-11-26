@@ -404,6 +404,28 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     ).toBeUndefined();
   });
 
+  it('forceCreate when the old session was RESOLVED between the pre-check and the transaction: 201, nothing ended (work-k5fk.34)', async () => {
+    const s = await invite('Pia');
+    const pia = person('pia');
+    expect((await http(pia, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
+    // The pre-check saw it live; by the transaction it is RESOLVED (a close in between), which released the pair.
+    const contacts = await import('../contacts');
+    const spy = jest
+      .spyOn(contacts, 'findLiveSessionWith')
+      .mockResolvedValueOnce({ id: s.sessionId, status: 'ACTIVE', updatedAt: new Date() });
+    await run.sql(`UPDATE session SET status = 'RESOLVED', resolved_at = now() WHERE id = $1`, [s.sessionId]);
+    try {
+      const forced = await http(ada, 'post', '/sessions', { personId: pia.id, forceCreate: true });
+      expect(forced.status).toBe(201);
+      expect(forced.body.data.endedSessionId).toBeUndefined();
+      expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [s.sessionId])).toEqual([
+        { status: 'RESOLVED' },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('review F2: before the invitee joins, what the inviter calls them is the invite name (not "Partner")', async () => {
     const s = await invite('Zed');
     const contacts = await import('../contacts');

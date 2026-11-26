@@ -69,6 +69,8 @@ export interface SessionStateResponse {
       completedAt: string | null;
       /** Every milestone the caller has reached (key → reachedAt ISO). */
       milestones: MilestoneMap;
+      /** See StageProgressDetailDTO.feelHeardCheckOffered (the caller's own; work-k5fk.34). */
+      feelHeardCheckOffered?: boolean;
     };
     partnerProgress: {
       stage: number;

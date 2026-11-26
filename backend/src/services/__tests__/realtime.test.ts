@@ -32,13 +32,12 @@ jest.mock('../push', () => ({
 // WASM runtime then loads after jest has torn the environment down and jest
 // exits 1 with every test green (work-b8jx). This suite is about Ably, not the
 // database: stub the client so nothing outlives the test.
-jest.mock('../../lib/prisma', () => ({
-  prisma: {
-    session: {
-      update: jest.fn().mockResolvedValue({ updatedAt: new Date(0), participants: [] }),
-    },
-  },
-}));
+jest.mock('../../lib/prisma', () => {
+  // notifySessionMembers runs on the worker connection (work-k5fk.34): a transaction that touches and reads members.
+  const tx = { $executeRaw: jest.fn().mockResolvedValue(1), $queryRaw: jest.fn().mockResolvedValue([]) };
+  const worker = { $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)) };
+  return { prisma: {}, getWorkerPrisma: () => worker };
+});
 
 // Mock Ably
 const mockPublish = jest.fn().mockResolvedValue(undefined);

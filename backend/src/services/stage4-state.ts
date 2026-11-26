@@ -10,7 +10,7 @@
  *   need ids        need_share ids (= the need's id)
  *   walkthrough     need_disposition (covered / skipped / current); the phase
  *                   follows the current need's owner
- *   declinations    need_disposition DECLINED
+ *   declinations    need_disposition.declined_at
  *   "submitted"     participant_milestone choices_shared
  *   partner choices only once the partner has reached choices_shared AND the
  *                   viewer has (unchanged rule: both shared)
@@ -97,10 +97,14 @@ function sourceLabel(owner: string | null, me: string, partner: string | null): 
   return 'UNKNOWN';
 }
 
+/**
+ * Who a proposal came from. An AI suggestion is the AI's whoever asked for it: every proposal has a creator on the
+ * target (the participant whose request or chat produced it; review services#1), so the source decides first.
+ */
 function proposalSourceLabel(proposal: ProposalRow, me: string, partner: string | null): Stage4ProposalSourceLabel {
+  if (proposal.source === 'AI_SUGGESTED') return 'AI';
   if (proposal.createdByUserId === me) return 'YOU';
   if (proposal.createdByUserId && proposal.createdByUserId === partner) return 'PARTNER';
-  if (proposal.source === 'AI_SUGGESTED') return 'AI';
   return 'UNKNOWN';
 }
 
@@ -542,7 +546,7 @@ export function buildStage4StateFromView(view: Stage4View): GetStage4StateRespon
   const cards = active.map(p => buildProposalCard(p, me, partner, choices, rows, reveal));
   const unaddressed = buildUnaddressedNeeds(rows, me, partner);
   const agreementDTOs = agreements.map(a => toAgreementDTO(a, me, partner));
-  const declined = new Set(view.dispositions.filter(d => d.status === 'DECLINED').map(d => d.needId));
+  const declined = new Set(view.dispositions.filter(d => d.declinedAt !== null).map(d => d.needId));
   const closureItems: ClosureItems = items;
   const individualIds = new Set(closureItems.individualCommitmentIds);
   const openIds = new Set(closureItems.openNeedIds);

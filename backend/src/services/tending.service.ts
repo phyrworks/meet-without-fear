@@ -74,6 +74,7 @@ import { logger } from '../lib/logger';
 import { publishSessionEvent, publishUserEvent } from './realtime';
 import { createFacilitatorMessage } from './message-store';
 import { resolveParticipant, type Seat } from './participant-resolver';
+import { loadSessionPartner } from './contacts';
 import { loadAgreements, loadClosure, loadClosureItems, loadProposals, loadStage4Needs } from './stage4-store';
 
 // ============================================================================
@@ -1500,10 +1501,22 @@ export async function submitTendingCheckin(args: {
  * NEW_PROCESS: the current session RESOLVED, a new CREATED session linked
  * back to it (previous_session_id) with the caller as its first participant,
  * and the hand-off summary as a SYSTEM message in their MAIN conversation (the AI's, scoped to the new session).
+ *
+ * The partner joins it the one way a human is seated on the target — by accepting an invitation (participant
+ * app_insert: nobody seats another human) — so the new session is created as createSession creates one: the
+ * caller's seat with its display name, MAIN conversation and read state, and a PENDING invitation named for the
+ * partner, which the caller shares from the session's Stage 0 (review services F5, work-k5fk.34). Base put both
+ * members in the new session at once through their shared relationship; the target has none.
  */
 async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): Promise<string> {
   // As the caller, a current participant of the session it resolves (work-k5fk.10.5: was the job's).
   await prisma.$executeRaw`SELECT app.session_set_status(${viewer.sessionId}::uuid, 'RESOLVED'::session_status)`;
+  // What the caller calls the partner (their own nickname, else the name the partner went by): the invite name.
+  const [me, partner] = await Promise.all([
+    prisma.user.findUnique({ where: { id: viewer.userId }, select: { name: true, firstName: true } }),
+    loadSessionPartner(viewer.sessionId, viewer.userId),
+  ]);
+  const inviteeName = partner ? partner.nickname || partner.firstName || partner.name || null : null;
   const { sessionId, conversationId } = await prisma.$transaction(async tx => {
     const session = await tx.session.create({
       data: {
@@ -1515,12 +1528,28 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
     });
     await tx.participant.create({
       // The caller starts the follow-up: its initiator (work-k5fk.2: no adder). The partner
-      // is linked by previous_session_id, not by a relationship row.
-      data: { sessionId: session.id, userId: viewer.userId, kind: 'human', addedByUserId: null },
+      // is linked by previous_session_id, not by a relationship row, and joins by the invitation below.
+      data: {
+        sessionId: session.id,
+        userId: viewer.userId,
+        kind: 'human',
+        addedByUserId: null,
+        displayName: me?.name || me?.firstName || null,
+      },
       select: { userId: true },
     });
     const conversation = await tx.conversation.create({
       data: { sessionId: session.id, userId: viewer.userId, kind: 'MAIN' },
+      select: { id: true },
+    });
+    await tx.conversationReadState.create({ data: { sessionId: session.id, userId: viewer.userId } });
+    await tx.invitation.create({
+      data: {
+        sessionId: session.id,
+        invitedByUserId: viewer.userId,
+        inviteeName,
+        expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      },
       select: { id: true },
     });
     return { sessionId: session.id, conversationId: conversation.id };
@@ -1678,139 +1707,11 @@ export async function processDueTendingReminders(
   return { delivered: reminderIds.length, reminderIds };
 }
 
-/**
- * Report the shared follow-ups whose coordination window has passed
- * (`v_follow_up_cycle` status TIMED_OUT is computed from response_deadline_at;
- * nothing is stored). Publishes one event per follow-up.
- */
-export async function resolveTimedOutTendingCoordinationCycles(
-  now = new Date(),
-): Promise<{ resolved: number; cycleIds: string[] }> {
-  const rows = await prisma.$queryRaw<
-    Array<{ follow_up_id: string; session_id: string; waiting_on: string[]; submitted: string[] }>
-  >`
-    SELECT c.follow_up_id, c.session_id,
-           ARRAY(SELECT p.user_id::text FROM participant p
-                 WHERE p.session_id = c.session_id AND p.user_id = ANY(c.waiting_on)
-                 ORDER BY p.joined_at, p.user_id) AS waiting_on,
-           ARRAY(SELECT p.user_id::text FROM participant p
-                 WHERE p.session_id = c.session_id AND p.user_id = ANY(c.submitted_user_ids)
-                 ORDER BY p.joined_at, p.user_id) AS submitted
-
-    FROM v_follow_up_cycle c JOIN follow_up f ON f.id = c.follow_up_id
-    WHERE f.scope = 'SHARED' AND f.status IN ('OPEN', 'PARTIAL') AND f.response_deadline_at <= ${now}`;
-  for (const r of rows) {
-    try {
-      await publishSessionEvent(r.session_id, 'notification.pending_action', {
-        kind: 'tending_coordination_timed_out',
-        coordinationCycleId: r.follow_up_id,
-        submittedUserIds: r.submitted,
-        missingUserIds: r.waiting_on,
-      });
-    } catch (error) {
-      logger.warn('[tending] Failed to publish coordination timeout event', { followUpId: r.follow_up_id, error });
-    }
-  }
-  return { resolved: rows.length, cycleIds: rows.map(r => r.follow_up_id) };
-}
-
-/**
- * Resolve shared follow-ups every present human has checked in on
- * (`v_follow_up_cycle` READY_TO_RESOLVE): the check-ins' choices decide
- * (extend together → the next round; full closure with nothing open →
- * COMPLETED; partial closure → COMPLETED, plus a next round unless both
- * closed it; anything else is held for a mediated prompt).
- */
-export async function resolveReadyTendingCoordinationCycles(
-  now = new Date(),
-): Promise<{ resolved: number; cycleIds: string[] }> {
-  const ready = await prisma.$queryRaw<Array<{ follow_up_id: string }>>`
-    SELECT c.follow_up_id FROM v_follow_up_cycle c JOIN follow_up f ON f.id = c.follow_up_id
-    WHERE c.status = 'READY_TO_RESOLVE' AND f.scope = 'SHARED' AND f.status IN ('OPEN', 'PARTIAL')`;
-  const cycleIds: string[] = [];
-  for (const { follow_up_id: id } of ready) {
-    const entry = (await prisma.followUp.findUnique({ where: { id }, select: FOLLOW_UP_SELECT })) as FollowUpRow;
-    const checkins = (
-      await prisma.followUpCheckin.findMany({
-        where: { followUpId: id },
-        select: { continueChoice: true, payload: true },
-      })
-    ).map(c => ({ continueChoice: c.continueChoice as ContinueChoice | null, payload: readPayload(c.payload) }));
-    const choices = checkins.map(c => c.continueChoice).filter((c): c is ContinueChoice => Boolean(c));
-    const every = (c: ContinueChoice) => choices.length > 0 && choices.every(x => x === c);
-    const failed = checkins.some(c =>
-      c.payload.entryOutcomes.some(
-        o =>
-          o.followThroughStatus === TendingFollowThroughStatus.DID_NOT_HAPPEN ||
-          o.helpfulnessStatus === TendingHelpfulnessStatus.DID_NOT_HELP ||
-          o.stillWorthTrying === false,
-      ),
-    );
-    const stillOpen = checkins.some(c =>
-      c.payload.needOutcomes.some(o =>
-        [
-          TendingNeedResolutionStatus.STILL_OPEN,
-          TendingNeedResolutionStatus.CHANGED,
-          TendingNeedResolutionStatus.NOT_SURE,
-        ].includes(o.resolutionStatus),
-      ),
-    );
-    const bothClosed =
-      checkins.length > 0 &&
-      checkins.every(c =>
-        c.payload.partialClosures.some(p => p.followUpId === id && p.resolution === PartialClosureResolution.RESOLVED),
-      );
-    let resultSummary: string;
-    let nextScheduledFor: Date | null = null;
-    if (every(ContinueChoice.EXTEND) && !(failed && stillOpen)) {
-      nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
-      await scheduleNextRoundAsJob(entry, nextScheduledFor, now);
-      resultSummary = `Both participants chose extension. Shared Tending continues until ${nextScheduledFor.toISOString()}.`;
-    } else if (every(ContinueChoice.FULL_CLOSURE) && !stillOpen) {
-      await setFollowUpStatusAsJob(id, 'COMPLETED', { completedAt: now });
-      // The worker's arm of session_set_status acts on one session: its app.session_scope (work-k5fk.10.5).
-      await withSessionScope(entry.sessionId, async () => {
-        await getWorkerPrisma()
-          .$executeRaw`SELECT app.session_set_status(${entry.sessionId}::uuid, 'RESOLVED'::session_status)`;
-      });
-      resultSummary =
-        'Both participants chose full closure and no submitted need remains open. Shared Tending is complete.';
-    } else if (
-      every(ContinueChoice.PARTIAL_CLOSURE) ||
-      (choices.includes(ContinueChoice.EXTEND) && choices.includes(ContinueChoice.PARTIAL_CLOSURE))
-    ) {
-      if (bothClosed) {
-        await setFollowUpStatusAsJob(id, 'COMPLETED', { completedAt: now });
-        resultSummary = 'Both participants closed this shared entry.';
-      } else {
-        nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
-        await scheduleNextRoundAsJob(entry, nextScheduledFor, now);
-        resultSummary = 'Not every participant closed this shared entry; it continues for another check-in.';
-      }
-    } else if (choices.includes(ContinueChoice.NEW_PROCESS)) {
-      resultSummary =
-        'At least one participant chose a new process. Partner-involving consent and mediated coordination are required before creating a linked shared session.';
-    } else if (choices.includes(ContinueChoice.ANOTHER_ROUND) || (failed && stillOpen)) {
-      resultSummary =
-        'At least one participant reported failed follow-through or a still-open need. Shared Tending should move to adjustment or strategy reopening instead of blind extension.';
-    } else {
-      resultSummary =
-        'Participants submitted mixed Tending choices. Shared entries remain held for a mediated next-step prompt.';
-    }
-    cycleIds.push(id);
-    try {
-      await publishSessionEvent(entry.sessionId, 'notification.pending_action', {
-        kind: 'tending_coordination_resolved',
-        coordinationCycleId: id,
-        resultSummary,
-        nextScheduledFor: nextScheduledFor?.toISOString() ?? null,
-      });
-    } catch (error) {
-      logger.warn('[tending] Failed to publish coordination resolved event', { followUpId: id, error });
-    }
-  }
-  return { resolved: cycleIds.length, cycleIds };
-}
+// The coordination resolvers (resolveTimedOut/ReadyTendingCoordinationCycles) were removed (review platform L5 /
+// services F12, work-k5fk.34): no job or route ever called them (as on base), they read through the app connection
+// with no identity (every row hidden by RLS), and they recorded no outcome, so a scheduled run would re-announce the
+// same follow-up forever. A shared follow-up both partners checked in on stays PARTIAL until a resolver is designed
+// (follow-up filed in the report).
 
 // Re-exported for prompt context (stream-turn-context's Tending helper).
 export { TendingBlockerCategory };

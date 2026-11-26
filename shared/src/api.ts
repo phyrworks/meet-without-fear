@@ -30,6 +30,8 @@ export enum ErrorCode {
   EMAIL_NOT_VERIFIED = 'EMAIL_NOT_VERIFIED',
   /** First login refused: the email already belongs to an account bound to another identity. */
   ACCOUNT_LINK_CONFLICT = 'ACCOUNT_LINK_CONFLICT',
+  /** First login refused: the verified email is not one an account can hold (the database's email domain). */
+  EMAIL_NOT_ACCEPTED = 'EMAIL_NOT_ACCEPTED',
 
   // Resource errors
   NOT_FOUND = 'NOT_FOUND',
@@ -63,6 +65,7 @@ export enum ApiErrorCode {
   FORBIDDEN = 'FORBIDDEN',
   EMAIL_NOT_VERIFIED = 'EMAIL_NOT_VERIFIED',
   ACCOUNT_LINK_CONFLICT = 'ACCOUNT_LINK_CONFLICT',
+  EMAIL_NOT_ACCEPTED = 'EMAIL_NOT_ACCEPTED',
   NOT_FOUND = 'NOT_FOUND',
   CONFLICT = 'CONFLICT',
   VALIDATION_ERROR = 'VALIDATION_ERROR',

@@ -2,9 +2,11 @@
  * The Stage 4 needs walkthrough on `need_disposition` (TS-11; spec §1.4).
  *
  * One row per (participant, shared need): COVERED / SKIPPED from the
- * walkthrough, DECLINED from "leave for now", OPEN for the need the
- * walkthrough is on (`is_current`; at most one per participant —
- * sql_disposition_one_current). The phase is not stored: it follows the
+ * walkthrough, OPEN for the need the walkthrough is on (`is_current`; at most
+ * one per participant — sql_disposition_one_current). "Leave for now" is the
+ * row's `declined_at`, a separate fact: the walkthrough writes only status and
+ * is_current, the decline only declined_at, so neither overwrites the other
+ * (review services#5, work-k5fk.34). The phase is not stored: it follows the
  * current need's owner (own → MY_NEEDS, partner's → PARTNER_NEEDS) and is
  * QUALITY_REVIEW when nothing remains. The first walkthrough write records the
  * participant's `repair_walkthrough_started` milestone (a system key: job).
@@ -110,27 +112,29 @@ export async function advanceWalkthrough(args: {
   return { state: buildStage4StateFromView(await loadStage4View(args.sessionId, args.userId)), phase, currentNeedId };
 }
 
-/** "Leave for now": the participant declines to address a shared need. */
+/** "Leave for now": the participant declines to address a shared need (its walkthrough status is untouched). */
 export async function declineNeed(seat: Seat, needId: string): Promise<void> {
   const key = { sessionId: seat.sessionId, userId: seat.userId, needId };
+  const at = new Date();
   await prisma.needDisposition.upsert({
     where: { sessionId_userId_needId: key },
-    create: { ...key, status: 'DECLINED' },
-    update: { status: 'DECLINED' },
+    create: { ...key, declinedAt: at },
+    update: { declinedAt: at },
   });
 }
 
-/** Remove a "leave for now": the row goes, unless it is the walkthrough's current need (then OPEN). */
+/**
+ * Remove a "leave for now" (its walkthrough status is untouched). A row that only the decline wrote — the default
+ * OPEN status, not the walkthrough's current need — goes, so no walkthrough disposition is left that the participant
+ * never made.
+ */
 export async function undeclineNeed(seat: Seat, needId: string): Promise<void> {
   const key = { sessionId: seat.sessionId, userId: seat.userId, needId };
   const row = await prisma.needDisposition.findUnique({ where: { sessionId_userId_needId: key } });
-  if (!row || row.status !== 'DECLINED') return;
-  if (row.isCurrent) {
-    await prisma.needDisposition.update({
-      where: { sessionId_userId_needId: key },
-      data: { status: 'OPEN' },
-    });
-  } else {
+  if (!row || row.declinedAt === null) return;
+  if (row.status === 'OPEN' && !row.isCurrent) {
     await prisma.needDisposition.delete({ where: { sessionId_userId_needId: key } });
+  } else {
+    await prisma.needDisposition.update({ where: { sessionId_userId_needId: key }, data: { declinedAt: null } });
   }
 }

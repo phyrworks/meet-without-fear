@@ -236,9 +236,20 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
     metadata,
   } = params;
 
-  // `feelHeardCheckOffered` (an AI hint recorded as a gate) is dropped in the
-  // target (plan §3 step 7); `metadata.offerFeelHeardCheck` still rides the
-  // stream to the client, nothing is persisted for it (TS-9).
+  // The AI's "Do you feel heard?" offer is kept as a fact of the participant's own read state, so the card survives a
+  // reload or another device until they answer it (owner decision 2026-11-25, review clients C5, work-k5fk.34; base
+  // persisted gatesSatisfied.feelHeardCheckOffered). Private to them (conversation_read_state app_own); cleared by
+  // POST /sessions/:id/feel-heard. The first offer's instant stands.
+  if (currentStage === 1 && metadata.offerFeelHeardCheck) {
+    try {
+      await prisma.conversationReadState.updateMany({
+        where: { sessionId: participant.sessionId, userId: participant.userId, feelHeardOfferedAt: null },
+        data: { feelHeardOfferedAt: new Date() },
+      });
+    } catch (err) {
+      logger.error(`[sendMessageStream:${requestId}] Failed to persist the feel-heard offer:`, err);
+    }
+  }
 
   // Save topic frame (Stage 0 / invitation phase) - only if not already confirmed
   if ((currentStage === 0 || isInvitationPhase) && metadata.topicFrame) {

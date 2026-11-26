@@ -13,7 +13,7 @@
  */
 
 import { Request, Response } from 'express';
-import { requireAuth, optionalAuth, getUser, verifiedPrimaryEmail, toAuthUser } from '../auth';
+import { requireAuth, optionalAuth, getUser, verifiedPrimaryEmail, toAuthUser, requireSessionAccess } from '../auth';
 import { UnauthorizedError } from '../errors';
 
 // Mock Prisma
@@ -281,7 +281,15 @@ describe('Auth Middleware', () => {
     );
   });
 
-  describe('requireSessionAccess', () => {});
+  describe('requireSessionAccess', () => {
+    it('with no authenticated user: passes UnauthorizedError to next, never rejects (platform L6, work-k5fk.34)', async () => {
+      const req = { params: { id: 'session-1' } } as unknown as Request;
+      const { res } = createMockResponse();
+      const next = jest.fn();
+      await expect(requireSessionAccess(req, res as Response, next)).resolves.toBeUndefined();
+      expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
+    });
+  });
 });
 
 describe('verifiedPrimaryEmail (work-bp5m, ported from work-jv9y)', () => {

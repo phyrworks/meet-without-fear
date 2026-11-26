@@ -310,6 +310,26 @@ describeTarget('auth middleware on the target user / user_identity tables', () =
     expect(await identityOf('user_ts12Kept')).toEqual([{ user_id: u.id }]);
   });
 
+  it('a verified email the email domain refuses (too long) is 403 EMAIL_NOT_ACCEPTED, logged with its constraint, no row (platform L3, work-k5fk.34)', async () => {
+    const long = `${'a'.repeat(250)}@example.test`;
+    const warn = jest.spyOn(logger, 'warn');
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12TooLong' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({ primaryEmailAddressId: 'idn_l', emailAddresses: [verified('idn_l', long)] }),
+    );
+
+    const res = await me();
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('EMAIL_NOT_ACCEPTED');
+    const logged = warn.mock.calls.find(c => JSON.stringify(c).includes('auth.email_not_accepted')) as unknown[];
+    const fields = logged?.[1] as { event?: string; sqlState?: string; constraint?: string | null } | undefined;
+    expect(fields).toMatchObject({ event: 'auth.email_not_accepted', sqlState: '23514' });
+    expect(fields?.constraint).toBeTruthy();
+    expect(JSON.stringify(logged)).not.toContain(long);
+    expect(await identityOf('user_ts12TooLong')).toEqual([]);
+  });
+
   it('an unknown user whose Clerk profile lookup fails is refused; no row is written', async () => {
     mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Unknown' });
     mockGetUser.mockRejectedValue(Object.assign(new Error('rate limited'), { status: 429 }));

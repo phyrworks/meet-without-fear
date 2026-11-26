@@ -45,7 +45,6 @@ import {
   deviceSummary,
   lastMoodIntensity,
   readPreferences,
-  recordUserMood,
   registerPushToken,
   setBiometric,
   updatePreferences,
@@ -461,7 +460,7 @@ interface UpdateMoodResponse {
 }
 
 export const updateMood = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const user = getUser(req);
+  getUser(req); // authenticated (requireAuth); nothing of the user is written
 
   // Validate intensity
   const { intensity } = req.body;
@@ -471,8 +470,9 @@ export const updateMood = asyncHandler(async (req: Request, res: Response): Prom
     });
   }
 
-  // A mood reading on the user's live participant (the last mood is the latest reading)
-  await recordUserMood(user.id, intensity);
+  // Nothing is stored (review services LC-2, work-k5fk.34): the last mood is the user's latest reading, and the
+  // session-entry mood check records that reading for the session being entered (POST /sessions/:id/emotions), which
+  // mobile sends with this call. Writing it here put a second reading into another live session.
 
   const response: ApiResponse<UpdateMoodResponse> = {
     success: true,

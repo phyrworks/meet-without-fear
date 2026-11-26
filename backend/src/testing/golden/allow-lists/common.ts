@@ -57,6 +57,17 @@ export const MILESTONE_DTO_RULES: AllowRule[] = [
   },
   {
     kind: 'addedKeys',
+    // The caller's own progress only: the partner's never carries it.
+    at: ['steps.*.body.data.myProgress', 'steps.*.body.data.progress.myProgress'],
+    keys: ['feelHeardCheckOffered'],
+    why:
+      'work-k5fk.34 (owner decision 2026-11-25, review clients C5): the AI\'s unanswered "Do you feel heard?" offer, ' +
+      "persisted again (conversation_read_state.feel_heard_offered_at, the caller's own row) so the card survives a " +
+      'reload — base kept it as gatesSatisfied.feelHeardCheckOffered, inside the gatesSatisfied this list drops. ' +
+      'Asserted by feel-heard-offer.target.test.ts.',
+  },
+  {
+    kind: 'addedKeys',
     at: PROGRESS_TOP_AT,
     keys: ['witnessStartedAt'],
     why:
