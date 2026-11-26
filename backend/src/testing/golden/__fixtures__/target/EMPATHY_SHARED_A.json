@@ -2,15 +2,15 @@
   "stage": "EMPATHY_SHARED_A",
   "database": "mwf_tfx_empathy_shared_a",
   "seeded": {
-    "sessionId": "01a21474-ed12-7ee6-ad90-8f934cef8d89",
-    "invitationId": "01a21474-ed17-7890-a2f9-6d8a35a2bb5e",
+    "sessionId": "01a21587-24e0-7e37-a348-72023cbe91aa",
+    "invitationId": "01a21587-24e5-773e-b280-28a13a6a71dd",
     "userA": {
-      "id": "01a21474-ed0e-7c9d-a457-e80e7de43a9d",
+      "id": "01a21587-24dd-7022-9fa1-2d099d39cf18",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a21474-ed11-70d7-87d9-5e43b967104a",
+      "id": "01a21587-24de-7d3b-9b1a-262eddc591b6",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -83,5 +83,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-25T20:45:36.981Z"
+  "builtAt": "2026-11-26T01:45:08.125Z"
 }

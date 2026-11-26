@@ -251,7 +251,7 @@ proposal_revision app_insert FOR INSERT TO app_access USING (-) CHECK ((((actor_
   WHERE (((p.id)::uuid = (proposal_revision.proposal_id)::uuid) AND (((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)) OR (p.kind = 'SHARED_PROPOSAL'::proposal_kind)))))))
 proposal_revision app_select FOR SELECT TO app_access USING ((app.is_member((session_id)::uuid) AND (EXISTS ( SELECT 1
    FROM proposal p
-  WHERE ((p.id)::uuid = (proposal_revision.proposal_id)::uuid))))) CHECK (-)
+  WHERE (((p.id)::uuid = (proposal_revision.proposal_id)::uuid) AND ((p.kind = 'SHARED_PROPOSAL'::proposal_kind) OR ((p.created_by_user_id)::uuid = ( SELECT app.current_user_id() AS current_user_id)))))))) CHECK (-)
 proposal_revision diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 proposal_revision worker_session FOR ALL TO worker_access USING (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope))) CHECK (((session_id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 reconciler_guidance [rls true, force true]
