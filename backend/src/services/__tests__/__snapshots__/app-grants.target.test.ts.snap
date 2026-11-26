@@ -299,6 +299,7 @@ session diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
 session ops_read FOR SELECT TO ops_access USING (true) CHECK (-)
 session worker_purge FOR DELETE TO worker_access USING (((status = 'ARCHIVED'::session_status) AND ((updated_at)::timestamp with time zone < (CURRENT_TIMESTAMP - '90 days'::interval)))) CHECK (-)
 session worker_read FOR SELECT TO worker_access USING (true) CHECK (-)
+session worker_touch FOR UPDATE TO worker_access USING ((((id)::uuid = ( SELECT app.session_scope() AS session_scope)) AND (status <> 'ARCHIVED'::session_status))) CHECK (((id)::uuid = ( SELECT app.session_scope() AS session_scope)))
 session_closure [rls true, force true]
 session_closure app_select FOR SELECT TO app_access USING (app.is_member((session_id)::uuid)) CHECK (-)
 session_closure diag_read FOR SELECT TO diag_access USING (true) CHECK (-)
@@ -447,6 +448,7 @@ column public.session SELECT: id, status, topic_frame, topic_frame_confirmed_at,
 column public.session SELECT: id, status, updated_at (worker_access)
 column public.session UPDATE: status, resolved_at, archived_at, archived_by_user_id (mwf_definer)
 column public.session UPDATE: updated_at (ai_access)
+column public.session UPDATE: updated_at (worker_access)
 column public.session_closure INSERT: session_id, kind, reason, summary, closed_by_user_id, check_in_at, closed_at (worker_access)
 column public.user INSERT: email, first_name, last_name (mwf_definer)
 column public.user SELECT: id, kind, email, deleted_at, name (ops_access)
@@ -563,6 +565,7 @@ routine app.t_message_app_insert(): EXECUTE (mwf_migrator)
 routine app.t_message_given_seq(): EXECUTE (mwf_definer)
 routine app.t_message_immutable(): EXECUTE (mwf_migrator)
 routine app.t_message_seq(): EXECUTE (mwf_definer)
+routine app.t_milestone_instant(): EXECUTE (mwf_migrator)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_definer)
 routine app.t_participant_cardinality(): EXECUTE (mwf_definer)
@@ -571,6 +574,7 @@ routine app.t_proposal_app_moves(): EXECUTE (mwf_migrator)
 routine app.t_reflection_unlink(): EXECUTE (mwf_migrator)
 routine app.t_result_live_attempt(): EXECUTE (mwf_definer)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
+routine app.t_session_closure_closed(): EXECUTE (mwf_definer)
 routine app.t_session_link_moves(): EXECUTE (mwf_migrator)
 routine app.t_session_purge(): EXECUTE (mwf_migrator)
 routine app.t_session_scope(): EXECUTE (mwf_migrator)
@@ -742,6 +746,7 @@ routine owner app.t_message_app_insert(): mwf_migrator
 routine owner app.t_message_given_seq(): mwf_definer
 routine owner app.t_message_immutable(): mwf_migrator
 routine owner app.t_message_seq(): mwf_definer
+routine owner app.t_milestone_instant(): mwf_migrator
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_definer
 routine owner app.t_participant_cardinality(): mwf_definer
@@ -750,6 +755,7 @@ routine owner app.t_proposal_app_moves(): mwf_migrator
 routine owner app.t_reflection_unlink(): mwf_migrator
 routine owner app.t_result_live_attempt(): mwf_definer
 routine owner app.t_session_cardinality(): mwf_migrator
+routine owner app.t_session_closure_closed(): mwf_definer
 routine owner app.t_session_link_moves(): mwf_migrator
 routine owner app.t_session_purge(): mwf_migrator
 routine owner app.t_session_scope(): mwf_migrator
@@ -766,7 +772,7 @@ column public.context_share_offer UPDATE: status, suggested_content, shared_cont
 column public.conversation INSERT: session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, next_seq, created_at, updated_at (app_access)
 column public.conversation UPDATE: status, resolved_at, updated_at (app_access)
 column public.conversation_read_state INSERT: session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, created_at, updated_at (app_access)
-column public.conversation_read_state UPDATE: last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, updated_at (app_access)
+column public.conversation_read_state UPDATE: last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, feel_heard_offered_at, updated_at (app_access)
 column public.draft INSERT: session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, content, ready_to_share, version, reopened_at (app_access)
 column public.draft UPDATE: content, ready_to_share, version, reopened_at (app_access)
 column public.empathy_attempt INSERT: session_id, author_user_id, subject_user_id, round, content, status, status_version, submitted_at, delivery_status, created_at, updated_at (app_access)
@@ -785,8 +791,8 @@ column public.message INSERT: conversation_id, session_id, sender_user_id, role,
 column public.mood_reading INSERT: session_id, user_id, intensity, context, recorded_at, created_at (app_access)
 column public.need INSERT: session_id, user_id, label, category, evidence, ai_confidence, confirmed_at, created_at, updated_at (app_access)
 column public.need UPDATE: label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at (app_access)
-column public.need_disposition INSERT: need_id, session_id, user_id, status, is_current, created_at, updated_at (app_access)
-column public.need_disposition UPDATE: status, is_current, updated_at (app_access)
+column public.need_disposition INSERT: need_id, session_id, user_id, status, is_current, declined_at, created_at, updated_at (app_access)
+column public.need_disposition UPDATE: status, is_current, declined_at, updated_at (app_access)
 column public.participant INSERT: session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at (app_access)
 column public.participant_milestone INSERT: session_id, user_id, milestone_key, reached_at (app_access)
 column public.proposal INSERT: session_id, created_by_user_id, source, kind, status, description, duration, measure_of_success, unresolved_need_labels, created_at, updated_at (app_access)
