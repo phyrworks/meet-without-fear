@@ -23,12 +23,14 @@ import {
   Stage4ProposalStatus,
   Stage4SelectionDecision,
 } from '@meet-without-fear/shared';
+import type { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { isSupersededStrategy } from '../utils/strategy-dedupe';
 import { resolveParticipant, type Seat } from './participant-resolver';
 import {
   loadProposals,
+  proposalEditableBy,
   resolveNeedLabels,
   setProposalNeeds,
   upsertChoice,
@@ -543,6 +545,9 @@ function inferClosureSignalFromUserMessage(message: string): Stage4ClosureSignal
 // Writes (target tables)
 // ============================================================================
 
+/** The client an operation writes through: its own transaction (one operation is all-or-nothing). */
+type CaptureDb = Prisma.TransactionClient;
+
 interface CaptureContext {
   sessionId: string;
   /** The actor's participant. */
@@ -570,6 +575,7 @@ function proposalSnapshot(proposal: ProposalRow): Record<string, unknown> {
 }
 
 async function writeRevision(
+  db: CaptureDb | typeof prisma,
   ctx: CaptureContext,
   proposalId: string,
   action: 'CREATED' | 'REVISED' | 'REMOVED' | 'RESTORED' | 'CAPTURE_SKIPPED',
@@ -584,7 +590,7 @@ async function writeRevision(
   // Private until shared (work-k5fk.32 S1 sweep): the participant's chat turn itself is NOT copied in. A revision
   // is read by every member who may see the proposal (proposal_revision app_select), and the turn is a line of the
   // participant's private conversation — was `capturedFromUserMessage`.
-  await prisma.proposalRevision.create({
+  await db.proposalRevision.create({
     data: {
       proposalId,
       sessionId: ctx.sessionId,
@@ -598,10 +604,15 @@ async function writeRevision(
 }
 
 /** Link the proposal to the shared needs its labels name (unmatched labels kept as text). */
-async function linkNeeds(ctx: CaptureContext, proposalId: string, labels: string[] | undefined): Promise<void> {
+async function linkNeeds(
+  db: CaptureDb,
+  ctx: CaptureContext,
+  proposalId: string,
+  labels: string[] | undefined,
+): Promise<void> {
   if (!labels) return;
   const { needIds, unresolved } = await resolveNeedLabels(ctx.sessionId, ctx.actor, labels);
-  await setProposalNeeds(prisma, proposalId, needIds, unresolved);
+  await setProposalNeeds(db, proposalId, needIds, unresolved);
 }
 
 /** A present participant of the session (by user id), as the proposal's creator column. */
@@ -612,12 +623,26 @@ function creatorColumns(ctx: CaptureContext, userId: string): { createdByUserId:
   return { createdByUserId: userId };
 }
 
-/** The owner the AI named, if a present participant; else the actor. */
-function ownerUser(ctx: CaptureContext, ownerUserId: string | undefined): string {
-  if (!ownerUserId) return ctx.actor.userId;
-  if (ctx.members.has(ownerUserId)) return ownerUserId;
-  logger.warn('[stage4-capture] Ignoring non-member ownerUserId from AI output', { ownerUserId });
-  return ctx.actor.userId;
+/**
+ * May capture, acting for the caller, write to this proposal: the sub-chat's rule (stage4-subchat.service.ts
+ * resolve) and the database's (proposal app_update, proposal_revision app_insert) — the caller's own, or a
+ * SHARED_PROPOSAL, never the partner's commitment (shared or not), and never one converted to an agreement
+ * (the worker's; work-k5fk.10.9). Review services#3 (work-k5fk.34).
+ */
+function captureMayEdit(ctx: CaptureContext, proposal: ProposalRow): boolean {
+  return proposal.status !== Stage4ProposalStatus.CONVERTED_TO_AGREEMENT && proposalEditableBy(proposal, ctx.actor);
+}
+
+/** An operation capture refuses: never sent to the database (it would refuse it after the reply streamed). */
+function skipRefused(ctx: CaptureContext, operation: Stage4InventoryOperation, why: string): false {
+  logger.info('[stage4-capture] Skipped an operation the caller may not apply', {
+    sessionId: ctx.sessionId,
+    userId: ctx.actor.userId,
+    type: operation.type,
+    proposalId: 'proposalId' in operation ? operation.proposalId : undefined,
+    why,
+  });
+  return false;
 }
 
 async function auditSkippedDestructiveCapture(
@@ -632,8 +657,8 @@ async function auditSkippedDestructiveCapture(
     Stage4ProposalStatus.REVISED,
     Stage4ProposalStatus.REMOVED,
   ]);
-  if (!match.proposal) {
-    logger.info('[stage4-capture] Skipped low-confidence destructive capture without proposal match', {
+  if (!match.proposal || !proposalEditableBy(match.proposal, ctx.actor)) {
+    logger.info('[stage4-capture] Skipped low-confidence destructive capture without an editable proposal match', {
       sessionId: input.sessionId,
       userId: input.userId,
       action,
@@ -642,6 +667,7 @@ async function auditSkippedDestructiveCapture(
     return;
   }
   await writeRevision(
+    prisma,
     ctx,
     match.proposal.id,
     'CAPTURE_SKIPPED',
@@ -661,7 +687,49 @@ function keptKind(current: Stage4ProposalKind, requested?: Stage4ProposalKind): 
   return current === Stage4ProposalKind.INDIVIDUAL_COMMITMENT ? current : (requested ?? current);
 }
 
+/**
+ * Apply one operation, or skip it. The refusals are checked first (captureMayEdit; a row is created only for the
+ * caller, as the proposal app_insert policy has it), and each applied operation is its own transaction: a write the
+ * database still refuses (a partner converting the proposal meanwhile) rolls the operation back and is skipped with a
+ * log, never thrown into the streamed turn (review services#3, work-k5fk.34).
+ */
 async function applyOperation(
+  ctx: CaptureContext,
+  operation: Stage4InventoryOperation,
+  proposals: ProposalRow[],
+): Promise<boolean> {
+  if (operation.type === 'ADD_PROPOSAL') {
+    if (
+      operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
+      operation.ownerUserId &&
+      operation.ownerUserId !== ctx.actor.userId
+    ) {
+      // Someone else's commitment: only they make it (the database refuses a row created for anyone but the caller).
+      return skipRefused(ctx, operation, 'a commitment owned by another participant');
+    }
+  } else {
+    const target = proposals.find(p => p.id === operation.proposalId);
+    if (!target) return false;
+    if (!captureMayEdit(ctx, target)) return skipRefused(ctx, operation, 'target not editable by the caller');
+  }
+  const snapshot = proposals.map(p => ({ ...p }));
+  try {
+    return await prisma.$transaction(tx => applyOperationTx(tx, ctx, operation, proposals));
+  } catch (error) {
+    // The in-memory rows were updated as the operation went; put them back with the rollback.
+    proposals.splice(0, proposals.length, ...snapshot);
+    logger.warn('[stage4-capture] Operation refused by the database; skipped', {
+      sessionId: ctx.sessionId,
+      userId: ctx.actor.userId,
+      type: operation.type,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+async function applyOperationTx(
+  db: CaptureDb,
   ctx: CaptureContext,
   operation: Stage4InventoryOperation,
   proposals: ProposalRow[],
@@ -670,10 +738,15 @@ async function applyOperation(
     const live = proposals.filter(p => p.status !== Stage4ProposalStatus.REMOVED);
     if (live.some(p => normalizeText(p.description) === normalizeText(operation.description))) return false;
     const superseded = live.find(p => isSupersededStrategy(p.description, operation.description));
+    if (superseded && !captureMayEdit(ctx, superseded)) {
+      // A refinement of a converted proposal or of the partner's commitment: neither is the caller's to rewrite,
+      // and a near-copy beside it would duplicate it.
+      return skipRefused(ctx, operation, 'supersedes a proposal the caller may not edit');
+    }
     if (superseded) {
       const before = proposalSnapshot(superseded);
       const kind = keptKind(superseded.kind, operation.kind);
-      await prisma.proposal.update({
+      await db.proposal.update({
         where: { id: superseded.id },
         data: {
           description: operation.description,
@@ -689,7 +762,7 @@ async function applyOperation(
             : {}),
         },
       });
-      await linkNeeds(ctx, superseded.id, operation.needsAddressed);
+      await linkNeeds(db, ctx, superseded.id, operation.needsAddressed);
       Object.assign(superseded, {
         description: operation.description,
         duration: operation.duration ?? null,
@@ -698,6 +771,7 @@ async function applyOperation(
         status: Stage4ProposalStatus.ACTIVE,
       });
       await writeRevision(
+        db,
         ctx,
         superseded.id,
         'REVISED',
@@ -708,10 +782,11 @@ async function applyOperation(
       return true;
     }
 
-    const created = await prisma.proposal.create({
+    const created = await db.proposal.create({
       data: {
         sessionId: ctx.sessionId,
-        ...creatorColumns(ctx, ownerUser(ctx, operation.ownerUserId)),
+        // The caller's: the database creates a proposal for its caller only (proposal app_insert).
+        ...creatorColumns(ctx, ctx.actor.userId),
         description: operation.description,
         duration: operation.duration,
         measureOfSuccess: operation.measureOfSuccess,
@@ -721,7 +796,7 @@ async function applyOperation(
       },
       select: { id: true, createdAt: true, updatedAt: true, createdByUserId: true },
     });
-    await linkNeeds(ctx, created.id, operation.needsAddressed);
+    await linkNeeds(db, ctx, created.id, operation.needsAddressed);
     proposals.push({
       id: created.id,
       sessionId: ctx.sessionId,
@@ -742,6 +817,7 @@ async function applyOperation(
       needIds: [],
     });
     await writeRevision(
+      db,
       ctx,
       created.id,
       'CREATED',
@@ -770,7 +846,7 @@ async function applyOperation(
 
   if (operation.type === 'REMOVE_PROPOSAL') {
     const now = new Date();
-    await prisma.proposal.update({
+    await db.proposal.update({
       where: { id: operation.proposalId },
       data: {
         status: Stage4ProposalStatus.REMOVED,
@@ -781,6 +857,7 @@ async function applyOperation(
       },
     });
     await writeRevision(
+      db,
       ctx,
       operation.proposalId,
       'REMOVED',
@@ -797,7 +874,7 @@ async function applyOperation(
   }
 
   if (operation.type === 'RESTORE_PROPOSAL') {
-    await prisma.proposal.update({
+    await db.proposal.update({
       where: { id: operation.proposalId },
       data: {
         status: Stage4ProposalStatus.ACTIVE,
@@ -807,6 +884,7 @@ async function applyOperation(
       },
     });
     await writeRevision(
+      db,
       ctx,
       operation.proposalId,
       'RESTORED',
@@ -824,7 +902,7 @@ async function applyOperation(
   }
 
   const kind = keptKind(proposal.kind, operation.kind);
-  await prisma.proposal.update({
+  await db.proposal.update({
     where: { id: operation.proposalId },
     data: {
       description: operation.description ?? proposal.description,
@@ -841,8 +919,9 @@ async function applyOperation(
       status: Stage4ProposalStatus.ACTIVE,
     },
   });
-  if (operation.needsAddressed) await linkNeeds(ctx, operation.proposalId, operation.needsAddressed);
+  if (operation.needsAddressed) await linkNeeds(db, ctx, operation.proposalId, operation.needsAddressed);
   await writeRevision(
+    db,
     ctx,
     operation.proposalId,
     'REVISED',
